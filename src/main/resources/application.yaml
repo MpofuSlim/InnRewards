@@ -1,0 +1,158 @@
+spring:
+  application:
+    name: loyalty-service
+  data:
+    web:
+      pageable:
+        max-page-size: ${PAGEABLE_MAX_PAGE_SIZE:100}
+        default-page-size: ${PAGEABLE_DEFAULT_PAGE_SIZE:20}
+    # Shared Redis — read side of the cross-service logout denylist only (no
+    # Spring Data Redis repositories). Same Redis the gateway / user-service /
+    # payment / seat / booking services use.
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      repositories:
+        enabled: false
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    hikari:
+      pool-name: loyalty-service-pool
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN:10}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+  jpa:
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:validate}
+    show-sql: ${JPA_SHOW_SQL:false}
+    properties:
+      hibernate:
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: false
+    locations: classpath:db/migration
+
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+user-service:
+  base-url: http://user-service
+  connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
+
+# External WhatsApp gateway — fallback channel for the guest-checkout
+# congratulations message (SMS primary). Same WHATSAPP_* env-var convention as
+# booking-service / payment-service; not in Eureka, reached by explicit base-url.
+whatsapp:
+  base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
+  api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
+  connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
+
+# InnBucks core gateway — primary (SMS) channel for the guest-checkout
+# congratulations message. Host-resident service, reached by explicit base-url.
+innbucks-gateway:
+  base-url: ${INNBUCKS_GATEWAY_URL:http://localhost:8088}
+  connect-timeout-ms: ${INNBUCKS_GATEWAY_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${INNBUCKS_GATEWAY_READ_TIMEOUT_MS:10000}
+
+loyalty:
+  points:
+    expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:30}
+    # Points per currency unit when redeeming. Platform-wide (points are global).
+    redeem-rate: ${LOYALTY_POINTS_REDEEM_RATE:100}
+  ticketing:
+    # Default points per currency unit awarded on ticket purchases, applied when
+    # auto-provisioning an organizer's merchant. Overridable via the rule API.
+    default-earn-rate: ${LOYALTY_TICKETING_DEFAULT_EARN_RATE:1}
+  reconciliation:
+    # Daily integrity check: wallet.balance must equal sum(points_ledger.delta).
+    # auto-fix=false is detection-only (ERROR log + loyalty.reconciliation.drift
+    # metric); flip to true to let the job rebuild a drifting balance from the
+    # ledger (the source of truth). Keep it off until you trust the ledger side.
+    auto-fix: ${LOYALTY_RECONCILIATION_AUTO_FIX:false}
+  voucher:
+    secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
+    default-validity-days: ${LOYALTY_VOUCHER_DEFAULT_VALIDITY_DAYS:365}
+    fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
+    fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
+  qr:
+    secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
+    ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}
+  integration:
+    mpesa-enabled: ${LOYALTY_MPESA_ENABLED:false}
+  invoice:
+    prefix: ${LOYALTY_INVOICE_PREFIX:INV}
+  scheduler:
+    expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
+    invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
+    points-expiry-cron: ${LOYALTY_POINTS_EXPIRY_CRON:0 15 * * * *}
+    reconciliation-cron: ${LOYALTY_RECONCILIATION_CRON:0 45 2 * * *}
+
+innbucks:
+  country: ${INNBUCKS_COUNTRY:ZW}
+  currency: ${INNBUCKS_CURRENCY:USD}
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8086}
+  shutdown: graceful
+  # Never leak internals to clients on the fallback /error path (stack traces,
+  # raw exception messages, binding-error detail). Handled errors already return
+  # the ApiResult envelope via GlobalExceptionHandler — incl. field-level
+  # validation detail — so this only sanitises the unhandled fallthrough.
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+  expiration: ${JWT_EXPIRATION_MS:86400000}

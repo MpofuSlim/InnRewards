@@ -1,0 +1,64 @@
+spring:
+  # No Redis in integration tests — the denylist's StringRedisTemplate is
+  # optional (ObjectProvider) and fails open when absent.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.data.redis.autoconfigure.RedisAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.RedisRepositoriesAutoConfiguration
+  datasource:
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+  cloud:
+    discovery:
+      enabled: false
+
+loyalty:
+  voucher:
+    secret: it-voucher-secret-it-voucher-secret-it-voucher-secret
+    default-validity-days: 30
+    fraud-velocity-threshold: 3
+    fraud-window-seconds: 60
+  qr:
+    secret: it-qr-secret-it-qr-secret-it-qr-secret-it-qr-secret-it-qr
+    ttl-seconds: 60
+  integration:
+    mpesa-enabled: false
+  invoice:
+    prefix: INV
+
+innbucks:
+  internal-api-token: it-internal-token-it-internal-token
+
+jwt:
+  secret: it-jwt-secret-it-jwt-secret-it-jwt-secret-it-jwt-secret
+  expiration: 86400000
+
+# Notification gateways — harmless localhost defaults so the Spring context
+# loads. Integration tests never hit these (best-effort guest-checkout notifier).
+whatsapp:
+  base-url: http://localhost:8089
+  api-key: it-whatsapp-api-key
+  connect-timeout-ms: 500
+  read-timeout-ms: 1000
+innbucks-gateway:
+  base-url: http://localhost:8088
+  connect-timeout-ms: 500
+  read-timeout-ms: 1000
+
+logging:
+  level:
+    org.flywaydb: INFO
+    org.hibernate.tool.schema: DEBUG
+    root: WARN
+    com.innbucks.loyaltyservice: INFO

@@ -75,11 +75,15 @@ public class VoucherService {
                 req.deliveryChannel(), req.campaignSource(), value,
                 req.usesOverride(), req.validityDaysOverride());
         vouchers.save(v);
-        notifications.deliver(v, v.getDeliveryChannel());
+        // Flip status on THIS thread (before the async hand-off reads the entity
+        // on the executor thread). Optimistic best-effort: DELIVERED means "we
+        // dispatched it"; the actual WhatsApp/SMS send runs off the request
+        // thread so a slow gateway never blocks voucher issuance.
         if (v.getDeliveryChannel() != null && v.getDeliveryChannel() != Voucher.DeliveryChannel.NONE) {
             v.setStatus(Voucher.Status.DELIVERED);
             v.setDeliveredAt(Instant.now());
         }
+        notifications.deliver(v, resolveDeliveryPhone(v));
         metrics.incVouchersIssued();
         return toResponse(v);
     }
@@ -114,6 +118,24 @@ public class VoucherService {
      * FREE_ITEM / COMBO templates ignore the field entirely and pass
      * null through.
      */
+    /**
+     * The phone we can actually reach the recipient on: the explicit assignee
+     * phone, else the assigned LoyaltyUser's phone. Null when the voucher has no
+     * reachable phone (e.g. a bulk / unassigned voucher) — the gateway then just
+     * logs and skips. Best-effort resolution; never throws.
+     */
+    private String resolveDeliveryPhone(Voucher v) {
+        if (v.getAssigneePhone() != null && !v.getAssigneePhone().isBlank()) {
+            return v.getAssigneePhone();
+        }
+        if (v.getAssignedUserId() != null) {
+            return users.findById(v.getAssignedUserId())
+                    .map(LoyaltyUser::getPhoneNumber)
+                    .orElse(null);
+        }
+        return null;
+    }
+
     private static BigDecimal requireValueIfNumeric(VoucherTemplate tpl, BigDecimal value) {
         VoucherTemplate.ValueType vt = tpl.getValueType();
         if ((vt == VoucherTemplate.ValueType.AMOUNT || vt == VoucherTemplate.ValueType.PERCENT)

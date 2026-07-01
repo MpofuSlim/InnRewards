@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.innbucks</groupId>
+        <artifactId>ticketing-system</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>loyalty-service</artifactId>
+    <name>loyalty-service</name>
+    <description>Multi-tenant Loyalty &amp; Voucher Management Platform (LVMP)</description>
+
+    <dependencies>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Read side of the shared cross-service logout denylist (Redis).
+             user-service writes revoked-token hashes; this lets JwtFilter
+             reject a logged-out token fleet-wide. Version from the parent BOM. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- Service discovery: registers with the Eureka registry
+             (discovery-server) and resolves siblings by name via Spring Cloud
+             LoadBalancer (pulled in transitively). -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Flyway: schema is owned by versioned migrations under
+             src/main/resources/db/migration. spring-boot-flyway carries the
+             auto-configuration (Spring Boot 4 split per-tech autoconfig into
+             dedicated modules); without it Flyway is on the classpath but is
+             not wired into the EntityManagerFactory init order, so Hibernate
+             schema-validates against an empty schema and rejects every
+             @Entity as a "missing table". Surfaced by the new *PostgresIT
+             tests on CI; the other services already declared it. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Boot 4 moved MockMvc auto-config into a separate module
+             (org.springframework.boot.webmvc.test.autoconfigure). Without this
+             dep @AutoConfigureMockMvc and the @Autowired MockMvc bean don't exist. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Caffeine: in-memory cache for the hot-path tenant + tenant-membership
+             lookups in TenantContext. Every authenticated request hits these
+             twice today; with Caffeine they're amortised to one DB lookup per
+             tenant per TTL window. spring-boot-starter-cache wires up the
+             @Cacheable / @CacheEvict annotations. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
+        <!-- ShedLock: leader-elects @Scheduled jobs via a DB row lock so we
+             can horizontally scale loyalty-service without every replica
+             firing the expiry / invoice / pending-sweep crons in parallel.
+             jdbc-template provider talks to the existing Hikari pool — no
+             extra connection. The shedlock table is provisioned by the V6
+             Flyway migration. -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+
+        <!-- Testcontainers: spins up a real Postgres in Docker for integration
+             tests that exercise Postgres-specific behaviour the H2 in-memory
+             tests can't fake (partial unique indexes, row locks under load,
+             native enum columns, etc.). Test-scoped only — never ships in
+             the runtime JAR. Versions are managed by spring-boot-dependencies. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- WireMock for client contract tests (UserServiceClient, etc.),
+             per the CLAUDE.md cross-service-client mandate. Shaded standalone
+             classifier to avoid Jetty/Jackson conflicts. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.13.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Sentry: ERROR logs become real-time alerts. Logback appender
+             owns the SDK lifecycle so we skip the Spring autoconfig (Sentry
+             8.x references Boot 3 classes that Boot 4 renamed); no-op when
+             SENTRY_DSN env var is blank, so dev/CI pay nothing. -->
+        <dependency>
+            <groupId>io.sentry</groupId>
+            <artifactId>sentry-logback</artifactId>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

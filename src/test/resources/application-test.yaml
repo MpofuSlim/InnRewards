@@ -1,0 +1,59 @@
+spring:
+  # No Redis in tests — the denylist's StringRedisTemplate is optional
+  # (ObjectProvider) and fails open when absent.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.data.redis.autoconfigure.RedisAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.RedisRepositoriesAutoConfiguration
+  datasource:
+    url: jdbc:tc:postgresql:16-alpine:///loyalty_test
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  cloud:
+    discovery:
+      enabled: false
+
+loyalty:
+  voucher:
+    secret: test-voucher-secret-test-voucher-secret-test-voucher-secret
+    default-validity-days: 30
+    fraud-velocity-threshold: 3
+    fraud-window-seconds: 60
+  qr:
+    secret: test-qr-secret-test-qr-secret-test-qr-secret-test-qr-secret
+    ttl-seconds: 60
+  integration:
+    mpesa-enabled: false
+  invoice:
+    prefix: INV
+
+jwt:
+  secret: test-jwt-secret-test-jwt-secret-test-jwt-secret-test
+  expiration: 86400000
+
+# Notification gateways — harmless localhost defaults so the Spring context
+# loads. Tests never hit these (the guest-checkout notifier is best-effort and
+# the clients are exercised via WireMock contract tests, no Spring context).
+whatsapp:
+  base-url: http://localhost:8089
+  api-key: test-whatsapp-api-key
+  connect-timeout-ms: 500
+  read-timeout-ms: 1000
+innbucks-gateway:
+  base-url: http://localhost:8088
+  connect-timeout-ms: 500
+  read-timeout-ms: 1000
+
+logging:
+  level:
+    root: WARN
+    com.innbucks.loyaltyservice: INFO

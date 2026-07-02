@@ -229,5 +229,13 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
         """)
     long countSince(@Param("from") Instant from);
 
+    /** Platform txn count since {@code from}, EXCLUDING one tenant — keeps the
+     *  internal ticketing tenant out of the operator overview. */
+    @Query("""
+        SELECT COUNT(t) FROM LoyaltyTransaction t
+        WHERE t.createdAt >= :from AND t.tenantId <> :tenantId
+        """)
+    long countSinceExcludingTenant(@Param("from") Instant from, @Param("tenantId") UUID tenantId);
+
     long countByCampaignId(UUID campaignId);
 }

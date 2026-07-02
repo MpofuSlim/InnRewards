@@ -77,16 +77,25 @@ public class ReportingService {
         Instant in30 = startOfDay.plusSeconds(30 * 86_400);
         Instant since24h = Instant.now().minusSeconds(86_400);
 
-        long totalTenants = tenants.count();
-        long activeMerchants = merchants.findAll().stream()
+        // The platform-internal ticketing container tenant (fixed id, seeded by
+        // V23) is NOT a real operator tenant — it books ticket-purchase loyalty.
+        // Exclude it and its merchant(s) from every operator-overview figure so
+        // the dashboard matches the visible tenant listing (which already hides it).
+        UUID ticketing = TicketingLoyaltyService.TICKETING_TENANT_ID;
+
+        long totalTenants = tenants.countByIdNot(ticketing);
+        List<Merchant> realMerchants = merchants.findAll().stream()
+                .filter(m -> !ticketing.equals(m.getTenantId()))
+                .toList();
+        long activeMerchants = realMerchants.stream()
                 .filter(m -> m.getStatus() == Merchant.Status.ACTIVE).count();
-        long txnsToday = transactions.countSince(startOfDay);
+        long txnsToday = transactions.countSinceExcludingTenant(startOfDay, ticketing);
 
         BigDecimal pointsIssuedToday = BigDecimal.ZERO;
         BigDecimal pointsRedeemedToday = BigDecimal.ZERO;
         long vouchersIssuedToday = 0;
         long vouchersRedeemedToday = 0;
-        for (Merchant m : merchants.findAll()) {
+        for (Merchant m : realMerchants) {
             pointsIssuedToday = pointsIssuedToday.add(transactions.sumPointsIssued(m.getId(), startOfDay, endOfDay));
             pointsRedeemedToday = pointsRedeemedToday.add(transactions.sumPointsRedeemed(m.getId(), startOfDay, endOfDay));
             vouchersIssuedToday += vouchers.countByMerchantIdAndIssuedAtBetween(m.getId(), startOfDay, endOfDay);

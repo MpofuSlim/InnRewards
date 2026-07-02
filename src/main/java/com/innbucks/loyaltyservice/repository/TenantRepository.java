@@ -25,4 +25,8 @@ public interface TenantRepository extends JpaRepository<Tenant, UUID> {
     Page<Tenant> findByIdNot(UUID id, Pageable pageable);
 
     List<Tenant> findByIdNot(UUID id);
+
+    /** Tenant count excluding the platform-internal ticketing container tenant,
+     *  so the operator dashboard's TOTAL TENANTS matches the visible listing. */
+    long countByIdNot(UUID id);
 }

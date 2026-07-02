@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
+import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
@@ -141,6 +142,39 @@ class ReportingServiceTest {
 
         verify(transactions, never()).sumPointsIssuedByUser(any(), any(), any());
         verify(transactions, never()).countByUserIdAndCreatedAtBetween(any(), any(), any());
+    }
+
+    @Test
+    void operator_excludesTicketingTenantAndItsMerchant_fromEveryFigure() {
+        UUID ticketing = TicketingLoyaltyService.TICKETING_TENANT_ID;
+        UUID realMerchantId = UUID.randomUUID();
+
+        Merchant real = new Merchant();
+        real.setId(realMerchantId);
+        real.setTenantId(TENANT_A);
+        real.setStatus(Merchant.Status.ACTIVE);
+
+        Merchant ticketMerchant = new Merchant();
+        ticketMerchant.setId(UUID.randomUUID());
+        ticketMerchant.setTenantId(ticketing);
+        ticketMerchant.setStatus(Merchant.Status.ACTIVE);
+
+        when(tenants.countByIdNot(ticketing)).thenReturn(2L);
+        when(merchants.findAll()).thenReturn(List.of(real, ticketMerchant));
+        when(transactions.countSinceExcludingTenant(any(), eq(ticketing))).thenReturn(5L);
+        when(transactions.sumPointsIssued(eq(realMerchantId), any(), any())).thenReturn(BigDecimal.ZERO);
+        when(transactions.sumPointsRedeemed(eq(realMerchantId), any(), any())).thenReturn(BigDecimal.ZERO);
+        when(vouchers.findExpired(any())).thenReturn(List.of());
+
+        Dtos.OperatorDashboard d = reporting.operator();
+
+        assertEquals(2L, d.totalTenants());     // ticketing tenant NOT counted (dashboard was showing 3)
+        assertEquals(1L, d.activeMerchants());  // ticketing merchant excluded
+        assertEquals(5L, d.transactionsToday());
+        // The ticketing merchant's activity is never aggregated, and the plain
+        // count() (which includes ticketing) is never used.
+        verify(transactions, never()).sumPointsIssued(eq(ticketMerchant.getId()), any(), any());
+        verify(tenants, never()).count();
     }
 
     @Test

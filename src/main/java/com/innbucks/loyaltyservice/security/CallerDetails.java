@@ -60,6 +60,14 @@ public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UU
         return null;
     }
 
+    /** The authenticated principal's email (the JWT subject / login name), or
+     *  {@code null} when there is no authentication on the context. Used to
+     *  stamp a human-readable issuer identity on issued vouchers. */
+    public static String currentEmail() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null ? auth.getName() : null;
+    }
+
     /** JWT userId claim (caller's stable cross-service UUID), or {@code null}
      *  when the token doesn't carry one (legacy tokens). */
     public static UUID currentUserId() {

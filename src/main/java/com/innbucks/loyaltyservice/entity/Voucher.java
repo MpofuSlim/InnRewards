@@ -33,6 +33,13 @@ public class Voucher {
     @Column(name = "merchant_id")
     private UUID merchantId;
 
+    // The specific outlet the voucher was issued from, captured from the
+    // issuing staff member's JWT shop scope (SHOP_ADMIN / SHOP_USER). Null for
+    // merchant-level issuance (MERCHANT_ADMIN tokens carry no shop) and for
+    // vouchers issued before shop attribution landed. Powers shop-level reports.
+    @Column(name = "shop_id")
+    private UUID shopId;
+
     @Column(name = "template_id", nullable = false)
     private UUID templateId;
 
@@ -53,6 +60,19 @@ public class Voucher {
 
     @Column(name = "assignee_name", length = 200)
     private String assigneeName;
+
+    // Who issued this voucher — captured at issue time from the authenticated
+    // caller's JWT so reports can show a real issuer number (E.164) alongside
+    // the receiver. All nullable: internal/system issuance and pre-migration
+    // rows have no issuer.
+    @Column(name = "issuer_user_id")
+    private UUID issuerUserId;
+
+    @Column(name = "issuer_phone", length = 32)
+    private String issuerPhone;
+
+    @Column(name = "issuer_email", length = 200)
+    private String issuerEmail;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

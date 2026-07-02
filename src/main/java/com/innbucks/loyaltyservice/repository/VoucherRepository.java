@@ -5,6 +5,7 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -14,7 +15,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface VoucherRepository extends JpaRepository<Voucher, UUID> {
+// JpaSpecificationExecutor powers the detailed voucher reports: one type-safe,
+// null-aware filter (tenant / exclude-tenant / merchant / shop / status / date)
+// drives the operator, tenant, merchant and shop views without a combinatorial
+// explosion of derived-query methods (and without the nullable-enum-in-JPQL
+// footgun). See ReportingService.voucherReport / voucherCsv.
+public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
+        JpaSpecificationExecutor<Voucher> {
 
     Optional<Voucher> findByCode(String code);
 
@@ -70,4 +77,30 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID> {
             "                 com.innbucks.loyaltyservice.entity.Voucher.Status.PARTIALLY_USED) " +
             "GROUP BY v.assignedUserId")
     List<Object[]> countActiveGroupedByUserId(@Param("userIds") List<UUID> userIds);
+
+    /**
+     * Per-status count + summed face value for the detailed voucher reports'
+     * header block, over a scope selected by nullable filters. Every filter is a
+     * nullable UUID so one query serves all levels: operator (excludeTenantId =
+     * the internal ticketing tenant, everything else null), tenant, merchant and
+     * shop. Status is NOT a filter here — the report always shows the full status
+     * breakdown for its scope. Row shape: [Voucher.Status status, long count,
+     * BigDecimal faceValueSum]. Bounded to {@code issuedAt} in [from, to).
+     */
+    @Query("""
+        SELECT v.status, COUNT(v), COALESCE(SUM(v.value), 0)
+        FROM Voucher v
+        WHERE (:tenantId IS NULL OR v.tenantId = :tenantId)
+          AND (:excludeTenantId IS NULL OR v.tenantId <> :excludeTenantId)
+          AND (:merchantId IS NULL OR v.merchantId = :merchantId)
+          AND (:shopId IS NULL OR v.shopId = :shopId)
+          AND v.issuedAt >= :from AND v.issuedAt < :to
+        GROUP BY v.status
+        """)
+    List<Object[]> reportSummaryByStatus(@Param("tenantId") UUID tenantId,
+                                         @Param("excludeTenantId") UUID excludeTenantId,
+                                         @Param("merchantId") UUID merchantId,
+                                         @Param("shopId") UUID shopId,
+                                         @Param("from") Instant from,
+                                         @Param("to") Instant to);
 }

@@ -3,6 +3,9 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherDetail;
+import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherReport;
+import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ReportingService;
 import com.innbucks.loyaltyservice.service.SuperAppService;
@@ -861,6 +864,273 @@ public class ReportingController {
         String csv = reporting.csv(tenantContext.requireTenantId(), merchantId, from, to);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
                 .header("Content-Disposition", "attachment; filename=\"transactions.csv\"")
+                .body(csv);
+    }
+
+    // ==================================================================
+    // Detailed voucher reports. Every level returns a VoucherReport: scope
+    // header + summary aggregates + a page of full per-voucher detail rows
+    // (issuer number/email, receiver number/name, merchant + shop names, value
+    // snapshot, full lifecycle timeline). from/to are optional (ISO dates,
+    // inclusive); omit both for all-time. Optional status filters the rows (the
+    // summary always covers every status). CSV variants stream one row/voucher.
+    // ==================================================================
+
+    private static final String VOUCHER_REPORT_EXAMPLE = """
+            {
+              "code": "200 OK",
+              "message": "Voucher report retrieved successfully",
+              "data": {
+                "level": "MERCHANT",
+                "scopeId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                "scopeName": "Innbucks Westgate",
+                "from": "2026-06-01T00:00:00Z",
+                "to": "2026-07-01T00:00:00Z",
+                "summary": {
+                  "totalIssued": 612,
+                  "countByStatus": { "ISSUED": 180, "DELIVERED": 44, "REDEEMED": 372, "EXPIRED": 14, "REVOKED": 2 },
+                  "faceValueByStatus": { "ISSUED": 900.00, "REDEEMED": 1860.00 },
+                  "totalFaceValue": 3060.00,
+                  "redeemedCount": 372,
+                  "redeemedFaceValue": 1860.00,
+                  "outstandingCount": 224,
+                  "expiredCount": 14,
+                  "revokedCount": 2,
+                  "redemptionRatePct": 60.78
+                },
+                "vouchers": {
+                  "content": [
+                    {
+                      "id": "d2c8f0a1-0123-4567-1234-567890123456",
+                      "code": "VCH-AB12CD34",
+                      "status": "REDEEMED",
+                      "tenantId": "11111111-1111-1111-1111-111111111111",
+                      "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                      "merchantName": "Innbucks Westgate",
+                      "shopId": "c5d1e3f4-3456-7890-abcd-ef0123456789",
+                      "shopName": "Westgate Branch",
+                      "templateId": "a1a1a1a1-1111-2222-3333-444444444444",
+                      "templateName": "Coffee Combo",
+                      "batchId": null,
+                      "issuerUserId": "77777777-7777-7777-7777-777777777777",
+                      "issuerPhone": "+263772000111",
+                      "issuerEmail": "shopadmin@westgate.co.zw",
+                      "receiverUserId": "33333333-3333-3333-3333-333333333333",
+                      "receiverPhone": "+263771234567",
+                      "receiverName": "Jane Moyo",
+                      "valueType": "AMOUNT",
+                      "faceValue": 5.00,
+                      "currency": "USD",
+                      "usesRemaining": 0,
+                      "deliveryChannel": "WHATSAPP",
+                      "campaignSource": "spring-2026",
+                      "issuedAt": "2026-06-01T08:00:00Z",
+                      "deliveredAt": "2026-06-01T08:00:05Z",
+                      "viewedAt": "2026-06-02T18:20:00Z",
+                      "redeemedAt": "2026-06-14T09:31:00Z",
+                      "expiresAt": "2026-12-31T23:59:59Z",
+                      "expired": false,
+                      "redemptionCount": 1,
+                      "redemptions": null
+                    }
+                  ],
+                  "page": 0, "size": 20, "totalElements": 612, "totalPages": 31, "first": true, "last": false
+                }
+              }
+            }
+            """;
+
+    private static final String CROSS_TENANT_EXAMPLE = """
+            { "code": "403 FORBIDDEN", "message": "merchant belongs to a different tenant", "data": null }
+            """;
+
+    @GetMapping("/vouchers/operator")
+    @Operation(summary = "Voucher report — platform-wide (operator)",
+            description = "Every voucher across every real tenant (the internal ticketing container tenant is " +
+                          "excluded). Summary aggregates + paginated per-voucher detail. No tenant header needed.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "200", description = "Report retrieved",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                    examples = @ExampleObject(name = "Operator voucher report", value = VOUCHER_REPORT_EXAMPLE))))
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<VoucherReport>> vouchersOperator(
+            @RequestParam(required = false) Voucher.Status status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject Pageable pageable) {
+        return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
+                reporting.vouchersForOperator(status, from, to, pageable)));
+    }
+
+    @GetMapping("/vouchers/tenant")
+    @Operation(summary = "Voucher report — current tenant",
+            description = "Every voucher for the X-Tenant-Id tenant, with summary aggregates + paginated detail.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "200", description = "Report retrieved",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                    examples = @ExampleObject(name = "Tenant voucher report", value = VOUCHER_REPORT_EXAMPLE))))
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<VoucherReport>> vouchersTenant(
+            @RequestParam(required = false) Voucher.Status status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject Pageable pageable) {
+        return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
+                reporting.vouchersForTenant(tenantContext.requireTenantId(), status, from, to, pageable)));
+    }
+
+    @GetMapping("/vouchers/merchant/{merchantId}")
+    @Operation(summary = "Voucher report — one merchant",
+            description = "Vouchers issued under {merchantId}. A merchant in another tenant returns 403 CROSS_TENANT " +
+                          "before any row is read.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report retrieved",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Merchant voucher report", value = VOUCHER_REPORT_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Merchant in another tenant",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Cross-tenant", value = CROSS_TENANT_EXAMPLE)))
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<VoucherReport>> vouchersMerchant(
+            @PathVariable UUID merchantId,
+            @RequestParam(required = false) Voucher.Status status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject Pageable pageable) {
+        return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
+                reporting.vouchersForMerchant(tenantContext.requireTenantId(), merchantId, status, from, to, pageable)));
+    }
+
+    @GetMapping("/vouchers/shop/{shopId}")
+    @Operation(summary = "Voucher report — one shop/outlet",
+            description = "Vouchers issued from {shopId}. A shop in another tenant returns 403 CROSS_TENANT. Only " +
+                          "vouchers issued after shop attribution landed carry a shop_id; older ones won't appear here.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report retrieved",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Shop voucher report", value = VOUCHER_REPORT_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Shop in another tenant",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Cross-tenant",
+                                    value = "{ \"code\": \"403 FORBIDDEN\", \"message\": \"shop belongs to a different tenant\", \"data\": null }")))
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<VoucherReport>> vouchersShop(
+            @PathVariable UUID shopId,
+            @RequestParam(required = false) Voucher.Status status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject Pageable pageable) {
+        return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
+                reporting.vouchersForShop(tenantContext.requireTenantId(), shopId, status, from, to, pageable)));
+    }
+
+    @GetMapping("/vouchers/detail/{id}")
+    @Operation(summary = "Single voucher — full detail + redemption log",
+            description = "Every field of one voucher plus its complete redemption history (who redeemed it, when, " +
+                          "at which merchant/outlet, success/rejected + reason). Tenant-guarded.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Voucher found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Voucher detail", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Voucher detail retrieved successfully",
+                                      "data": {
+                                        "id": "d2c8f0a1-0123-4567-1234-567890123456",
+                                        "code": "VCH-AB12CD34",
+                                        "status": "REDEEMED",
+                                        "merchantName": "Innbucks Westgate",
+                                        "shopName": "Westgate Branch",
+                                        "templateName": "Coffee Combo",
+                                        "issuerPhone": "+263772000111",
+                                        "issuerEmail": "shopadmin@westgate.co.zw",
+                                        "receiverPhone": "+263771234567",
+                                        "receiverName": "Jane Moyo",
+                                        "valueType": "AMOUNT",
+                                        "faceValue": 5.00,
+                                        "currency": "USD",
+                                        "issuedAt": "2026-06-01T08:00:00Z",
+                                        "redeemedAt": "2026-06-14T09:31:00Z",
+                                        "expired": false,
+                                        "redemptionCount": 1,
+                                        "redemptions": [
+                                          {
+                                            "id": "fa1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+                                            "redeemedAt": "2026-06-14T09:31:00Z",
+                                            "result": "SUCCESS",
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "outletCode": "WESTGATE-TILL-3",
+                                            "redeemerUserId": "33333333-3333-3333-3333-333333333333",
+                                            "ipAddress": "41.220.10.5",
+                                            "deviceFingerprint": "fp-deadbeef-0001",
+                                            "reason": null
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "No such voucher",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found",
+                                    value = "{ \"code\": \"404 NOT_FOUND\", \"message\": \"voucher not found\", \"data\": null }")))
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<VoucherDetail>> voucherDetail(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResult.ok("Voucher detail retrieved successfully",
+                reporting.voucherDetail(tenantContext.requireTenantId(), id)));
+    }
+
+    @GetMapping(value = "/vouchers/export", produces = "text/csv")
+    @Operation(summary = "Voucher CSV export — tenant / merchant / shop",
+            description = "One fully-detailed row per voucher for the current tenant. Pass merchantId to scope to a " +
+                          "merchant, or shopId to scope to an outlet (shopId wins). Same columns as VoucherDetail. " +
+                          "Returns Content-Disposition: attachment; filename=vouchers.csv.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
+            content = @Content(mediaType = "text/csv", examples = @ExampleObject(name = "CSV", value =
+                    "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
+                    + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,valueType,"
+                    + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
+                    + "redeemedAt,expiresAt,expired,redemptionCount\\n"
+                    + "d2c8f0a1-0123-4567-1234-567890123456,VCH-AB12CD34,REDEEMED,11111111-1111-1111-1111-111111111111,"
+                    + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
+                    + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
+                    + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"
+                    + "AMOUNT,5.0000,USD,0,WHATSAPP,spring-2026,2026-06-01T08:00:00Z,2026-06-01T08:00:05Z,2026-06-02T18:20:00Z,"
+                    + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1\\n"))))
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<String> vouchersExport(
+            @RequestParam(required = false) UUID merchantId,
+            @RequestParam(required = false) UUID shopId,
+            @RequestParam(required = false) Voucher.Status status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        UUID tenantId = tenantContext.requireTenantId();
+        String level = shopId != null ? "SHOP" : merchantId != null ? "MERCHANT" : "TENANT";
+        UUID scopeId = shopId != null ? shopId : merchantId;
+        String csv = reporting.voucherCsv(level, tenantId, scopeId, status, from, to);
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
+                .header("Content-Disposition", "attachment; filename=\"vouchers.csv\"")
+                .body(csv);
+    }
+
+    @GetMapping(value = "/vouchers/export/operator", produces = "text/csv")
+    @Operation(summary = "Voucher CSV export — platform-wide (operator)",
+            description = "One row per voucher across every real tenant (ticketing container tenant excluded). " +
+                          "SUPER_ADMIN only. Same columns as the tenant-scoped export.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
+            content = @Content(mediaType = "text/csv",
+                    examples = @ExampleObject(name = "CSV header",
+                            value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount\\n"))))
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<String> vouchersExportOperator(
+            @RequestParam(required = false) Voucher.Status status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        String csv = reporting.voucherCsv("OPERATOR", null, null, status, from, to);
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
+                .header("Content-Disposition", "attachment; filename=\"vouchers-operator.csv\"")
                 .body(csv);
     }
 }

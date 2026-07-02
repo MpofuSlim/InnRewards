@@ -1,18 +1,34 @@
 package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.dto.VoucherReportDtos.RedemptionDetail;
+import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherDetail;
+import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherReport;
+import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherSummary;
 import com.innbucks.loyaltyservice.entity.Campaign;
 import com.innbucks.loyaltyservice.entity.Invoice;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.entity.Voucher;
+import com.innbucks.loyaltyservice.entity.VoucherRedemption;
+import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
 import com.innbucks.loyaltyservice.repository.InvoiceRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
+import com.innbucks.loyaltyservice.repository.VoucherTemplateRepository;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,11 +38,14 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import org.springframework.data.domain.PageRequest;
@@ -48,6 +67,12 @@ public class ReportingService {
     // tenant, closing the reporting IDOR on /merchant, /points/merchant, /points/user.
     private final MerchantService merchantService;
     private final UserService userService;
+    // Voucher-report enrichment: shop guard + name lookups, template names, and
+    // the per-voucher redemption log for the single-voucher detail view.
+    private final ShopService shopService;
+    private final ShopRepository shops;
+    private final VoucherTemplateRepository voucherTemplates;
+    private final VoucherRedemptionRepository voucherRedemptions;
 
     public ReportingService(TenantRepository tenants, MerchantRepository merchants,
                             LoyaltyUserRepository users,
@@ -57,7 +82,11 @@ public class ReportingService {
                             FraudAttemptRepository fraud,
                             CampaignRepository campaigns,
                             MerchantService merchantService,
-                            UserService userService) {
+                            UserService userService,
+                            ShopService shopService,
+                            ShopRepository shops,
+                            VoucherTemplateRepository voucherTemplates,
+                            VoucherRedemptionRepository voucherRedemptions) {
         this.tenants = tenants;
         this.merchants = merchants;
         this.users = users;
@@ -68,6 +97,10 @@ public class ReportingService {
         this.campaigns = campaigns;
         this.merchantService = merchantService;
         this.userService = userService;
+        this.shopService = shopService;
+        this.shops = shops;
+        this.voucherTemplates = voucherTemplates;
+        this.voucherRedemptions = voucherRedemptions;
     }
 
     public Dtos.OperatorDashboard operator() {
@@ -352,6 +385,286 @@ public class ReportingService {
             pageNum++;
         }
         return sb.toString();
+    }
+
+    // ==================================================================
+    // Detailed voucher reports — operator / tenant / merchant / shop /
+    // single-voucher, plus CSV export. See VoucherReportDtos.
+    // ==================================================================
+
+    private static final Set<Voucher.Status> OUTSTANDING = EnumSet.of(
+            Voucher.Status.ISSUED, Voucher.Status.DELIVERED,
+            Voucher.Status.VIEWED, Voucher.Status.PARTIALLY_USED);
+
+    /** Platform-wide voucher report across every real tenant. The internal
+     *  ticketing container tenant is excluded, matching the operator dashboard. */
+    public VoucherReport vouchersForOperator(Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
+        return voucherReport("OPERATOR", null, null,
+                null, TicketingLoyaltyService.TICKETING_TENANT_ID, null, null,
+                status, from, to, pageable);
+    }
+
+    /** Every voucher in one tenant. */
+    public VoucherReport vouchersForTenant(UUID tenantId, Voucher.Status status,
+                                           LocalDate from, LocalDate to, Pageable pageable) {
+        return voucherReport("TENANT", tenantId, tenantName(tenantId),
+                tenantId, null, null, null, status, from, to, pageable);
+    }
+
+    /** Vouchers under one merchant. Guarded: a merchant in another tenant throws
+     *  CROSS_TENANT (403) before any row is read. */
+    public VoucherReport vouchersForMerchant(UUID tenantId, UUID merchantId, Voucher.Status status,
+                                             LocalDate from, LocalDate to, Pageable pageable) {
+        Merchant m = merchantService.requireMerchant(tenantId, merchantId);
+        return voucherReport("MERCHANT", merchantId, m.getName(),
+                tenantId, null, merchantId, null, status, from, to, pageable);
+    }
+
+    /** Vouchers issued from one outlet. Guarded via ShopService.requireShop. */
+    public VoucherReport vouchersForShop(UUID tenantId, UUID shopId, Voucher.Status status,
+                                         LocalDate from, LocalDate to, Pageable pageable) {
+        Shop s = shopService.requireShop(tenantId, shopId);
+        return voucherReport("SHOP", shopId, s.getName(),
+                tenantId, null, null, shopId, status, from, to, pageable);
+    }
+
+    /** Full detail for one voucher, including its complete redemption log.
+     *  Tenant-guarded — a voucher in another tenant throws CROSS_TENANT (403). */
+    public VoucherDetail voucherDetail(UUID tenantId, UUID voucherId) {
+        Voucher v = vouchers.findById(voucherId)
+                .orElseThrow(() -> LoyaltyException.notFound("voucher"));
+        if (!v.getTenantId().equals(tenantId)) {
+            throw LoyaltyException.forbidden("CROSS_TENANT", "voucher belongs to a different tenant");
+        }
+        List<RedemptionDetail> reds = voucherRedemptions
+                .findByVoucherIdOrderByRedeemedAtDesc(voucherId).stream()
+                .map(ReportingService::toRedemption).toList();
+        return toDetail(v,
+                nameOf(v.getMerchantId(), id -> merchants.findById(id).map(Merchant::getName).orElse(null)),
+                nameOf(v.getShopId(), id -> shops.findById(id).map(Shop::getName).orElse(null)),
+                nameOf(v.getTemplateId(), id -> voucherTemplates.findById(id).map(VoucherTemplate::getName).orElse(null)),
+                reds.size(), reds);
+    }
+
+    private VoucherReport voucherReport(String level, UUID scopeId, String scopeName,
+                                        UUID tenantId, UUID excludeTenantId, UUID merchantId, UUID shopId,
+                                        Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
+        Instant fromI = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : Instant.EPOCH;
+        Instant toI = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                : Instant.now().plus(1, ChronoUnit.DAYS);
+        if (fromI.isAfter(toI)) {
+            throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
+        }
+        VoucherSummary summary = summarise(
+                vouchers.reportSummaryByStatus(tenantId, excludeTenantId, merchantId, shopId, fromI, toI));
+        Specification<Voucher> spec = filter(tenantId, excludeTenantId, merchantId, shopId, status, fromI, toI);
+        Pageable effective = pageable.getSort().isSorted() ? pageable
+                : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                        Sort.by(Sort.Direction.DESC, "issuedAt"));
+        Page<VoucherDetail> details = enrich(vouchers.findAll(spec, effective));
+        return new VoucherReport(level, scopeId, scopeName, fromI, toI, summary, PageResponse.from(details));
+    }
+
+    /** Null-aware filter shared by every report level + the CSV export. */
+    private static Specification<Voucher> filter(UUID tenantId, UUID excludeTenantId, UUID merchantId,
+                                                 UUID shopId, Voucher.Status status, Instant from, Instant to) {
+        return (root, query, cb) -> {
+            List<Predicate> p = new ArrayList<>();
+            if (tenantId != null) p.add(cb.equal(root.get("tenantId"), tenantId));
+            if (excludeTenantId != null) p.add(cb.notEqual(root.get("tenantId"), excludeTenantId));
+            if (merchantId != null) p.add(cb.equal(root.get("merchantId"), merchantId));
+            if (shopId != null) p.add(cb.equal(root.get("shopId"), shopId));
+            if (status != null) p.add(cb.equal(root.get("status"), status));
+            p.add(cb.greaterThanOrEqualTo(root.<Instant>get("issuedAt"), from));
+            p.add(cb.lessThan(root.<Instant>get("issuedAt"), to));
+            return cb.and(p.toArray(new Predicate[0]));
+        };
+    }
+
+    private Page<VoucherDetail> enrich(Page<Voucher> page) {
+        List<Voucher> content = page.getContent();
+        Map<UUID, String> mNames = bulkNames(idset(content, Voucher::getMerchantId),
+                ids -> merchants.findAllById(ids), Merchant::getId, Merchant::getName);
+        Map<UUID, String> sNames = bulkNames(idset(content, Voucher::getShopId),
+                ids -> shops.findAllById(ids), Shop::getId, Shop::getName);
+        Map<UUID, String> tNames = bulkNames(idset(content, Voucher::getTemplateId),
+                ids -> voucherTemplates.findAllById(ids), VoucherTemplate::getId, VoucherTemplate::getName);
+        Map<UUID, Long> redCounts = redemptionCounts(content.stream().map(Voucher::getId).toList());
+        return page.map(v -> toDetail(v,
+                mNames.get(v.getMerchantId()), sNames.get(v.getShopId()), tNames.get(v.getTemplateId()),
+                redCounts.getOrDefault(v.getId(), 0L), null));
+    }
+
+    private Map<UUID, Long> redemptionCounts(List<UUID> voucherIds) {
+        Map<UUID, Long> out = new HashMap<>();
+        if (voucherIds.isEmpty()) return out;
+        for (Object[] row : voucherRedemptions.countByVoucherIdIn(voucherIds)) {
+            out.put((UUID) row[0], ((Number) row[1]).longValue());
+        }
+        return out;
+    }
+
+    private static Set<UUID> idset(List<Voucher> vs, java.util.function.Function<Voucher, UUID> f) {
+        return vs.stream().map(f).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+    }
+
+    private static <E> Map<UUID, String> bulkNames(Set<UUID> ids,
+                                                   java.util.function.Function<Set<UUID>, List<E>> fetch,
+                                                   java.util.function.Function<E, UUID> idOf,
+                                                   java.util.function.Function<E, String> nameOf) {
+        Map<UUID, String> m = new HashMap<>();
+        if (ids.isEmpty()) return m;
+        for (E e : fetch.apply(ids)) m.put(idOf.apply(e), nameOf.apply(e));
+        return m;
+    }
+
+    private static String nameOf(UUID id, java.util.function.Function<UUID, String> resolver) {
+        return id == null ? null : resolver.apply(id);
+    }
+
+    private static VoucherSummary summarise(List<Object[]> rows) {
+        Map<String, Long> countByStatus = new LinkedHashMap<>();
+        Map<String, BigDecimal> valueByStatus = new LinkedHashMap<>();
+        long total = 0, outstanding = 0;
+        BigDecimal totalValue = BigDecimal.ZERO;
+        for (Object[] r : rows) {
+            Voucher.Status st = (Voucher.Status) r[0];
+            long c = ((Number) r[1]).longValue();
+            BigDecimal val = toBigDecimal(r[2]);
+            countByStatus.put(st.name(), c);
+            valueByStatus.put(st.name(), val);
+            total += c;
+            totalValue = totalValue.add(val);
+            if (OUTSTANDING.contains(st)) outstanding += c;
+        }
+        long redeemed = countByStatus.getOrDefault(Voucher.Status.REDEEMED.name(), 0L);
+        BigDecimal redeemedValue = valueByStatus.getOrDefault(Voucher.Status.REDEEMED.name(), BigDecimal.ZERO);
+        long expired = countByStatus.getOrDefault(Voucher.Status.EXPIRED.name(), 0L);
+        long revoked = countByStatus.getOrDefault(Voucher.Status.REVOKED.name(), 0L);
+        double rate = total > 0 ? Math.round((redeemed * 10000.0) / total) / 100.0 : 0.0;
+        return new VoucherSummary(total, countByStatus, valueByStatus, totalValue,
+                redeemed, redeemedValue, outstanding, expired, revoked, rate);
+    }
+
+    private static VoucherDetail toDetail(Voucher v, String merchantName, String shopName, String templateName,
+                                          long redemptionCount, List<RedemptionDetail> redemptions) {
+        boolean expired = v.getExpiresAt() != null
+                && v.getExpiresAt().isBefore(Instant.now())
+                && v.getStatus() != Voucher.Status.REDEEMED
+                && v.getStatus() != Voucher.Status.REVOKED
+                && v.getStatus() != Voucher.Status.EXPIRED;
+        return new VoucherDetail(
+                v.getId(), v.getCode(), v.getStatus() == null ? null : v.getStatus().name(),
+                v.getTenantId(),
+                v.getMerchantId(), merchantName,
+                v.getShopId(), shopName,
+                v.getTemplateId(), templateName,
+                v.getBatchId(),
+                v.getIssuerUserId(), v.getIssuerPhone(), v.getIssuerEmail(),
+                v.getAssignedUserId(), v.getAssigneePhone(), v.getAssigneeName(),
+                v.getValueType() == null ? null : v.getValueType().name(),
+                v.getValue(), v.getCurrency(), v.getUsesRemaining(),
+                v.getDeliveryChannel() == null ? null : v.getDeliveryChannel().name(),
+                v.getCampaignSource(),
+                v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(), v.getRedeemedAt(), v.getExpiresAt(),
+                expired, redemptionCount, redemptions);
+    }
+
+    private static RedemptionDetail toRedemption(VoucherRedemption r) {
+        return new RedemptionDetail(r.getId(), r.getRedeemedAt(),
+                r.getResult() == null ? null : r.getResult().name(),
+                r.getMerchantId(), r.getOutletCode(), r.getUserId(),
+                r.getIpAddress(), r.getDeviceFingerprint(), r.getReason());
+    }
+
+    private String tenantName(UUID tenantId) {
+        return tenants.findById(tenantId).map(t -> t.getName()).orElse(null);
+    }
+
+    /**
+     * CSV export — one fully-detailed row per voucher. {@code level} selects the
+     * scope and applies the SAME tenant/merchant/shop guard as the JSON reports;
+     * pages the DB at 500 rows so a busy period doesn't materialise everything.
+     */
+    public String voucherCsv(String level, UUID tenantId, UUID scopeId,
+                             Voucher.Status status, LocalDate from, LocalDate to) {
+        UUID excludeTenantId = null, filterTenantId = null, merchantId = null, shopId = null;
+        switch (level == null ? "" : level.toUpperCase()) {
+            case "OPERATOR" -> excludeTenantId = TicketingLoyaltyService.TICKETING_TENANT_ID;
+            case "TENANT" -> filterTenantId = requireScopeTenant(tenantId);
+            case "MERCHANT" -> {
+                filterTenantId = requireScopeTenant(tenantId);
+                merchantService.requireMerchant(filterTenantId, scopeId);
+                merchantId = scopeId;
+            }
+            case "SHOP" -> {
+                filterTenantId = requireScopeTenant(tenantId);
+                shopService.requireShop(filterTenantId, scopeId);
+                shopId = scopeId;
+            }
+            default -> throw LoyaltyException.badRequest("BAD_SCOPE",
+                    "scope must be one of operator, tenant, merchant, shop");
+        }
+        Instant fromI = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : Instant.EPOCH;
+        Instant toI = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                : Instant.now().plus(1, ChronoUnit.DAYS);
+        if (fromI.isAfter(toI)) throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
+
+        Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI);
+        StringBuilder sb = new StringBuilder(
+                "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
+                        + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
+                        + "valueType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
+                        + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount\n");
+        int pageNum = 0;
+        int pageSize = 500;
+        while (true) {
+            Page<Voucher> page = vouchers.findAll(spec,
+                    PageRequest.of(pageNum, pageSize, Sort.by(Sort.Direction.DESC, "issuedAt")));
+            for (VoucherDetail d : enrich(page).getContent()) {
+                sb.append(csvField(d.id())).append(',')
+                        .append(csvField(d.code())).append(',')
+                        .append(csvField(d.status())).append(',')
+                        .append(csvField(d.tenantId())).append(',')
+                        .append(csvField(d.merchantId())).append(',')
+                        .append(csvField(d.merchantName())).append(',')
+                        .append(csvField(d.shopId())).append(',')
+                        .append(csvField(d.shopName())).append(',')
+                        .append(csvField(d.templateId())).append(',')
+                        .append(csvField(d.templateName())).append(',')
+                        .append(csvField(d.batchId())).append(',')
+                        .append(csvField(d.issuerUserId())).append(',')
+                        .append(csvField(d.issuerPhone())).append(',')
+                        .append(csvField(d.issuerEmail())).append(',')
+                        .append(csvField(d.receiverUserId())).append(',')
+                        .append(csvField(d.receiverPhone())).append(',')
+                        .append(csvField(d.receiverName())).append(',')
+                        .append(csvField(d.valueType())).append(',')
+                        .append(csvField(d.faceValue())).append(',')
+                        .append(csvField(d.currency())).append(',')
+                        .append(d.usesRemaining()).append(',')
+                        .append(csvField(d.deliveryChannel())).append(',')
+                        .append(csvField(d.campaignSource())).append(',')
+                        .append(csvField(d.issuedAt())).append(',')
+                        .append(csvField(d.deliveredAt())).append(',')
+                        .append(csvField(d.viewedAt())).append(',')
+                        .append(csvField(d.redeemedAt())).append(',')
+                        .append(csvField(d.expiresAt())).append(',')
+                        .append(d.expired()).append(',')
+                        .append(d.redemptionCount())
+                        .append('\n');
+            }
+            if (page.isLast()) break;
+            pageNum++;
+        }
+        return sb.toString();
+    }
+
+    private static UUID requireScopeTenant(UUID tenantId) {
+        if (tenantId == null) {
+            throw LoyaltyException.badRequest("TENANT_REQUIRED", "X-Tenant-Id header is required for this scope");
+        }
+        return tenantId;
     }
 
     private static void requireRange(LocalDate from, LocalDate to) {

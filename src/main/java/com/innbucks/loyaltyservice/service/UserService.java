@@ -8,6 +8,8 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
+import com.innbucks.loyaltyservice.util.MsisdnValidator;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +32,12 @@ public class UserService {
     private final UserServiceClient userServiceClient;
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
 
+    /** This cell's country pin (ISO-3166-1 alpha-2) — region hint for
+     *  normalising an inbound phone to E.164. Defaults to ZW so plain-`new`
+     *  unit tests get a sensible value; @Value overrides from INNBUCKS_COUNTRY. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry = "ZW";
+
     public UserService(LoyaltyUserRepository users,
                        WalletRepository wallets,
                        UserServiceClient userServiceClient,
@@ -45,6 +53,7 @@ public class UserService {
     // number resolves to a real customer in user-service. Use this when the
     // recipient is known to be registered (e.g. explicit enrolment flow).
     public LoyaltyUser findOrEnrol(UUID tenantId, String phoneNumber, UUID merchantId) {
+        phoneNumber = normalizePhone(phoneNumber);
         Optional<LoyaltyUser> existing = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
         if (existing.isPresent()) {
             return existing.get();
@@ -68,6 +77,7 @@ public class UserService {
      * services so the policy is enforced at the spend path, not at lookup.
      */
     public LoyaltyUser findOrCreatePending(UUID tenantId, String phoneNumber, UUID merchantId) {
+        phoneNumber = normalizePhone(phoneNumber);
         Optional<LoyaltyUser> existing = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
         if (existing.isPresent()) {
             return existing.get();
@@ -175,14 +185,13 @@ public class UserService {
      * unique key), so — unlike {@link #require(UUID, UUID)} — there's no
      * cross-tenant branch: a phone that exists only under another tenant simply
      * returns empty → 404, which also avoids revealing that the number exists
-     * elsewhere on the platform. Phone must be the stored E.164 form
-     * (e.g. {@code +263771234567}); we trim but do not otherwise normalise.
+     * elsewhere on the platform. The supplied phone is normalised to the stored
+     * E.164 form first, so a caller passing {@code 0771234567} / {@code 771234567}
+     * / {@code +263771234567} all resolve to the one row.
      */
     public LoyaltyUser requireByPhone(UUID tenantId, String phoneNumber) {
-        if (phoneNumber == null || phoneNumber.isBlank()) {
-            throw LoyaltyException.badRequest("BAD_PHONE", "Please provide a phone number.");
-        }
-        return users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber.trim())
+        String phone = normalizePhone(phoneNumber);
+        return users.findByTenantIdAndPhoneNumber(tenantId, phone)
                 .orElseThrow(() -> LoyaltyException.notFound("user"));
     }
 
@@ -199,10 +208,8 @@ public class UserService {
      * @return count of rows promoted in this call.
      */
     public int promoteByPhone(String phoneNumber) {
-        if (phoneNumber == null || phoneNumber.isBlank()) {
-            throw LoyaltyException.badRequest("BAD_PHONE", "Please provide your phone number.");
-        }
-        List<LoyaltyUser> matches = users.findByPhoneNumber(phoneNumber);
+        String phone = normalizePhone(phoneNumber);
+        List<LoyaltyUser> matches = users.findByPhoneNumber(phone);
         int promoted = 0;
         for (LoyaltyUser u : matches) {
             if (u.getStatus() == LoyaltyUser.Status.PENDING) {
@@ -212,6 +219,22 @@ public class UserService {
         }
         metrics.incPendingPromoted(promoted);
         return promoted;
+    }
+
+    /**
+     * Canonicalise an inbound phone to E.164 ({@code +<cc><national>}) against
+     * this cell's country. Every phone that enters the service — enrolment,
+     * pending-create, by-phone lookup, and the registration-promote webhook —
+     * passes through here, so the loyalty projection keys off the exact E.164
+     * form user-service stores. Blank or unparseable is rejected 400 rather
+     * than creating a wallet/user under a spelling nothing else will match.
+     */
+    private String normalizePhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw LoyaltyException.badRequest("BAD_PHONE", "Please provide a phone number.");
+        }
+        return MsisdnValidator.normalizeToE164(raw, deploymentCountry)
+                .orElseThrow(() -> LoyaltyException.badRequest("BAD_PHONE", "Invalid phone number: " + raw));
     }
 
     public static Dtos.UserResponse toResponse(LoyaltyUser u) {

@@ -167,6 +167,9 @@ public class VoucherService {
             // for unmatched phones.
             LoyaltyUser pending = userService.findOrCreatePending(tenantId, assigneePhone, tpl.getMerchantId());
             assignedUserId = pending.getId();
+            // Store the canonical E.164 the LoyaltyUser now holds, not the raw
+            // caller spelling, so voucher.assignee_phone + delivery both align.
+            assigneePhone = pending.getPhoneNumber();
         }
 
         String code = uniqueCode();

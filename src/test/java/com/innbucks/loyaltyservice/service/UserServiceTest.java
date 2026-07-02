@@ -73,4 +73,25 @@ class UserServiceTest {
                 .isInstanceOf(LoyaltyException.class)
                 .hasMessageContaining("not found");
     }
+
+    @Test
+    void requireByPhone_localForm_isNormalisedToE164_beforeLookup() {
+        // A caller passing the national trunk-0 form (or the bare subscriber
+        // number) must resolve to the row stored in canonical +263 E.164 — the
+        // service normalises against its cell country (ZW default) first.
+        LoyaltyUser u = new LoyaltyUser();
+        u.setTenantId(TENANT);
+        u.setPhoneNumber(PHONE);
+        when(users.findByTenantIdAndPhoneNumber(TENANT, PHONE)).thenReturn(Optional.of(u));
+
+        assertThat(service.requireByPhone(TENANT, "0771234567")).isSameAs(u);
+        assertThat(service.requireByPhone(TENANT, "771234567")).isSameAs(u);
+    }
+
+    @Test
+    void requireByPhone_invalidPhone_throwsBadRequest() {
+        assertThatThrownBy(() -> service.requireByPhone(TENANT, "not-a-phone"))
+                .isInstanceOf(LoyaltyException.class)
+                .hasMessageContaining("Invalid phone number");
+    }
 }

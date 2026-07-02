@@ -20,6 +20,16 @@
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
+        <!-- Phone-number normalisation: canonicalise MSISDNs to E.164
+             (+<cc><national>) before storing on loyalty_users / wallets and
+             before phone-keyed lookups, so loyalty agrees with user-service on
+             one format. Same lib + version as booking-service's MsisdnValidator. -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>9.0.32</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>

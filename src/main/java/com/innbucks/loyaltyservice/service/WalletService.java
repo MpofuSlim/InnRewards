@@ -9,6 +9,7 @@ import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.PointLotRepository;
 import com.innbucks.loyaltyservice.repository.PointsLedgerRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
+import com.innbucks.loyaltyservice.util.MsisdnValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,6 +50,12 @@ public class WalletService {
     private final LoyaltyMetrics metrics;
     private final int expiryDays;
 
+    /** Cell country pin — region hint for best-effort E.164 normalisation of a
+     *  wallet's phone key. Defaults to ZW for plain-`new` unit tests; @Value
+     *  overrides from INNBUCKS_COUNTRY at runtime. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry = "ZW";
+
     public WalletService(WalletRepository wallets, PointsLedgerRepository ledger,
                          PointLotRepository lots, LoyaltyMetrics metrics,
                          @Value("${loyalty.points.expiry-days:30}") int expiryDays) {
@@ -61,10 +68,11 @@ public class WalletService {
 
     @Transactional(readOnly = true)
     public List<Dtos.WalletResponse> listForPhone(String phoneNumber) {
-        return wallets.findByPhoneNumber(phoneNumber).stream().map(WalletService::toResponse).toList();
+        return wallets.findByPhoneNumber(normalizePhone(phoneNumber)).stream().map(WalletService::toResponse).toList();
     }
 
     public Dtos.WalletResponse createSubWallet(String phoneNumber, Dtos.SubWalletRequest req) {
+        phoneNumber = normalizePhone(phoneNumber);
         Wallet w = new Wallet();
         w.setPhoneNumber(phoneNumber);
         w.setLabel(req.label());
@@ -89,8 +97,18 @@ public class WalletService {
      * winner's row instead of creating a duplicate.
      */
     public Wallet mainWallet(String phoneNumber) {
-        return wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN)
-                .orElseGet(() -> createMainWallet(phoneNumber));
+        String phone = normalizePhone(phoneNumber);
+        return wallets.findFirstByPhoneNumberAndType(phone, Wallet.Type.MAIN)
+                .orElseGet(() -> createMainWallet(phone));
+    }
+
+    /** Best-effort E.164 of a wallet's phone key against this cell's country.
+     *  Idempotent, and never throws — an unparseable value passes through
+     *  trimmed so an internal caller that already holds a stored phone is
+     *  unaffected. Keeps a wallet keyed by the same string user/loyalty store. */
+    private String normalizePhone(String raw) {
+        return MsisdnValidator.normalizeToE164(raw, deploymentCountry)
+                .orElse(raw == null ? null : raw.trim());
     }
 
     private Wallet createMainWallet(String phoneNumber) {

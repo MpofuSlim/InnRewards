@@ -222,6 +222,7 @@ class ReportingServiceTest {
         txn.setAmount(new BigDecimal("25"));
         txn.setPointsDelta(new BigDecimal("125"));
         txn.setReference("POS-8843");
+        txn.setShopId(shopId);
         when(transactions.findByTenantIdAndShopIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
                 eq(TENANT_A), eq(shopId), any(), any(), any(PageRequest.class)))
                 .thenReturn(new PageImpl<>(List.of(txn)));
@@ -229,6 +230,10 @@ class ReportingServiceTest {
         txnUser.setId(txnUserId);
         txnUser.setPhoneNumber("+263772222222");
         when(users.findAllById(any())).thenReturn(List.of(txnUser));
+        Shop shop = new Shop();
+        shop.setId(shopId);
+        shop.setName("Steers Westgate");
+        when(shops.findById(shopId)).thenReturn(Optional.of(shop));
 
         Dtos.ShopPointsReport report = reporting.pointsForShop(TENANT_A, shopId, FROM, TO, PageRequest.of(0, 20));
 
@@ -254,6 +259,10 @@ class ReportingServiceTest {
         assertEquals(0, row.pointsAwarded().compareTo(new BigDecimal("125")));
         assertEquals(0, row.amount().compareTo(new BigDecimal("25")));
         assertEquals("POS-8843", row.reference());
+        // Shop ("steers") shown by name on both the header and each transaction row.
+        assertEquals(shopId, row.shopId());
+        assertEquals("Steers Westgate", row.shopName());
+        assertEquals("Steers Westgate", report.shopName());
     }
 
     // ---- detailed voucher reports ------------------------------------------

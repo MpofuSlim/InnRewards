@@ -545,6 +545,10 @@ public class Dtos {
             String phoneNumber,
             @Schema(example = "33333333-3333-3333-3333-333333333333", description = "LoyaltyUser UUID.")
             UUID userId,
+            @Schema(example = "070a95b3-b136-4b62-98a7-e7c3f09f24e2", description = "Shop/outlet the transaction occurred at.")
+            UUID shopId,
+            @Schema(example = "Steers Westgate", nullable = true, description = "Shop/outlet name.")
+            String shopName,
             @Schema(example = "25.0000", description = "Transaction monetary amount (the purchase/spend value).")
             BigDecimal amount,
             @Schema(example = "USD")
@@ -574,6 +578,8 @@ public class Dtos {
     public record ShopPointsReport(
             @Schema(example = "c7d8e9f0-1234-5678-90ab-cdef12345678", description = "Shop UUID.")
             UUID subjectId,
+            @Schema(example = "Steers Westgate", nullable = true, description = "Shop/outlet name for subjectId.")
+            String shopName,
             @Schema(example = "2026-05-01")
             LocalDate from,
             @Schema(example = "2026-05-31")

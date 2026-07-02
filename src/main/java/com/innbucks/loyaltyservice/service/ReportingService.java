@@ -302,10 +302,11 @@ public class ReportingService {
                 .findByTenantIdAndShopIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
                         tenantId, shopId, fromInstant, toInstant, effective);
         Map<UUID, String> phones = txnPhoneMap(txnPage.getContent());
+        String shopName = shops.findById(shopId).map(Shop::getName).orElse(null);
         PageResponse<Dtos.ShopTransactionDetail> txns = PageResponse.from(
-                txnPage.map(t -> toShopTransactionDetail(t, phones.get(t.getUserId()))));
+                txnPage.map(t -> toShopTransactionDetail(t, phones.get(t.getUserId()), shopName)));
 
-        return new Dtos.ShopPointsReport(shopId, from, to, issued, redeemed,
+        return new Dtos.ShopPointsReport(shopId, shopName, from, to, issued, redeemed,
                 issued.subtract(redeemed), count, byPhone, txns);
     }
 
@@ -320,7 +321,7 @@ public class ReportingService {
         return m;
     }
 
-    private static Dtos.ShopTransactionDetail toShopTransactionDetail(LoyaltyTransaction t, String phone) {
+    private static Dtos.ShopTransactionDetail toShopTransactionDetail(LoyaltyTransaction t, String phone, String shopName) {
         BigDecimal points = t.getPointsDelta() == null ? BigDecimal.ZERO : t.getPointsDelta();
         String direction = points.signum() > 0 ? "EARN" : points.signum() < 0 ? "REDEEM" : "NEUTRAL";
         return new Dtos.ShopTransactionDetail(
@@ -328,6 +329,7 @@ public class ReportingService {
                 t.getType() == null ? null : t.getType().name(),
                 t.getStatus() == null ? null : t.getStatus().name(),
                 phone, t.getUserId(),
+                t.getShopId(), shopName,
                 t.getAmount(), t.getCurrency(),
                 points, direction,
                 t.getReference(), t.getMerchantId(), t.getRuleId(), t.getCampaignId());

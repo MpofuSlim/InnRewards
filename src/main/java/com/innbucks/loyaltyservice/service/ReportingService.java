@@ -271,7 +271,8 @@ public class ReportingService {
                 issued.subtract(redeemed), count);
     }
 
-    public Dtos.ShopPointsReport pointsForShop(UUID tenantId, UUID shopId, LocalDate from, LocalDate to) {
+    public Dtos.ShopPointsReport pointsForShop(UUID tenantId, UUID shopId, LocalDate from, LocalDate to,
+                                               Pageable pageable) {
         requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
@@ -290,8 +291,46 @@ public class ReportingService {
                 })
                 .sorted(java.util.Comparator.comparing(Dtos.PointsByPhoneRow::pointsIssued).reversed())
                 .toList();
+
+        // Per-transaction detail (paginated, newest first): every transaction at
+        // the shop with phone, type, amount and points awarded. Phone is resolved
+        // from each transaction's userId via one bulk LoyaltyUser lookup (no N+1).
+        Pageable effective = pageable.getSort().isSorted() ? pageable
+                : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                        Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<LoyaltyTransaction> txnPage = transactions
+                .findByTenantIdAndShopIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                        tenantId, shopId, fromInstant, toInstant, effective);
+        Map<UUID, String> phones = txnPhoneMap(txnPage.getContent());
+        PageResponse<Dtos.ShopTransactionDetail> txns = PageResponse.from(
+                txnPage.map(t -> toShopTransactionDetail(t, phones.get(t.getUserId()))));
+
         return new Dtos.ShopPointsReport(shopId, from, to, issued, redeemed,
-                issued.subtract(redeemed), count, byPhone);
+                issued.subtract(redeemed), count, byPhone, txns);
+    }
+
+    private Map<UUID, String> txnPhoneMap(List<LoyaltyTransaction> txns) {
+        Set<UUID> userIds = txns.stream().map(LoyaltyTransaction::getUserId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+        Map<UUID, String> m = new HashMap<>();
+        if (userIds.isEmpty()) return m;
+        for (com.innbucks.loyaltyservice.entity.LoyaltyUser u : users.findAllById(userIds)) {
+            m.put(u.getId(), u.getPhoneNumber());
+        }
+        return m;
+    }
+
+    private static Dtos.ShopTransactionDetail toShopTransactionDetail(LoyaltyTransaction t, String phone) {
+        BigDecimal points = t.getPointsDelta() == null ? BigDecimal.ZERO : t.getPointsDelta();
+        String direction = points.signum() > 0 ? "EARN" : points.signum() < 0 ? "REDEEM" : "NEUTRAL";
+        return new Dtos.ShopTransactionDetail(
+                t.getId(), t.getCreatedAt(),
+                t.getType() == null ? null : t.getType().name(),
+                t.getStatus() == null ? null : t.getStatus().name(),
+                phone, t.getUserId(),
+                t.getAmount(), t.getCurrency(),
+                points, direction,
+                t.getReference(), t.getMerchantId(), t.getRuleId(), t.getCampaignId());
     }
 
     public List<Dtos.PointsByTypeRow> pointsByType(UUID tenantId, UUID merchantId,

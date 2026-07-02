@@ -526,9 +526,50 @@ public class Dtos {
     ) {}
 
     /**
-     * Per-shop points report: period totals PLUS a per-customer (phone)
-     * breakdown. Produced by the per-shop endpoint only; the merchant/user
-     * reports keep the flat {@link PointsReport}.
+     * One transaction line in the detailed per-shop points report — the
+     * per-transaction breakdown behind the per-phone rollup. Amounts and points
+     * are per transaction; {@code phoneNumber} is resolved from the transaction's
+     * {@code userId} via the loyalty user projection.
+     */
+    public record ShopTransactionDetail(
+            @Schema(example = "22222222-3333-4444-5555-666666666666")
+            UUID id,
+            @Schema(example = "2026-06-14T09:31:00Z", description = "When the transaction posted (UTC).")
+            java.time.Instant createdAt,
+            @Schema(example = "PURCHASE",
+                    description = "TransactionType: PURCHASE, REDEMPTION, ADJUSTMENT, TRANSFER_IN/OUT, REVERSAL, etc.")
+            String type,
+            @Schema(example = "POSTED", description = "POSTED or REVERSED.")
+            String status,
+            @Schema(example = "+263771234567", description = "Customer phone the points accrued to (resolved from userId).")
+            String phoneNumber,
+            @Schema(example = "33333333-3333-3333-3333-333333333333", description = "LoyaltyUser UUID.")
+            UUID userId,
+            @Schema(example = "25.0000", description = "Transaction monetary amount (the purchase/spend value).")
+            BigDecimal amount,
+            @Schema(example = "USD")
+            String currency,
+            @Schema(example = "125.0000",
+                    description = "Points awarded on this transaction — signed pointsDelta (+ earned, - redeemed).")
+            BigDecimal pointsAwarded,
+            @Schema(example = "EARN", description = "EARN (points > 0), REDEEM (points < 0) or NEUTRAL (0).")
+            String direction,
+            @Schema(example = "POS-8843", nullable = true, description = "Merchant/POS reference for the transaction.")
+            String reference,
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true)
+            UUID merchantId,
+            @Schema(example = "a1a1a1a1-1111-2222-3333-444444444444", nullable = true,
+                    description = "Earn/redeem rule applied, if any.")
+            UUID ruleId,
+            @Schema(example = "9f9f9f9f-0000-1111-2222-333333333333", nullable = true,
+                    description = "Campaign attributed, if any.")
+            UUID campaignId
+    ) {}
+
+    /**
+     * Per-shop points report: period totals, a per-customer (phone) breakdown,
+     * AND a paginated per-transaction detail. Produced by the per-shop endpoint
+     * only; the merchant/user reports keep the flat {@link PointsReport}.
      */
     public record ShopPointsReport(
             @Schema(example = "c7d8e9f0-1234-5678-90ab-cdef12345678", description = "Shop UUID.")
@@ -546,7 +587,10 @@ public class Dtos {
             @Schema(example = "312", description = "Number of POSTED transactions at the shop.")
             long transactionCount,
             @Schema(description = "Per-customer breakdown, sorted by pointsIssued descending.")
-            java.util.List<PointsByPhoneRow> byPhone
+            java.util.List<PointsByPhoneRow> byPhone,
+            @Schema(description = "Per-transaction detail (paginated, newest first): phone number, transaction "
+                    + "details, amount, and points awarded for every transaction at this shop in the period.")
+            PageResponse<ShopTransactionDetail> transactions
     ) {}
 
     /** One bucket of the daily time-series. */

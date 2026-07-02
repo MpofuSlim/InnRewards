@@ -1,8 +1,10 @@
 package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
@@ -211,8 +213,24 @@ class ReportingServiceTest {
                 .thenReturn(List.of(
                         new Object[]{"+263771111111", new BigDecimal("10"), new BigDecimal("0"), 1L},
                         new Object[]{"+263772222222", new BigDecimal("20"), new BigDecimal("5"), 2L}));
+        // Per-transaction detail: one earn transaction; phone is resolved from its userId.
+        UUID txnUserId = UUID.fromString("33333333-3333-3333-3333-333333333333");
+        LoyaltyTransaction txn = new LoyaltyTransaction();
+        txn.setId(UUID.randomUUID());
+        txn.setUserId(txnUserId);
+        txn.setType(TransactionType.PURCHASE);
+        txn.setAmount(new BigDecimal("25"));
+        txn.setPointsDelta(new BigDecimal("125"));
+        txn.setReference("POS-8843");
+        when(transactions.findByTenantIdAndShopIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                eq(TENANT_A), eq(shopId), any(), any(), any(PageRequest.class)))
+                .thenReturn(new PageImpl<>(List.of(txn)));
+        LoyaltyUser txnUser = new LoyaltyUser();
+        txnUser.setId(txnUserId);
+        txnUser.setPhoneNumber("+263772222222");
+        when(users.findAllById(any())).thenReturn(List.of(txnUser));
 
-        Dtos.ShopPointsReport report = reporting.pointsForShop(TENANT_A, shopId, FROM, TO);
+        Dtos.ShopPointsReport report = reporting.pointsForShop(TENANT_A, shopId, FROM, TO, PageRequest.of(0, 20));
 
         assertEquals(shopId, report.subjectId());
         assertEquals(0, report.pointsIssued().compareTo(new BigDecimal("30")));
@@ -226,6 +244,16 @@ class ReportingServiceTest {
         assertEquals(0, top.netPoints().compareTo(new BigDecimal("15")));
         assertEquals(2L, top.transactionCount());
         assertEquals("+263771111111", report.byPhone().get(1).phoneNumber());
+
+        // Per-transaction detail row: phone resolved from userId, direction + points awarded.
+        assertEquals(1, report.transactions().getContent().size());
+        Dtos.ShopTransactionDetail row = report.transactions().getContent().get(0);
+        assertEquals("+263772222222", row.phoneNumber());
+        assertEquals("PURCHASE", row.type());
+        assertEquals("EARN", row.direction());
+        assertEquals(0, row.pointsAwarded().compareTo(new BigDecimal("125")));
+        assertEquals(0, row.amount().compareTo(new BigDecimal("25")));
+        assertEquals("POS-8843", row.reference());
     }
 
     // ---- detailed voucher reports ------------------------------------------

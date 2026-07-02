@@ -641,12 +641,14 @@ public class ReportingController {
     }
 
     @GetMapping("/points/shop/{shopId}")
-    @Operation(summary = "Points report (per shop, period-bounded, with per-customer breakdown)",
-            description = "Points issued / redeemed at this outlet between `from` and `to`, PLUS a " +
-                          "`byPhone` breakdown of points per customer phone number (highest earners " +
-                          "first). Only transactions stamped with `shopId` count — the ones produced by " +
-                          "the shop-checkout / guest-checkout flow. Used by the per-outlet leaderboard " +
-                          "on the merchant dashboard.")
+    @Operation(summary = "Points report (per shop) — totals, per-customer breakdown + per-transaction detail",
+            description = "Points issued / redeemed at this outlet between `from` and `to`, a `byPhone` " +
+                          "breakdown of points per customer (highest earners first), AND a paginated " +
+                          "`transactions` list — every transaction with phone number, transaction details " +
+                          "(type/status/reference/timestamp), amount and points awarded (newest first; page " +
+                          "with `page`/`size`). Only transactions stamped with `shopId` count — those from " +
+                          "the shop-checkout / guest-checkout flow. Used by the per-outlet leaderboard and " +
+                          "the outlet transaction ledger on the merchant dashboard.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -681,7 +683,45 @@ public class ReportingController {
                                             "netPoints": 4120.0000,
                                             "transactionCount": 122
                                           }
-                                        ]
+                                        ],
+                                        "transactions": {
+                                          "content": [
+                                            {
+                                              "id": "22222222-3333-4444-5555-666666666666",
+                                              "createdAt": "2026-05-28T14:12:00Z",
+                                              "type": "PURCHASE",
+                                              "status": "POSTED",
+                                              "phoneNumber": "+263772222222",
+                                              "userId": "33333333-3333-3333-3333-333333333333",
+                                              "amount": 25.0000,
+                                              "currency": "USD",
+                                              "pointsAwarded": 125.0000,
+                                              "direction": "EARN",
+                                              "reference": "POS-8843",
+                                              "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                              "ruleId": "a1a1a1a1-1111-2222-3333-444444444444",
+                                              "campaignId": null
+                                            },
+                                            {
+                                              "id": "33333333-4444-5555-6666-777777777777",
+                                              "createdAt": "2026-05-27T09:05:00Z",
+                                              "type": "REDEMPTION",
+                                              "status": "POSTED",
+                                              "phoneNumber": "+263771111111",
+                                              "userId": "44444444-4444-4444-4444-444444444444",
+                                              "amount": 0.0000,
+                                              "currency": "USD",
+                                              "pointsAwarded": -500.0000,
+                                              "direction": "REDEEM",
+                                              "reference": "VCH-AB12CD34",
+                                              "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                              "ruleId": null,
+                                              "campaignId": null
+                                            }
+                                          ],
+                                          "page": 0, "size": 20, "totalElements": 312, "totalPages": 16,
+                                          "first": true, "last": false
+                                        }
                                       }
                                     }
                                     """)
@@ -692,9 +732,10 @@ public class ReportingController {
     public ResponseEntity<ApiResult<Dtos.ShopPointsReport>> pointsForShop(
             @PathVariable UUID shopId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject Pageable pageable) {
         Dtos.ShopPointsReport data = reporting.pointsForShop(
-                tenantContext.requireTenantId(), shopId, from, to);
+                tenantContext.requireTenantId(), shopId, from, to, pageable);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
     }
 

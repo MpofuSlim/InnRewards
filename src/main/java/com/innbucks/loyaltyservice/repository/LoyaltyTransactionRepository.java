@@ -37,6 +37,12 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
 
     Page<LoyaltyTransaction> findByTenantIdAndShopIdOrderByCreatedAtDesc(UUID tenantId, UUID shopId, Pageable pageable);
 
+    // Detailed per-shop points report: every transaction at a shop within
+    // [from, to), paginated. Ordering comes from the caller's Pageable
+    // (ReportingService defaults it to createdAt DESC when unsorted).
+    Page<LoyaltyTransaction> findByTenantIdAndShopIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+            UUID tenantId, UUID shopId, Instant from, Instant to, Pageable pageable);
+
     @Query("""
         SELECT COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0)
         FROM LoyaltyTransaction t

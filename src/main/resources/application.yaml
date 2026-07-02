@@ -57,12 +57,16 @@ whatsapp:
   connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
 
-# InnBucks core gateway — primary (SMS) channel for the guest-checkout
-# congratulations message. Host-resident service, reached by explicit base-url.
-innbucks-gateway:
-  base-url: ${INNBUCKS_GATEWAY_URL:http://localhost:8088}
-  connect-timeout-ms: ${INNBUCKS_GATEWAY_CONNECT_TIMEOUT_MS:2000}
-  read-timeout-ms: ${INNBUCKS_GATEWAY_READ_TIMEOUT_MS:10000}
+# InnBucks public notification API — SMS channel. Same API Gateway + BANK_API_*
+# credentials as the payment rail (POST /auth/third-party for the bearer, then
+# POST /api/notification/sms). Auth handled in SmsNotificationClient.
+innbucks-notify:
+  base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
+  api-key: ${BANK_API_KEY:}
+  username: ${BANK_API_USERNAME:}
+  password: ${BANK_API_PASSWORD:}
+  connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:30000}
 
 loyalty:
   points:

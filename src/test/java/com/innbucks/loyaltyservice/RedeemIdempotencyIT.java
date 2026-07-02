@@ -85,7 +85,9 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
         // Unique phone per test method. Wallets are global per phone now, so a
         // shared phone would accumulate balance across @BeforeEach runs (these
         // real-DB ITs don't roll back between methods).
-        phone = "+26377" + (System.nanoTime() % 1_000_000_000L);
+        // Unique but VALID ZW national (9 digits: 77 + 7) so the E.164
+        // normaliser accepts it (was an 11-digit national before).
+        phone = "+26377" + String.format("%07d", Math.abs(System.nanoTime() % 10_000_000L));
 
         Tenant t = new Tenant();
         t.setCode("redeem-idem-" + System.nanoTime());

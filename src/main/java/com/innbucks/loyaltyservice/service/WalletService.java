@@ -252,7 +252,7 @@ public class WalletService {
 
     @Transactional(readOnly = true)
     public BigDecimal totalBalance(String phoneNumber) {
-        return wallets.findByPhoneNumber(phoneNumber).stream()
+        return wallets.findByPhoneNumber(normalizePhone(phoneNumber)).stream()
                 .map(Wallet::getBalance).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 

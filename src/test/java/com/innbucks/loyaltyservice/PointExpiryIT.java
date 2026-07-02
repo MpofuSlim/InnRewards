@@ -67,7 +67,9 @@ class PointExpiryIT extends PostgresIntegrationTestBase {
         when(userServiceClient.getCustomerTier(anyString()))
                 .thenAnswer(inv -> Optional.of(new CustomerTierResponseDTO(inv.getArgument(0), 1, 2)));
 
-        phone = "+26378" + (System.nanoTime() % 1_000_000_000L);
+        // Unique but VALID ZW national (9 digits: 78 + 7) so the E.164
+        // normaliser accepts it (was an 11-digit national before).
+        phone = "+26378" + String.format("%07d", Math.abs(System.nanoTime() % 10_000_000L));
 
         Tenant t = new Tenant();
         t.setCode("expiry-" + System.nanoTime());

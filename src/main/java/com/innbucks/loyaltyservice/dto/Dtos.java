@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -53,9 +54,9 @@ public class Dtos {
 
     public record MerchantRequest(
             @Schema(example = "Innbucks Westgate", description = "Display name of the merchant outlet (e.g. \"Chicken Inn Westgate\").")
-            @NotBlank String name,
+            @NotBlank @Size(max = 200) String name,
             @Schema(example = "Coffee", nullable = true, description = "Business category (e.g. Coffee, Grocery, Fuel).")
-            String category,
+            @Size(max = 100) String category,
             @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code. Defaults to this cell's currency (ZW=USD, KE=KES) when omitted.")
             String currency,
             @Schema(example = "MONTHLY", allowableValues = {"WEEKLY", "MONTHLY"})
@@ -81,9 +82,9 @@ public class Dtos {
                     description = "Merchant this shop belongs to.")
             @NotNull UUID merchantId,
             @Schema(example = "Pizza Inn Avondale", description = "Display name of the shop outlet.")
-            @NotBlank String name,
+            @NotBlank @Size(max = 200) String name,
             @Schema(example = "123 King George Rd, Avondale, Harare", nullable = true)
-            String address
+            @Size(max = 500) String address
     ) {}
 
     public record ShopResponse(UUID id, UUID tenantId, UUID merchantId, String name,
@@ -273,7 +274,7 @@ public class Dtos {
             @Schema(example = "250.0000", description = "Points to transfer.")
             @Positive BigDecimal points,
             @Schema(example = "Birthday gift", nullable = true)
-            String reason
+            @Size(max = 1000) String reason
     ) {}
 
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
@@ -287,7 +288,7 @@ public class Dtos {
             @Schema(example = "500.0000", description = "Points to redeem.")
             @Positive BigDecimal points,
             @Schema(example = "Counter redemption by cashier", nullable = true)
-            String reason,
+            @Size(max = 1000) String reason,
             @Schema(example = "a3b9c1d2-1234-5678-9abc-def012345678", nullable = true,
                     description = "Idempotency key — a stable, caller-supplied reference for this logical " +
                                   "redemption (e.g. the booking id). A repeat redeem with the same " +
@@ -343,7 +344,7 @@ public class Dtos {
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
             @Schema(example = "Alice Moyo", nullable = true)
-            String assigneeName,
+            @Size(max = 200) String assigneeName,
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
                     description = "Loyalty user ID of the recipient. Takes priority over assigneePhone.")
             UUID assignedUserId,
@@ -610,5 +611,79 @@ public class Dtos {
             BigDecimal pointsRedeemed,
             @Schema(example = "73")
             long transactionCount
+    ) {}
+
+    // --- Typed request bodies (OWASP A03: replace untyped Map<String,?> bodies) ---
+
+    /**
+     * Manual points adjustment (operator escape hatch). {@code points} may be
+     * POSITIVE (credit) or NEGATIVE (debit) — its sign is intentionally NOT
+     * constrained. Replaces the former untyped {@code Map<String,Object>} body;
+     * the JSON keys (userId, merchantId, points, reason) and accepted value
+     * types are unchanged (Jackson binds a JSON number OR a numeric string into
+     * {@code points}).
+     */
+    public record PointsAdjustRequestDTO(
+            @Schema(example = "11111111-2222-3333-4444-555555555555", description = "Loyalty user whose balance is adjusted.")
+            @NotNull UUID userId,
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", description = "Merchant the adjustment is booked against.")
+            @NotNull UUID merchantId,
+            @Schema(example = "250.0000", description = "Points delta — positive credits, negative debits.")
+            @NotNull BigDecimal points,
+            @Schema(example = "Goodwill credit", nullable = true, description = "Free-text audit note.")
+            @Size(max = 1000) String reason
+    ) {}
+
+    /**
+     * Optional body for a transaction reversal. Carries only a free-text
+     * {@code reason}; the whole body may be omitted (reason then defaults to
+     * null). Replaces the former untyped {@code Map<String,String>} body.
+     */
+    public record PointsReverseRequestDTO(
+            @Schema(example = "Customer refund", nullable = true, description = "Why the transaction is being reversed.")
+            @Size(max = 1000) String reason
+    ) {}
+
+    /**
+     * Manual invoice generation for a merchant over a date range. Replaces the
+     * former untyped {@code Map<String,String>} body; the JSON keys (merchantId,
+     * periodStart, periodEnd) and their ISO-8601 date values are unchanged.
+     */
+    public record InvoiceGenerateRequestDTO(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", description = "Merchant to invoice.")
+            @NotNull UUID merchantId,
+            @Schema(example = "2026-05-01", description = "Billing period start (inclusive, ISO-8601 date).")
+            @NotNull LocalDate periodStart,
+            @Schema(example = "2026-05-31", description = "Billing period end (inclusive, ISO-8601 date).")
+            @NotNull LocalDate periodEnd
+    ) {}
+
+    // Internal S2S (X-Internal-Token) shop-checkout body. Untyped-Map replacement;
+    // every field is optional because ShopCheckoutService.checkout does the
+    // validation and returns the specific error codes, exactly as before.
+    public record ShopCheckoutInternalRequestDTO(
+            UUID shopId,
+            String phoneNumber,
+            BigDecimal cashAmount,
+            BigDecimal pointsAmount,
+            String reference
+    ) {}
+
+    // Internal S2S (X-Internal-Token) ticketing earn body. TicketingLoyaltyService.earn
+    // validates organizerUuid / phoneNumber / cashAmount and returns typed 4xx errors.
+    public record TicketingEarnRequestDTO(
+            UUID organizerUuid,
+            String phoneNumber,
+            BigDecimal cashAmount,
+            String reference
+    ) {}
+
+    // Internal S2S (X-Internal-Token) ticketing redeem body. TicketingLoyaltyService.redeem
+    // validates organizerUuid / phoneNumber / points and returns typed 4xx errors.
+    public record TicketingRedeemRequestDTO(
+            UUID organizerUuid,
+            String phoneNumber,
+            BigDecimal points,
+            String reference
     ) {}
 }

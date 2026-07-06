@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -103,7 +104,9 @@ public class RedemptionService {
         t.setPointsDelta(req.points().negate());
         // Store the idempotency reference when provided; otherwise fall back to
         // the free-text reason (unchanged behaviour for callers without a key).
-        t.setReference(reference != null ? reference : req.reason());
+        // Only the free-text reason is HTML-sanitized — the idempotency key is a
+        // stable caller reference and must round-trip byte-for-byte.
+        t.setReference(reference != null ? reference : HtmlSanitizer.stripAll(req.reason()));
 
         if (reference != null) {
             // saveAndFlush BEFORE the wallet debit so a concurrent duplicate

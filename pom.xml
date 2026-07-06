@@ -30,6 +30,16 @@
             <version>9.0.34</version>
         </dependency>
 
+        <!-- Jsoup: HTML sanitization for user-supplied free text (OWASP A03 /
+             stored-XSS hardening). Used by util/HtmlSanitizer to strip markup
+             from plain-text fields (shop/merchant names, addresses, categories,
+             voucher assignee names, ledger reasons) on write paths. Version is
+             managed by the parent dependencyManagement. -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>

@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -20,8 +21,6 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
-import java.time.LocalDate;
-import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -217,13 +216,10 @@ public class InvoiceController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> generate(@RequestBody Map<String, String> body) {
-        UUID merchantId = UUID.fromString(body.get("merchantId"));
-        LocalDate periodStart = LocalDate.parse(body.get("periodStart"));
-        LocalDate periodEnd = LocalDate.parse(body.get("periodEnd"));
+    public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> generate(@Valid @RequestBody Dtos.InvoiceGenerateRequestDTO body) {
         UUID tenantId = tenantContext.requireTenantId();
-        var m = merchants.requireMerchant(tenantId, merchantId);
-        return invoicing.generate(m, periodStart, periodEnd)
+        var m = merchants.requireMerchant(tenantId, body.merchantId());
+        return invoicing.generate(m, body.periodStart(), body.periodEnd())
                 .map(inv -> ResponseEntity.status(HttpStatus.CREATED)
                         .body(ApiResult.created("Invoice generated successfully", InvoicingService.toResponse(inv))))
                 .orElseGet(() -> ResponseEntity.ok(ApiResult.<Dtos.InvoiceResponse>ok(

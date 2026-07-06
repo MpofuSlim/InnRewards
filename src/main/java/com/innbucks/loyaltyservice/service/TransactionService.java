@@ -8,6 +8,7 @@ import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -149,6 +150,9 @@ public class TransactionService {
     }
 
     public Dtos.TransactionResponse reverse(UUID tenantId, UUID txnId, String reason) {
+        // Sanitize the operator-supplied reason — it is persisted in the wallet
+        // ledger entry as "reverse:<reason>" (stored-XSS hardening). Null-safe.
+        reason = HtmlSanitizer.stripAll(reason);
         // PESSIMISTIC_WRITE lock on the original so two concurrent reversals
         // serialize: the loser blocks here, then re-reads status=REVERSED below
         // and is rejected — instead of both inserting a compensating credit and
@@ -202,6 +206,9 @@ public class TransactionService {
 
     public Dtos.TransactionResponse adjust(UUID tenantId, UUID userId, UUID merchantId,
                                            BigDecimal points, String reason) {
+        // Sanitize the operator-supplied reason once — it is persisted both as the
+        // transaction reference AND in the wallet ledger entry (stored-XSS hardening).
+        reason = HtmlSanitizer.stripAll(reason);
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         LoyaltyUser u = users.require(tenantId, userId);
         LoyaltyTransaction t = new LoyaltyTransaction();

@@ -16,6 +16,7 @@ import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -183,7 +184,9 @@ public class VoucherService {
         v.setSignature(signer.sign(tenantId + ":" + tpl.getId() + ":" + code));
         v.setAssignedUserId(assignedUserId);
         v.setAssigneePhone(assigneePhone);
-        v.setAssigneeName(assigneeName);
+        // Caller-supplied display name — strip any HTML before persisting
+        // (stored-XSS hardening). Null-safe; a no-op on legitimate names.
+        v.setAssigneeName(HtmlSanitizer.stripAll(assigneeName));
         // Stamp WHO issued it (and from which outlet) from the caller's JWT, so
         // reports carry a real issuer number alongside the receiver. All null
         // when there's no authenticated caller (internal / system issuance).

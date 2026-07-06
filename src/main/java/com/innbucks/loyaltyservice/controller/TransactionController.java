@@ -188,8 +188,8 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> reverse(@PathVariable UUID id,
-                                            @RequestBody(required = false) Map<String, String> body) {
-        String reason = body == null ? null : body.get("reason");
+                                            @Valid @RequestBody(required = false) Dtos.PointsReverseRequestDTO body) {
+        String reason = body == null ? null : body.reason();
         Dtos.TransactionResponse data = transactions.reverse(tenantContext.requireTenantId(), id, reason);
         return ResponseEntity.ok(ApiResult.ok("Transaction reversed successfully", data));
     }
@@ -258,13 +258,9 @@ public class TransactionController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.TransactionResponse>> adjust(@RequestBody Map<String, Object> body) {
-        UUID userId = UUID.fromString(String.valueOf(body.get("userId")));
-        UUID merchantId = UUID.fromString(String.valueOf(body.get("merchantId")));
-        BigDecimal points = new BigDecimal(String.valueOf(body.get("points")));
-        String reason = (String) body.get("reason");
+    public ResponseEntity<ApiResult<Dtos.TransactionResponse>> adjust(@Valid @RequestBody Dtos.PointsAdjustRequestDTO body) {
         Dtos.TransactionResponse data = transactions.adjust(tenantContext.requireTenantId(),
-                userId, merchantId, points, reason);
+                body.userId(), body.merchantId(), body.points(), body.reason());
         return ResponseEntity.ok(ApiResult.ok("Adjustment applied successfully", data));
     }
 

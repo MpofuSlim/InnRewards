@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
@@ -17,7 +18,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
@@ -183,18 +183,16 @@ public class InternalMerchantLookupController {
                           "from the customer's wallet. Both legs commit in a single loyalty-service " +
                           "transaction. At least one of cashAmount or pointsAmount must be > 0.")
     public ResponseEntity<?> shopCheckout(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                          @RequestBody Map<String, Object> body) {
+                                          @RequestBody Dtos.ShopCheckoutInternalRequestDTO body) {
         if (!authorized(token)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         try {
-            UUID shopId = body.get("shopId") == null ? null : UUID.fromString(body.get("shopId").toString());
-            String phone = body.get("phoneNumber") == null ? null : body.get("phoneNumber").toString();
-            BigDecimal cash = asBigDecimal(body.get("cashAmount"));
-            BigDecimal points = asBigDecimal(body.get("pointsAmount"));
-            String reference = body.get("reference") == null ? null : body.get("reference").toString();
-
-            ShopCheckoutService.Result r = shopCheckoutService.checkout(shopId, phone, cash, points, reference);
+            // checkout() still performs all validation (shop existence, at-least-one
+            // amount > 0, etc.) and returns the same typed error codes as before —
+            // the only change is the request binding (Map -> typed DTO).
+            ShopCheckoutService.Result r = shopCheckoutService.checkout(
+                    body.shopId(), body.phoneNumber(), body.cashAmount(), body.pointsAmount(), body.reference());
 
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("shopId", r.shopId());
@@ -243,16 +241,16 @@ public class InternalMerchantLookupController {
     @PostMapping("/ticketing/earn")
     @Operation(summary = "(S2S) Earn points on a ticket purchase (idempotent on reference)")
     public ResponseEntity<?> ticketingEarn(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                           @RequestBody Map<String, Object> body) {
+                                           @RequestBody Dtos.TicketingEarnRequestDTO body) {
         if (!authorized(token)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         try {
+            // earn() validates organizerUuid / phoneNumber / cashAmount and throws
+            // typed LoyaltyExceptions (mapped below) — behaviour unchanged; only the
+            // request binding moves from an untyped Map to a typed DTO.
             TicketingLoyaltyService.EarnResult r = ticketingLoyaltyService.earn(
-                    asUuid(str(body, "organizerUuid"), "organizerUuid"),
-                    str(body, "phoneNumber"),
-                    asBigDecimal(body.get("cashAmount")),
-                    str(body, "reference"));
+                    body.organizerUuid(), body.phoneNumber(), body.cashAmount(), body.reference());
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("transactionId", r.transactionId());
             resp.put("merchantId", r.merchantId());
@@ -270,16 +268,16 @@ public class InternalMerchantLookupController {
     @PostMapping("/ticketing/redeem")
     @Operation(summary = "(S2S) Redeem points toward a ticket purchase (idempotent on reference)")
     public ResponseEntity<?> ticketingRedeem(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                             @RequestBody Map<String, Object> body) {
+                                             @RequestBody Dtos.TicketingRedeemRequestDTO body) {
         if (!authorized(token)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         try {
+            // redeem() validates organizerUuid / phoneNumber / points and throws
+            // typed LoyaltyExceptions (mapped below) — behaviour unchanged; only the
+            // request binding moves from an untyped Map to a typed DTO.
             TicketingLoyaltyService.RedeemResult r = ticketingLoyaltyService.redeem(
-                    asUuid(str(body, "organizerUuid"), "organizerUuid"),
-                    str(body, "phoneNumber"),
-                    asBigDecimal(body.get("points")),
-                    str(body, "reference"));
+                    body.organizerUuid(), body.phoneNumber(), body.points(), body.reference());
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("transactionId", r.transactionId());
             resp.put("merchantId", r.merchantId());
@@ -292,11 +290,6 @@ public class InternalMerchantLookupController {
         }
     }
 
-    private static String str(Map<String, Object> body, String key) {
-        Object v = body == null ? null : body.get(key);
-        return v == null ? null : v.toString();
-    }
-
     private static UUID asUuid(String v, String field) {
         if (v == null || v.isBlank()) {
             throw new IllegalArgumentException(field + " is required");
@@ -306,15 +299,6 @@ public class InternalMerchantLookupController {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(field + " is not a valid UUID");
         }
-    }
-
-    private static BigDecimal asBigDecimal(Object v) {
-        if (v == null) return null;
-        if (v instanceof BigDecimal bd) return bd;
-        if (v instanceof Number n) return new BigDecimal(n.toString());
-        String s = v.toString().trim();
-        if (s.isEmpty()) return null;
-        return new BigDecimal(s);
     }
 
     private boolean authorized(String presented) {

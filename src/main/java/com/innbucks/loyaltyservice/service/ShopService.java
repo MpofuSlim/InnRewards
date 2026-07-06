@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -60,8 +61,11 @@ public class ShopService {
         Shop s = new Shop();
         s.setTenantId(tenantId);
         s.setMerchantId(m.getId());
-        s.setName(name);
-        s.setAddress(req.address());
+        // Strip any HTML from the free-text fields before persisting (stored-XSS
+        // hardening). Dedup above still runs on the raw trimmed name; stripAll is
+        // a no-op on legitimate names, so the guard is unchanged for real input.
+        s.setName(HtmlSanitizer.stripAll(name));
+        s.setAddress(HtmlSanitizer.stripAll(req.address()));
         shops.save(s);
         return toResponse(s);
     }
@@ -101,8 +105,8 @@ public class ShopService {
 
     public Dtos.ShopResponse update(UUID tenantId, UUID shopId, Dtos.ShopRequest req) {
         Shop s = requireShop(tenantId, shopId);
-        s.setName(req.name());
-        if (req.address() != null) s.setAddress(req.address());
+        s.setName(HtmlSanitizer.stripAll(req.name()));
+        if (req.address() != null) s.setAddress(HtmlSanitizer.stripAll(req.address()));
         return toResponse(s);
     }
 
@@ -213,8 +217,8 @@ public class ShopService {
                     Shop s = new Shop();
                     s.setTenantId(tenantId);
                     s.setMerchantId(m.getId());
-                    s.setName(finalName);
-                    s.setAddress(finalAddress);
+                    s.setName(HtmlSanitizer.stripAll(finalName));
+                    s.setAddress(HtmlSanitizer.stripAll(finalAddress));
                     shops.save(s);
                 });
                 created++;

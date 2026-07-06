@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.Authentication;
@@ -43,8 +44,11 @@ public class MerchantService {
         }
         Merchant m = new Merchant();
         m.setTenantId(tenantId);
-        m.setName(name);
-        m.setCategory(req.category());
+        // Strip any HTML from free-text fields before persisting (stored-XSS
+        // hardening). The dedup check above runs on the raw trimmed name;
+        // stripAll is a no-op on legitimate names so that guard is unchanged.
+        m.setName(HtmlSanitizer.stripAll(name));
+        m.setCategory(HtmlSanitizer.stripAll(req.category()));
         // Default to this cell's currency (ZW=USD, KE=KES) — was a hardcoded
         // "USD" entity default that mislabelled every KE merchant.
         m.setCurrency(req.currency() != null ? req.currency() : cellCurrency);

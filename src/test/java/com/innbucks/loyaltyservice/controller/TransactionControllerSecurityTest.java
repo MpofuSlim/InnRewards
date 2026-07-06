@@ -47,7 +47,14 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
             {"fromUserId":"11111111-2222-3333-4444-555555555555",
              "toUserId":"66666666-7777-8888-9999-000000000000","points":250.0}
             """;
-    private static final String EMPTY = "{}";
+    // A fully-valid adjust body (all @NotNull fields present) so the request clears
+    // bean-validation and reaches the @PreAuthorize role gate — the boundary these
+    // tests assert. adjust permits negative points, so the sign is unconstrained.
+    private static final String VALID_ADJUST_BODY = """
+            {"userId":"11111111-2222-3333-4444-555555555555",
+             "merchantId":"b4c0d2e3-2345-6789-abcd-ef0123456789",
+             "points":250.0,"reason":"Goodwill"}
+            """;
 
     @Test
     void post_transaction_without_token_returns_401() throws Exception {
@@ -106,7 +113,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
         mockMvc.perform(post("/loyalty/transactions/adjust")
                         .header("Authorization", bearer(customerToken))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(EMPTY))
+                        .content(VALID_ADJUST_BODY))
                 .andExpect(status().isForbidden());
     }
 
@@ -277,7 +284,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
         mockMvc.perform(post("/loyalty/transactions/adjust")
                         .header("Authorization", bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(EMPTY))
+                        .content(VALID_ADJUST_BODY))
                 .andExpect(status().isForbidden());
     }
 

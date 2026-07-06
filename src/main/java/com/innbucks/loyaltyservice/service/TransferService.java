@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -77,13 +78,17 @@ public class TransferService {
             throw LoyaltyException.badRequest("SELF_TRANSFER", "You can't transfer points to yourself.");
         }
 
+        // Sanitize the caller-supplied transfer note once; it is persisted as the
+        // reference on both the debit and credit ledger rows (stored-XSS hardening).
+        String reason = HtmlSanitizer.stripAll(req.reason());
+
         LoyaltyTransaction debit = new LoyaltyTransaction();
         debit.setTenantId(tenantId);
         debit.setMerchantId(merchantContext);
         debit.setUserId(sender.getId());
         debit.setType(TransactionType.TRANSFER);
         debit.setPointsDelta(req.points().negate());
-        debit.setReference(req.reason());
+        debit.setReference(reason);
         transactions.save(debit);
 
         LoyaltyTransaction credit = new LoyaltyTransaction();
@@ -92,7 +97,7 @@ public class TransferService {
         credit.setUserId(recipient.getId());
         credit.setType(TransactionType.TRANSFER);
         credit.setPointsDelta(req.points());
-        credit.setReference(req.reason());
+        credit.setReference(reason);
         transactions.save(credit);
 
         // Lock wallets in canonical UUID order to avoid deadlocks when two

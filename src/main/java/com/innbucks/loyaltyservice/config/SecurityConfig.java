@@ -59,13 +59,6 @@ public class SecurityConfig {
                         // rather than the user JWT. The JwtFilter also skips this
                         // path so no Authentication is required.
                         .requestMatchers("/loyalty/internal/**").permitAll()
-                        // TODO(demo): TEMPORARY public access — revert to merchant-authenticated (@PreAuthorize + X-Tenant-Id) before production.
-                        // Guest checkout is open for the demo so an unregistered
-                        // walk-in flow can be shown end-to-end without a merchant
-                        // JWT or X-Tenant-Id. The controller still enforces the
-                        // SHOP_NOT_OWNED ownership guard when a merchant JWT IS
-                        // presented.
-                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/loyalty/shops/*/guest-checkout").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who
                         // can call what; TenantContext enforces tenant ownership

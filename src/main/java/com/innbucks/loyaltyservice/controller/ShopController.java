@@ -497,7 +497,7 @@ public class ShopController {
 
     @PostMapping("/{shopId}/guest-checkout")
     @Operation(summary = "Guest checkout — earn points for an unregistered customer",
-            description = "TEMPORARY (demo): PUBLIC — no authentication or X-Tenant-Id required; will be reverted to merchant-authenticated. " +
+            description = "Merchant-authenticated (requires a shop-operator bearer token + X-Tenant-Id). " +
                           "The shop earns loyalty points on a cash amount for a " +
                           "walk-in customer identified by phone number only — no account required. The " +
                           "customer RECEIVES points immediately (a PENDING wallet is auto-created and keyed " +
@@ -552,23 +552,20 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No shop with that id in this tenant")
     })
-    // TODO(demo): TEMPORARY public access — revert to merchant-authenticated (@PreAuthorize + X-Tenant-Id) before production.
-    // The line below was: @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
-    @io.swagger.v3.oas.annotations.security.SecurityRequirements({})
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.GuestShopCheckoutResponse>> guestCheckout(
             @PathVariable UUID shopId,
             @Valid @RequestBody Dtos.GuestShopCheckoutRequest req) {
-        // TODO(demo): TEMPORARY public access — revert to merchant-authenticated (@PreAuthorize + X-Tenant-Id) before production.
-        // Anonymous callers carry no tenant membership, so we DO NOT call
-        // tenantContext.requireTenantId() (it would throw). Load the shop
-        // tenant-lessly; the shop carries its own tenant + merchant, which the
-        // downstream checkout resolves internally.
-        Dtos.ShopResponse shop = shops.getById(shopId);
+        // A04/A01: the caller is an authenticated shop operator (X-Tenant-Id
+        // required). Load the shop scoped to the caller's tenant so a member of
+        // one tenant can never earn through another tenant's shop.
+        UUID tenantId = tenantContext.requireTenantId();
+        Dtos.ShopResponse shop = shops.get(tenantId, shopId);
         // The merchant is taken from the SHOP itself (a shop belongs to exactly one
         // merchant). Ownership guard: a merchant-scoped caller (SHOP_ADMIN/SHOP_USER
-        // carry merchantId in the JWT) may only earn through its OWN shops. For the
-        // public demo path the caller is anonymous so currentMerchantId() is null and
-        // this guard is skipped; if a merchant JWT IS presented it is still enforced.
+        // carry merchantId in the JWT) may only earn through its OWN shops.
+        // MERCHANT_ADMIN/SUPER_ADMIN are tenant-scoped (currentMerchantId() is null)
+        // and already bounded by the tenant-scoped shop load above.
         UUID callerMerchantId = CallerDetails.currentMerchantId();
         if (callerMerchantId != null && !callerMerchantId.equals(shop.merchantId())) {
             throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");

@@ -34,6 +34,11 @@ public class JwtFilter extends OncePerRequestFilter {
      *  here fleet-wide instead of lingering until its short TTL expires. */
     private final RevokedTokenDenylist revokedTokenDenylist;
 
+    /** Shared cross-service session-supersession store (Redis). Checked right
+     *  after the denylist so a token superseded by a newer login / password
+     *  change is rejected immediately instead of living out its TTL. */
+    private final TokenVersionStore tokenVersionStore;
+
     /** This cell's country (INNBUCKS_COUNTRY). Compared against the JWT's
      *  {@code homeCountry} claim to spot wrong-cell requests. Non-final so
      *  Lombok's @RequiredArgsConstructor stays untouched — Spring sets it
@@ -91,6 +96,29 @@ public class JwtFilter extends OncePerRequestFilter {
                 log.warn("Rejected revoked (logged-out) token path={}", request.getRequestURI());
                 writeUnauthorized(request, response, "TOKEN_REVOKED", "Token has been revoked");
                 return;
+            }
+
+            // Cross-service session supersession (OWASP A07 / CWE-613).
+            // user-service publishes the user's current token_version to the
+            // shared Redis (auth:tokenver:<userUuid>) whenever a newer login /
+            // password change supersedes older sessions. Reject a token whose
+            // tokenVersion claim is strictly below that value, exactly like a
+            // revoked token — otherwise it keeps working here until its short
+            // TTL elapses. Fail-open: a legacy token with no userUuid /
+            // tokenVersion claim, or a Redis blip (currentVersion == null),
+            // passes through unchanged so a store outage never 401s everyone.
+            UUID userUuid = jwtUtil.extractUserId(token);
+            if (userUuid != null) {
+                Long currentVersion = tokenVersionStore.currentVersion(userUuid.toString());
+                if (currentVersion != null) {
+                    Long tokenVersion = jwtUtil.extractTokenVersion(token);
+                    if (tokenVersion != null && tokenVersion < currentVersion) {
+                        log.warn("Rejected superseded token (tokenVersion={} < current={}) path={}",
+                                tokenVersion, currentVersion, request.getRequestURI());
+                        writeUnauthorized(request, response, "TOKEN_REVOKED", "Token has been revoked");
+                        return;
+                    }
+                }
             }
 
             // mustChangePassword gate. user-service mints tokens with this

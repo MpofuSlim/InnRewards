@@ -3,23 +3,28 @@ package com.innbucks.loyaltyservice.config;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Refuses to boot under the {@code prod} profile if any sensitive secret still
- * holds its {@code change-me-*} placeholder default from {@code application.yaml}.
- * It's far too easy to deploy a service with the JWT or HMAC secret unchanged;
- * this fails fast at startup so that mistake never reaches the wire.
+ * Refuses to boot under a real DEPLOYMENT profile if any sensitive secret still
+ * holds its {@code change-me-*} placeholder default from {@code application.yaml},
+ * or if the HS256 signing key is too short. It's far too easy to deploy a
+ * service with the JWT or HMAC secret unchanged; this fails fast at startup so
+ * that mistake never reaches the wire.
  *
- * <p>Only active under {@code -Dspring.profiles.active=prod}, so dev/test runs
- * keep working against the convenient placeholder values.
+ * <p>"Deployment" = any active profile other than {@code dev/test/it/local}
+ * (e.g. {@code prod}, {@code uat}, {@code staging}). An empty profile set is
+ * treated as non-deployment, so dev/test runs and stray {@code java -jar} runs
+ * keep working against the convenient placeholder values. This is stronger than
+ * gating on {@code prod} alone: a staging box, or a manifest that sets some
+ * non-prod deployment profile, is now covered too.
  */
 @Configuration
-@Profile("prod")
 @Slf4j
 public class ProductionSecretsGuard {
 
@@ -35,6 +40,13 @@ public class ProductionSecretsGuard {
 
     private static final String PLACEHOLDER_MARKER = "change-me";
 
+    // Placeholder secrets are tolerated only under these (local dev + test) profiles.
+    private static final Set<String> NON_DEPLOYMENT_PROFILES = Set.of("dev", "test", "it", "local");
+
+    // HS256 requires a >= 32-byte key (Keys.hmacShaKeyFor throws below that);
+    // fail fast at boot rather than at the first token sign.
+    private static final int MIN_JWT_SECRET_LENGTH = 32;
+
     private final Environment env;
 
     public ProductionSecretsGuard(Environment env) {
@@ -43,6 +55,15 @@ public class ProductionSecretsGuard {
 
     @PostConstruct
     void verifyNoPlaceholderSecrets() {
+        String[] active = env.getActiveProfiles();
+        boolean deployment = active.length > 0
+                && Arrays.stream(active).noneMatch(NON_DEPLOYMENT_PROFILES::contains);
+        if (!deployment) {
+            log.info("Secrets guard skipped (non-deployment profile: {})",
+                    active.length == 0 ? "<none>" : Arrays.toString(active));
+            return;
+        }
+
         List<String> offenders = new ArrayList<>();
         for (String key : SECRETS_TO_CHECK) {
             String value = env.getProperty(key);
@@ -50,15 +71,19 @@ public class ProductionSecretsGuard {
                 offenders.add(key);
             }
         }
+        String jwt = env.getProperty("jwt.secret");
+        if (jwt != null && jwt.length() < MIN_JWT_SECRET_LENGTH && !offenders.contains("jwt.secret")) {
+            offenders.add("jwt.secret (too short: needs >= " + MIN_JWT_SECRET_LENGTH + " chars)");
+        }
         if (!offenders.isEmpty()) {
             throw new IllegalStateException(
-                    "Refusing to start under 'prod' profile: the following secrets " +
-                    "still have placeholder defaults containing '" + PLACEHOLDER_MARKER +
-                    "': " + offenders + ". Override them via env vars (JWT_SECRET, " +
-                    "INTERNAL_API_TOKEN, LOYALTY_VOUCHER_SECRET, LOYALTY_QR_SECRET) " +
-                    "before booting in production."
+                    "Refusing to start under deployment profile " + Arrays.toString(active) +
+                    ": these secrets still hold placeholder/weak values: " + offenders +
+                    ". Override them via env vars (JWT_SECRET, INTERNAL_API_TOKEN, " +
+                    "LOYALTY_VOUCHER_SECRET, LOYALTY_QR_SECRET) before deploying."
             );
         }
-        log.info("Production secrets check passed ({} keys verified)", SECRETS_TO_CHECK.size());
+        log.info("Secrets guard passed for profile {} ({} keys verified)",
+                Arrays.toString(active), SECRETS_TO_CHECK.size());
     }
 }

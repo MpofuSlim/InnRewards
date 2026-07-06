@@ -8,6 +8,7 @@ import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.integration.TenantMemberNotifier;
 import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -51,7 +52,7 @@ public class TenantService {
      * no longer gates access — that's the job of {@link TenantMember} rows.
      */
     public Dtos.TenantResponse create(Dtos.TenantRequest req, String creatorEmail) {
-        String name = req.name() == null ? null : req.name().trim();
+        String name = req.name() == null ? null : HtmlSanitizer.stripAll(req.name().trim());
         // Control measure: no two tenants may share a name (case-insensitive).
         // Service-level guard (not a DB unique index) so it doesn't fail to
         // deploy against any pre-existing duplicate rows.

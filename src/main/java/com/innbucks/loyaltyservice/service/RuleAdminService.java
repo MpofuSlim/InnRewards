@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -79,7 +80,7 @@ public class RuleAdminService {
         // case-insensitive. Trim first. A null merchantId is a tenant-wide campaign
         // whose name is only unique among other tenant-wide campaigns — the IsNull
         // finder keeps that scope separate from any merchant's namespace.
-        String name = req.name() == null ? "" : req.name().trim();
+        String name = req.name() == null ? "" : HtmlSanitizer.stripAll(req.name().trim());
         boolean nameTaken = merchantId == null
                 ? campaigns.existsByTenantIdAndMerchantIdIsNullAndNameIgnoreCase(tenantId, name)
                 : campaigns.existsByTenantIdAndMerchantIdAndNameIgnoreCase(tenantId, merchantId, name);

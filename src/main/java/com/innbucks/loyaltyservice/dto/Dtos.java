@@ -30,7 +30,7 @@ public class Dtos {
             @Schema(example = "innbucks", description = "Short unique code for the tenant (URL-safe, no spaces).")
             @NotBlank String code,
             @Schema(example = "Innbucks Financial Services")
-            @NotBlank String name
+            @NotBlank @Size(max = 200) String name
     ) {}
 
     public record TenantResponse(UUID id, String code, String name, String status) {}
@@ -219,7 +219,7 @@ public class Dtos {
                     description = "Merchant the campaign applies to. See RuleRequest.merchantId for source selection.")
             UUID merchantId,
             @Schema(example = "Weekend 2x Points")
-            @NotBlank String name,
+            @NotBlank @Size(max = 200) String name,
             @Schema(example = "2.0000", description = "Points multiplier during the campaign window.")
             @NotNull BigDecimal multiplier,
             @Schema(example = "PURCHASE", nullable = true)
@@ -304,7 +304,7 @@ public class Dtos {
                                   "creating a tenant-wide template. Ignored when JWT carries merchantId.")
             UUID merchantId,
             @Schema(example = "$5 Off Your Next Coffee")
-            @NotBlank String name,
+            @NotBlank @Size(max = 200) String name,
             @Schema(example = "SINGLE_USE", allowableValues = {"SINGLE_USE", "MULTI_USE", "FREE_ITEM"})
             @NotNull VoucherTemplate.VoucherType type,
             @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENTAGE", "FREE_ITEM"},

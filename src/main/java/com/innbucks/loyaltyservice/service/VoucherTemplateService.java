@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.VoucherTemplateRepository;
+import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -33,7 +34,7 @@ public class VoucherTemplateService {
         // case-insensitive. Trim first. A null merchantId is a tenant-wide template
         // whose name is only unique among other tenant-wide templates — the IsNull
         // finder keeps that scope separate from any merchant's namespace.
-        String name = req.name() == null ? "" : req.name().trim();
+        String name = req.name() == null ? "" : HtmlSanitizer.stripAll(req.name().trim());
         boolean nameTaken = merchantId == null
                 ? templates.existsByTenantIdAndMerchantIdIsNullAndNameIgnoreCase(tenantId, name)
                 : templates.existsByTenantIdAndMerchantIdAndNameIgnoreCase(tenantId, merchantId, name);

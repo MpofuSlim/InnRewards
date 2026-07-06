@@ -35,7 +35,8 @@ public class ProductionSecretsGuard {
             "jwt.secret",
             "innbucks.internal-api-token",
             "loyalty.voucher.secret",
-            "loyalty.qr.secret"
+            "loyalty.qr.secret",
+            "whatsapp.api-key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

@@ -162,6 +162,18 @@ public class TransactionService {
         if (!orig.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
+        // Per-merchant ownership guard, mirroring the voucher-redeem WRONG_MERCHANT
+        // check (and RuleAdminService.deactivateRule). A merchant-scoped caller —
+        // SHOP_ADMIN carries merchantId in the JWT — may only reverse its OWN
+        // merchant's transactions, so a SHOP_ADMIN for merchant B can't reverse
+        // merchant A's transaction within the same tenant. MERCHANT_ADMIN /
+        // SUPER_ADMIN are tenant-scoped (currentMerchantId() is null) and bypass,
+        // already bounded by the tenant check above.
+        UUID callerMerchantId = com.innbucks.loyaltyservice.security.CallerDetails.currentMerchantId();
+        if (orig.getMerchantId() != null && callerMerchantId != null
+                && !orig.getMerchantId().equals(callerMerchantId)) {
+            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This transaction belongs to a different merchant.");
+        }
         if (orig.getStatus() == LoyaltyTransaction.Status.REVERSED) {
             throw LoyaltyException.conflict("ALREADY_REVERSED", "This transaction has already been reversed.");
         }

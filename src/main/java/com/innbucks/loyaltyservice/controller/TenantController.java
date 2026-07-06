@@ -31,9 +31,42 @@ import java.util.UUID;
 public class TenantController {
 
     private final TenantService tenantService;
+    private final com.innbucks.loyaltyservice.service.TenantCachedLookup tenantLookup;
 
-    public TenantController(TenantService tenantService) {
+    public TenantController(TenantService tenantService,
+                            com.innbucks.loyaltyservice.service.TenantCachedLookup tenantLookup) {
         this.tenantService = tenantService;
+        this.tenantLookup = tenantLookup;
+    }
+
+    /**
+     * Membership gate for the operator-level tenant endpoints that take the
+     * tenant as a PATH id (so {@link com.innbucks.loyaltyservice.security.TenantContext},
+     * which keys off the X-Tenant-Id header, doesn't apply). Mirrors
+     * TenantContext's rule exactly: SUPER_ADMIN acts across every tenant; any
+     * other caller must be a MEMBER of the path tenant, resolved dual-mode by
+     * the stable {@code userId} claim OR the email (legacy rows). A caller who
+     * is neither is rejected 403 — this is what stops one tenant's admin from
+     * enumerating another tenant's admin roster.
+     */
+    private void requireMemberOrSuperAdmin(UUID tenantId,
+            org.springframework.security.core.Authentication authentication) {
+        if (authentication != null) {
+            for (var granted : authentication.getAuthorities()) {
+                if ("ROLE_SUPER_ADMIN".equals(granted.getAuthority())) {
+                    return;
+                }
+            }
+        }
+        UUID userId = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
+        String email = authentication != null ? authentication.getName() : null;
+        boolean member = (userId != null && tenantLookup.isMemberByUserId(tenantId, userId))
+                || (email != null && !email.isBlank() && tenantLookup.isMember(tenantId, email));
+        if (!member) {
+            log.warn("Tenant roster access denied tenantId={} userId={} caller={}", tenantId, userId, email);
+            throw com.innbucks.loyaltyservice.exception.LoyaltyException.forbidden(
+                    "NOT_TENANT_MEMBER", "you are not a member of this tenant");
+        }
     }
 
     @PostMapping
@@ -329,6 +362,21 @@ public class TenantController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Caller is not a member of this tenant (and not a SUPER_ADMIN)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not a member", value = """
+                                    {
+                                      "code": "NOT_TENANT_MEMBER",
+                                      "message": "you are not a member of this tenant",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "Tenant not found",
                     content = @Content(
@@ -346,8 +394,14 @@ public class TenantController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantMemberResponse>>> members(
-            @PathVariable UUID id) {
+            @PathVariable UUID id,
+            org.springframework.security.core.Authentication authentication) {
         log.info("GET /loyalty/tenants/{}/members", id);
+        // The admin roster is tenant-private. The role gate above only proves
+        // the caller is *some* admin; this proves they belong to THIS tenant
+        // (or are a SUPER_ADMIN). Without it any merchant/shop admin could
+        // enumerate every tenant's roster (emails + user UUIDs) — OWASP A01.
+        requireMemberOrSuperAdmin(id, authentication);
         java.util.List<Dtos.TenantMemberResponse> data = tenantService.listMembers(id);
         return ResponseEntity.ok(ApiResult.ok("Members retrieved successfully", data));
     }

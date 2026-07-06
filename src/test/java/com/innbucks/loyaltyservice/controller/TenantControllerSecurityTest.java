@@ -193,6 +193,56 @@ class TenantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(jsonPath("$.data[0].id").value(tenantId.toString()));
     }
 
+    // --- GET /loyalty/tenants/{id}/members — roster is tenant-private -----------
+
+    @Test
+    void members_non_member_admin_is_rejected_403() throws Exception {
+        // A01 fix: an any-tenant admin who is NOT a member of the path tenant
+        // must not be able to read that tenant's admin roster (emails + UUIDs).
+        UUID tenantId = newTenant("roster-cross");
+        String stranger = jwt("stranger@test.local", "MERCHANT_ADMIN"); // not joined
+        mockMvc.perform(get("/loyalty/tenants/{id}/members", tenantId)
+                        .header("Authorization", bearer(stranger)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("NOT_TENANT_MEMBER"));
+    }
+
+    @Test
+    void members_member_can_read_roster_200() throws Exception {
+        // A member of the tenant (email-keyed) may read its roster.
+        UUID tenantId = newTenant("roster-member");
+        joinTenant(tenantId, "ops@test.local");
+        String token = jwt("ops@test.local", "MERCHANT_ADMIN");
+        mockMvc.perform(get("/loyalty/tenants/{id}/members", tenantId)
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].email").value("ops@test.local"));
+    }
+
+    @Test
+    void members_member_by_userId_can_read_roster_200() throws Exception {
+        // Dual-mode: a UUID-keyed member (email column null, matched on the JWT
+        // userId claim) is admitted just like the email fallback.
+        UUID tenantId = newTenant("roster-member-uuid");
+        UUID userId = UUID.randomUUID();
+        joinTenantByUserId(tenantId, userId);
+        String token = TestJwtFactory.builder("uuid-member@test.local")
+                .role("MERCHANT_ADMIN").userId(userId).sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/tenants/{id}/members", tenantId)
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void members_super_admin_bypasses_membership_200() throws Exception {
+        // SUPER_ADMIN acts across every tenant without a membership row.
+        UUID tenantId = newTenant("roster-superadmin");
+        String superAdmin = TestJwtFactory.superAdmin(jwtSecret);
+        mockMvc.perform(get("/loyalty/tenants/{id}/members", tenantId)
+                        .header("Authorization", bearer(superAdmin)))
+                .andExpect(status().isOk());
+    }
+
     // --- The join endpoint is gone ---------------------------------------------
     // No HTTP-status assertion for the removed POST /loyalty/tenants/{id}/join:
     // this service's GlobalExceptionHandler has a catch-all @ExceptionHandler(

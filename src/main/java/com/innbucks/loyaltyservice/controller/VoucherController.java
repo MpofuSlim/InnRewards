@@ -568,14 +568,15 @@ public class VoucherController {
     }
 
     @GetMapping("/users/by-phone/{phoneNumber}/active")
-    @Operation(summary = "List a phone's active vouchers across every tenant",
+    @Operation(summary = "List a phone's active vouchers in the caller's tenant",
             description = "Returns every voucher in an active state (ISSUED, DELIVERED, VIEWED, " +
-                          "PARTIALLY_USED) attached to any LoyaltyUser projection for the given phone " +
-                          "— aggregated across all tenants the phone exists in. Powers the SuperApp " +
-                          "\"my vouchers\" wallet view. " +
+                          "PARTIALLY_USED) attached to the given phone's LoyaltyUser **within the tenant on " +
+                          "the request** (X-Tenant-Id required). Powers the SuperApp \"my vouchers\" wallet " +
+                          "view. Results are strictly tenant-scoped — a phone that also holds vouchers under " +
+                          "another tenant will never surface them here. " +
                           "CUSTOMER callers can only request their own phone (JWT phoneNumber claim must " +
                           "match the path); MERCHANT_ADMIN / SHOP_ADMIN / SUPER_ADMIN can look up any phone " +
-                          "for support.")
+                          "for support, but only ever see their own tenant's vouchers.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -616,8 +617,22 @@ public class VoucherController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Missing X-Tenant-Id / X-Tenant-Code header",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "MISSING_TENANT",
+                                      "message": "X-Tenant-Id or X-Tenant-Code header is required",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "CUSTOMER tried to read another customer's vouchers",
+                    description = "CUSTOMER tried to read another customer's vouchers, or the caller is not a member of the tenant",
                     content = @Content(
                             mediaType = "application/json",
                             examples = @ExampleObject(value = """
@@ -633,12 +648,19 @@ public class VoucherController {
     @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForPhone(@PathVariable String phoneNumber,
                                                                                        @ParameterObject Pageable pageable) {
-        // CUSTOMER may only ask for their own phone (matches the wallet-owner
-        // pattern in /users/{id}/transactions and TransferService). Admin
-        // roles bypass for support / ops use cases.
+        // Gate 1 — tenant scope. X-Tenant-Id is required and TenantContext
+        // enforces the caller's membership of it, exactly like GET
+        // /users/{id}/transactions. This is what stops a cashier/admin in one
+        // tenant from enumerating a customer's vouchers in another tenant: the
+        // lookup below is scoped to this tenant only.
+        UUID tenantId = tenantContext.requireTenantId();
+        // Gate 2 — identity. CUSTOMER may only ask for their own phone (matches
+        // the wallet-owner pattern in /users/{id}/transactions and
+        // TransferService). Admin roles bypass this owner check for support /
+        // ops, but stay bounded to their tenant by the scoped query above.
         requireCallerOwnsPhoneOrIsAdmin(phoneNumber);
         PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
-                voucherService.activeForPhone(phoneNumber, pageable));
+                voucherService.activeForPhone(tenantId, phoneNumber, pageable));
         return ResponseEntity.ok(ApiResult.ok("Active vouchers retrieved successfully", data));
     }
 

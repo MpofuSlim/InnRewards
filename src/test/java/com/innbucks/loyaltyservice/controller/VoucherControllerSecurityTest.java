@@ -52,12 +52,44 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     @Test
     void customer_cannot_view_someone_elses_phone_vouchers() throws Exception {
         // CUSTOMER token bound to one phone trying to read another phone's
-        // vouchers must 403 NOT_PHONE_OWNER (the IDOR gate).
+        // vouchers must 403 NOT_PHONE_OWNER (the IDOR gate). Alice is a member
+        // of the tenant (so she clears the new tenant-scope gate) but the phone
+        // in the path isn't hers, so the owner check still rejects.
+        UUID tenant = newTenant("vch-phone-idor");
+        joinTenant(tenant, "alice@test.local");
         String aliceToken = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
                 .builder("alice@test.local").role("CUSTOMER")
                 .phoneNumber("+263770000111").sign(jwtSecret);
         mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000222")
+                        .header("Authorization", bearer(aliceToken))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void active_for_phone_without_tenant_header_returns_400() throws Exception {
+        // Stricter authz: the by-phone wallet lookup is now tenant-scoped, so a
+        // caller with no X-Tenant-Id header is rejected before any data is read
+        // — this is what closes the cross-tenant voucher-enumeration hole.
+        String aliceToken = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
+                .builder("alice@test.local").role("CUSTOMER")
+                .phoneNumber("+263770000111").sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000111")
                         .header("Authorization", bearer(aliceToken)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void admin_stranger_to_tenant_cannot_enumerate_phone_vouchers_returns_403() throws Exception {
+        // The core A01 fix: an admin from a DIFFERENT tenant (not a member of
+        // the path tenant) can no longer read a customer's vouchers by phone.
+        // TenantContext.requireTenant() rejects the non-member with 403 before
+        // the (tenant-scoped) query runs.
+        UUID otherTenant = newTenant("vch-phone-cross");
+        String stranger = jwt("stranger@test.local", "MERCHANT_ADMIN"); // not a member
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000111")
+                        .header("Authorization", bearer(stranger))
+                        .header("X-Tenant-Id", otherTenant.toString()))
                 .andExpect(status().isForbidden());
     }
 
@@ -66,16 +98,22 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
         // The mocked VoucherService needs an empty Page or PageResponse.from
         // NPEs trying to map a null result.
         org.mockito.Mockito.when(voucherService.activeForPhone(
+                org.mockito.ArgumentMatchers.any(UUID.class),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(
                         java.util.List.of(), org.springframework.data.domain.Pageable.unpaged(), 0));
 
+        // Alice must be a member of the tenant she scopes the request to, then
+        // the owner check admits her for her own phone.
+        UUID tenant = newTenant("vch-phone-self");
+        joinTenant(tenant, "alice@test.local");
         String aliceToken = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
                 .builder("alice@test.local").role("CUSTOMER")
                 .phoneNumber("+263770000111").sign(jwtSecret);
         mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000111")
-                        .header("Authorization", bearer(aliceToken)))
+                        .header("Authorization", bearer(aliceToken))
+                        .header("X-Tenant-Id", tenant.toString()))
                 .andExpect(status().isOk());
     }
 
@@ -201,17 +239,22 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     @Test
     void shop_user_can_list_active_vouchers_by_phone() throws Exception {
         org.mockito.Mockito.when(voucherService.activeForPhone(
+                org.mockito.ArgumentMatchers.any(UUID.class),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(
                         java.util.List.of(), org.springframework.data.domain.Pageable.unpaged(), 0));
 
+        // The by-phone endpoint is now tenant-scoped: the caller must send a
+        // valid X-Tenant-Id and be a member of it. The admin-role owner-check
+        // bypass still lets a shop user look up any phone WITHIN their tenant.
+        UUID tenant = newTenant("vch-shopuser-byphone");
+        joinTenant(tenant, "till-user@test.local");
         String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
                 "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
-        // No X-Tenant-Id needed — the by-phone endpoint relies on the in-controller
-        // phone-owner guard, not on TenantContext.
         mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000900")
-                        .header("Authorization", bearer(token)))
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString()))
                 .andExpect(status().isOk());
     }
 

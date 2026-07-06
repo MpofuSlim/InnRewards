@@ -361,6 +361,18 @@ public class VoucherService {
         if (!v.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
+        // Per-merchant ownership guard, mirroring the redeem WRONG_MERCHANT check
+        // (and RuleAdminService.deactivateRule). A merchant-scoped caller —
+        // SHOP_ADMIN carries merchantId in the JWT — may only revoke its OWN
+        // merchant's vouchers, so a SHOP_ADMIN for merchant B can't void
+        // merchant A's voucher within the same tenant. MERCHANT_ADMIN /
+        // SUPER_ADMIN are tenant-scoped (currentMerchantId() is null) and bypass,
+        // already bounded by the tenant check above.
+        UUID callerMerchantId = CallerDetails.currentMerchantId();
+        if (v.getMerchantId() != null && callerMerchantId != null
+                && !v.getMerchantId().equals(callerMerchantId)) {
+            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher belongs to a different merchant.");
+        }
         v.setStatus(Voucher.Status.REVOKED);
     }
 
@@ -381,23 +393,25 @@ public class VoucherService {
     }
 
     /**
-     * Aggregate every active voucher for a phone — across every tenant the
-     * phone has a LoyaltyUser projection in. Returns an empty page when the
-     * phone has no projections at all (rather than 404) so the customer-app
-     * UI can render "no vouchers yet" cleanly.
+     * Active vouchers for a phone, scoped STRICTLY to the caller's tenant
+     * (X-Tenant-Id). A phone can have a LoyaltyUser projection in several
+     * tenants, but this endpoint must only ever return vouchers that belong to
+     * the tenant on the request — resolving the phone's user via the
+     * tenant-keyed unique lookup ({@code (tenantId, phoneNumber)}) guarantees
+     * that. Without this scoping any cashier/admin in one tenant could
+     * enumerate a customer's voucher codes and values across every tenant on
+     * the platform (OWASP A01 cross-tenant enumeration). Returns an empty page
+     * when the phone has no projection in this tenant (rather than 404) so the
+     * customer-app UI can render "no vouchers yet" cleanly.
      */
     @Transactional(readOnly = true)
-    public Page<Dtos.VoucherResponse> activeForPhone(String phoneNumber, Pageable pageable) {
-        java.util.List<UUID> userIds = users.findByPhoneNumber(phoneNumber).stream()
-                .map(com.innbucks.loyaltyservice.entity.LoyaltyUser::getId)
-                .toList();
-        if (userIds.isEmpty()) {
-            return org.springframework.data.domain.Page.empty(pageable);
-        }
-        return vouchers.findByAssignedUserIdInAndStatusIn(userIds, List.of(
-                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
-                Voucher.Status.PARTIALLY_USED), pageable)
-                .map(VoucherService::toResponse);
+    public Page<Dtos.VoucherResponse> activeForPhone(UUID tenantId, String phoneNumber, Pageable pageable) {
+        return users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber)
+                .map(u -> vouchers.findByAssignedUserIdAndStatusIn(u.getId(), List.of(
+                                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
+                                Voucher.Status.PARTIALLY_USED), pageable)
+                        .map(VoucherService::toResponse))
+                .orElseGet(() -> org.springframework.data.domain.Page.empty(pageable));
     }
 
     @Transactional(readOnly = true)

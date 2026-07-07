@@ -21,4 +21,14 @@ public interface PointsLedgerRepository extends JpaRepository<PointsLedger, UUID
      */
     @Query("SELECT COALESCE(SUM(p.delta), 0) FROM PointsLedger p WHERE p.walletId = :walletId")
     BigDecimal sumDeltaByWalletId(@Param("walletId") UUID walletId);
+
+    /**
+     * A04: the exact net amount a given transaction applied to the wallet
+     * (0 when it never touched one — e.g. a non-positive earn that {@code post()}
+     * did not credit). Reversals use this to compensate ONLY what actually
+     * moved, instead of blindly negating the stored {@code pointsDelta} (which
+     * would mint points from nothing). Backed by {@code idx_ledger_txn}.
+     */
+    @Query("SELECT COALESCE(SUM(p.delta), 0) FROM PointsLedger p WHERE p.transactionId = :transactionId")
+    BigDecimal sumDeltaByTransactionId(@Param("transactionId") UUID transactionId);
 }

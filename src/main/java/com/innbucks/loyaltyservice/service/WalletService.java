@@ -256,6 +256,22 @@ public class WalletService {
                 .map(Wallet::getBalance).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+    /**
+     * A04: the net amount a given transaction actually applied to any wallet,
+     * from the append-only ledger — {@code 0} when it never moved the wallet.
+     * Reversals compensate exactly this (not a blind negation of the stored
+     * pointsDelta) so a transaction that never credited the wallet can't mint
+     * points from nothing on reversal.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal appliedForTransaction(UUID transactionId) {
+        if (transactionId == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal sum = ledger.sumDeltaByTransactionId(transactionId);
+        return sum == null ? BigDecimal.ZERO : sum;
+    }
+
     public static Dtos.WalletResponse toResponse(Wallet w) {
         return new Dtos.WalletResponse(w.getId(), w.getUserId(), w.getLabel(),
                 w.getType().name(), w.getPocket(), w.getBalance(), w.getLockedUntil());

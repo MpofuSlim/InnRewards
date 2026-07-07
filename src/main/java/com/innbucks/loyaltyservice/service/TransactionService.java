@@ -104,6 +104,17 @@ public class TransactionService {
                     });
         }
 
+        // A04: reject a negative amount before the rules engine sees it. A
+        // negative amount yields negative points, which post() would decline to
+        // apply to the wallet (only positive earns credit) — but a later
+        // reverse() of that row would negate the delta into a wallet CREDIT,
+        // minting points from nothing. @PositiveOrZero guards the public DTO;
+        // this guards the guest / shop-checkout callers that build the request
+        // server-side and bypass bean validation.
+        if (req.amount() != null && req.amount().signum() < 0) {
+            throw LoyaltyException.badRequest("INVALID_AMOUNT", "amount must be zero or positive");
+        }
+
         var eval = rulesEngine.evaluate(tenantId, m.getId(), req.type(), req.amount());
 
         LoyaltyTransaction t = new LoyaltyTransaction();
@@ -189,7 +200,15 @@ public class TransactionService {
         rev.setType(TransactionType.ADJUSTMENT);
         rev.setAmount(orig.getAmount());
         rev.setCurrency(orig.getCurrency());
-        rev.setPointsDelta(orig.getPointsDelta().negate());
+        // A04: compensate ONLY what the original actually moved on the wallet,
+        // reconstructed from the append-only ledger — not a blind negation of
+        // the stored pointsDelta. post() credits the wallet only for a positive
+        // earn, so a non-positive original never touched it; negating its delta
+        // here would credit points from nothing. Reversing a real earn (+N) or a
+        // manual adjustment debit (−N) both reconstruct correctly because the
+        // ledger records the transaction's true net effect (0 if none).
+        BigDecimal appliedByOriginal = walletService.appliedForTransaction(orig.getId());
+        rev.setPointsDelta(appliedByOriginal.negate());
         rev.setReversesId(orig.getId());
         rev.setReference(orig.getReference() == null ? null : "REV-" + orig.getReference());
         // saveAndFlush so the uq_txn_reverses_id unique index (V20) surfaces a

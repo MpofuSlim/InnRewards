@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -246,7 +247,11 @@ public class Dtos {
             String assigneePhone,
             @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "CARD_PAYMENT", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
             @NotNull TransactionType type,
-            @Schema(example = "100.00", nullable = true, description = "Transaction amount in the merchant's currency.")
+            @Schema(example = "100.00", nullable = true,
+                    description = "Transaction amount in the merchant's currency. Must be zero or positive " +
+                                  "when supplied (a negative amount would mint points via a later reversal — OWASP A04). " +
+                                  "Optional: omit it for types that don't accrue on a cash amount.")
+            @PositiveOrZero(message = "amount must be zero or positive")
             BigDecimal amount,
             @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
             String currency,

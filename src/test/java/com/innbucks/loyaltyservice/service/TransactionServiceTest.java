@@ -117,4 +117,47 @@ class TransactionServiceTest {
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("ALREADY_REVERSED"));
     }
+
+    // --- A04: amount validation + no-mint-from-nothing reversal --------------
+
+    @Test
+    void post_negativeAmount_isRejected_andNeverTouchesTheWallet() {
+        UUID userId = UUID.randomUUID();
+        com.innbucks.loyaltyservice.entity.Merchant m =
+                mock(com.innbucks.loyaltyservice.entity.Merchant.class);
+        when(m.getStatus()).thenReturn(com.innbucks.loyaltyservice.entity.Merchant.Status.ACTIVE);
+        when(merchants.requireMerchant(TENANT, MERCHANT_A)).thenReturn(m);
+        when(users.require(TENANT, userId))
+                .thenReturn(mock(com.innbucks.loyaltyservice.entity.LoyaltyUser.class));
+
+        com.innbucks.loyaltyservice.dto.Dtos.TransactionRequest req =
+                new com.innbucks.loyaltyservice.dto.Dtos.TransactionRequest(
+                        null, userId, null, TransactionType.PURCHASE,
+                        new BigDecimal("-5"), null, null);
+
+        assertThatThrownBy(() -> service.post(TENANT, MERCHANT_A, req, null))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("INVALID_AMOUNT"));
+        // Never reaches the rules engine or the wallet.
+        verify(rulesEngine, never()).evaluate(any(), any(), any(), any());
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reverse_originalNeverCreditedWallet_creditsNothing() {
+        // The "points from nothing" guard: the original's stored pointsDelta is
+        // 100, but the LEDGER shows it never actually moved the wallet
+        // (appliedForTransaction == 0 — e.g. a non-positive earn post() declined
+        // to apply). The reversal must NOT credit 100 back; it compensates only
+        // what the ledger says moved (0), so no wallet apply happens.
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        authenticateAsMerchant(MERCHANT_A);
+        when(walletService.appliedForTransaction(orig.getId())).thenReturn(BigDecimal.ZERO);
+
+        var resp = service.reverse(TENANT, orig.getId(), "refund");
+
+        assertThat(orig.getStatus()).isEqualTo(LoyaltyTransaction.Status.REVERSED);
+        assertThat(resp.pointsDelta()).isEqualByComparingTo("0");
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+    }
 }

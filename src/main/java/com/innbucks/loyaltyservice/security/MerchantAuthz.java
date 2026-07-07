@@ -7,6 +7,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -79,11 +80,13 @@ public class MerchantAuthz {
         }
 
         // MERCHANT_ADMIN: ownership is the adminEmail stamped at create time.
-        // equalsIgnoreCase is null-safe on its argument, so a single guard on the
-        // receiver suffices (no redundant caller-email null-check to flag).
+        // adminEmail is a nullable column (auto-provisioned merchants have none),
+        // so coalesce to "" for a non-null receiver — equalsIgnoreCase is null-safe
+        // on its argument. Uses the requireNonNullElse idiom so neither the caller
+        // email nor the owner email needs a null-check for Qodana to flag.
         String callerEmail = CallerDetails.currentEmail();
         String ownerEmail = merchant.getAdminEmail();
-        if (ownerEmail != null && ownerEmail.equalsIgnoreCase(callerEmail)) {
+        if (Objects.requireNonNullElse(ownerEmail, "").equalsIgnoreCase(callerEmail)) {
             return merchant;
         }
         throw notOwner();
@@ -95,10 +98,7 @@ public class MerchantAuthz {
     }
 
     private static boolean hasRole(Authentication auth, String role) {
-        // auth is non-null here: every caller resolves the tenant via TenantContext
-        // first, which rejects unauthenticated requests. Mirrors TenantContext.hasRole
-        // (no redundant null-check for Qodana to flag).
-        return auth.getAuthorities().stream()
+        return auth != null && auth.getAuthorities().stream()
                 .anyMatch(a -> role.equals(a.getAuthority()));
     }
 }

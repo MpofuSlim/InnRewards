@@ -17,12 +17,14 @@ import java.util.Set;
  * service with the JWT or HMAC secret unchanged; this fails fast at startup so
  * that mistake never reaches the wire.
  *
- * <p>"Deployment" = any active profile other than {@code dev/test/it/local}
- * (e.g. {@code prod}, {@code uat}, {@code staging}). An empty profile set is
- * treated as non-deployment, so dev/test runs and stray {@code java -jar} runs
- * keep working against the convenient placeholder values. This is stronger than
- * gating on {@code prod} alone: a staging box, or a manifest that sets some
- * non-prod deployment profile, is now covered too.
+ * <p>"Deployment" = an active-profile set containing NO {@code dev/test/it/local}
+ * profile (e.g. {@code prod}, {@code uat}, {@code staging}). A02-M3: this now
+ * includes an EMPTY profile set — a container launched without
+ * {@code SPRING_PROFILES_ACTIVE} is treated as a deployment and fails closed on
+ * placeholder secrets instead of silently booting on them. Local dev / a stray
+ * {@code java -jar} must opt out explicitly with a dev/test/local profile.
+ * Stronger than gating on {@code prod} alone: a staging box, or a manifest that
+ * sets some non-prod deployment profile, is covered too.
  */
 @Configuration
 @Slf4j
@@ -57,11 +59,16 @@ public class ProductionSecretsGuard {
     @PostConstruct
     void verifyNoPlaceholderSecrets() {
         String[] active = env.getActiveProfiles();
-        boolean deployment = active.length > 0
-                && Arrays.stream(active).noneMatch(NON_DEPLOYMENT_PROFILES::contains);
+        // A02-M3: fail-CLOSED. Deployment = the active-profile set contains NO
+        // non-deployment (dev/test/it/local) profile — which now INCLUDES the
+        // EMPTY set. A container launched without SPRING_PROFILES_ACTIVE is
+        // treated as a deployment and must not boot on change-me placeholders;
+        // local dev / a stray `java -jar` must opt out explicitly with a
+        // dev/test/local profile. Every @SpringBootTest already sets an explicit
+        // test/it profile, so the suite is unaffected.
+        boolean deployment = Arrays.stream(active).noneMatch(NON_DEPLOYMENT_PROFILES::contains);
         if (!deployment) {
-            log.info("Secrets guard skipped (non-deployment profile: {})",
-                    active.length == 0 ? "<none>" : Arrays.toString(active));
+            log.info("Secrets guard skipped (non-deployment profile: {})", Arrays.toString(active));
             return;
         }
 

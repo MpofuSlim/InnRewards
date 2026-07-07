@@ -66,6 +66,11 @@ public class MerchantAuthz {
                 .orElseThrow(() -> LoyaltyException.notFound("merchant"));
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) {
+            // Defensive: TenantContext rejects unauthenticated requests before we
+            // get here, but never treat a null principal as a merchant owner.
+            throw notOwner();
+        }
         if (hasRole(auth, "ROLE_SUPER_ADMIN")) {
             return merchant;
         }
@@ -98,7 +103,9 @@ public class MerchantAuthz {
     }
 
     private static boolean hasRole(Authentication auth, String role) {
-        return auth != null && auth.getAuthorities().stream()
+        // Callers guard against a null Authentication first (mirrors
+        // TenantContext.hasRole), so no null-check is needed here.
+        return auth.getAuthorities().stream()
                 .anyMatch(a -> role.equals(a.getAuthority()));
     }
 }

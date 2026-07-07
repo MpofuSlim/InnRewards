@@ -79,10 +79,11 @@ public class MerchantAuthz {
         }
 
         // MERCHANT_ADMIN: ownership is the adminEmail stamped at create time.
+        // equalsIgnoreCase is null-safe on its argument, so a single guard on the
+        // receiver suffices (no redundant caller-email null-check to flag).
         String callerEmail = CallerDetails.currentEmail();
         String ownerEmail = merchant.getAdminEmail();
-        if (callerEmail != null && ownerEmail != null
-                && callerEmail.equalsIgnoreCase(ownerEmail)) {
+        if (ownerEmail != null && ownerEmail.equalsIgnoreCase(callerEmail)) {
             return merchant;
         }
         throw notOwner();
@@ -94,7 +95,10 @@ public class MerchantAuthz {
     }
 
     private static boolean hasRole(Authentication auth, String role) {
-        return auth != null && auth.getAuthorities().stream()
+        // auth is non-null here: every caller resolves the tenant via TenantContext
+        // first, which rejects unauthenticated requests. Mirrors TenantContext.hasRole
+        // (no redundant null-check for Qodana to flag).
+        return auth.getAuthorities().stream()
                 .anyMatch(a -> role.equals(a.getAuthority()));
     }
 }

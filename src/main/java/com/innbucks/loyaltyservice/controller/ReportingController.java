@@ -42,12 +42,30 @@ public class ReportingController {
     private final ReportingService reporting;
     private final SuperAppService superApp;
     private final TenantContext tenantContext;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
 
     public ReportingController(ReportingService reporting, SuperAppService superApp,
-                               TenantContext tenantContext) {
+                               TenantContext tenantContext,
+                               com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.reporting = reporting;
         this.superApp = superApp;
         this.tenantContext = tenantContext;
+        this.merchantAuthz = merchantAuthz;
+    }
+
+    /** Resolves the tenant AND enforces the caller administers {@code merchantId}
+     *  (object-level authz for merchant-scoped reports). Returns the tenant id. */
+    private UUID merchantAuthzTenant(UUID merchantId) {
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        return tenantId;
+    }
+
+    /** Resolves the tenant AND enforces the caller may access {@code shopId}. */
+    private UUID shopAuthzTenant(UUID shopId) {
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
+        return tenantId;
     }
 
     @GetMapping("/operator")
@@ -189,7 +207,9 @@ public class ReportingController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantDashboard>> merchant(@PathVariable UUID id) {
-        Dtos.MerchantDashboard data = reporting.merchant(tenantContext.requireTenantId(), id);
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
+        Dtos.MerchantDashboard data = reporting.merchant(tenantId, id);
         return ResponseEntity.ok(ApiResult.ok("Merchant dashboard retrieved successfully", data));
     }
 
@@ -440,7 +460,11 @@ public class ReportingController {
     public ResponseEntity<ApiResult<Map<String, Long>>> transactionMix(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        Map<String, Long> data = reporting.transactionMix(tenantContext.requireTenantId(), merchantId, from, to);
+        UUID tenantId = tenantContext.requireTenantId();
+        if (merchantId != null) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        }
+        Map<String, Long> data = reporting.transactionMix(tenantId, merchantId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Transaction mix retrieved successfully", data));
     }
 
@@ -509,8 +533,10 @@ public class ReportingController {
             @PathVariable UUID merchantId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
         Dtos.PointsReport data = reporting.pointsForMerchant(
-                tenantContext.requireTenantId(), merchantId, from, to);
+                tenantId, merchantId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
     }
 
@@ -739,8 +765,10 @@ public class ReportingController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject Pageable pageable) {
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
         Dtos.ShopPointsReport data = reporting.pointsForShop(
-                tenantContext.requireTenantId(), shopId, from, to, pageable);
+                tenantId, shopId, from, to, pageable);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
     }
 
@@ -907,7 +935,11 @@ public class ReportingController {
     public ResponseEntity<String> exportCsv(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        String csv = reporting.csv(tenantContext.requireTenantId(), merchantId, from, to);
+        UUID tenantId = tenantContext.requireTenantId();
+        if (merchantId != null) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        }
+        String csv = reporting.csv(tenantId, merchantId, from, to);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
                 .header("Content-Disposition", "attachment; filename=\"transactions.csv\"")
                 .body(csv);
@@ -1045,7 +1077,8 @@ public class ReportingController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject Pageable pageable) {
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForMerchant(tenantContext.requireTenantId(), merchantId, status, from, to, pageable)));
+                reporting.vouchersForMerchant(
+                        merchantAuthzTenant(merchantId), merchantId, status, from, to, pageable)));
     }
 
     @GetMapping("/vouchers/shop/{shopId}")
@@ -1069,7 +1102,7 @@ public class ReportingController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject Pageable pageable) {
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForShop(tenantContext.requireTenantId(), shopId, status, from, to, pageable)));
+                reporting.vouchersForShop(shopAuthzTenant(shopId), shopId, status, from, to, pageable)));
     }
 
     @GetMapping("/vouchers/detail/{id}")

@@ -232,6 +232,10 @@ public class VoucherService {
 
     public void markViewed(String code) {
         vouchers.findByCode(code).ifPresent(v -> {
+            // Only the voucher's owner (assignee) — or issuing/merchant staff — may
+            // record a VIEW. Without this any authenticated principal could mark an
+            // arbitrary code viewed and pollute delivery→view analytics.
+            requireCallerMayViewVoucher(v);
             if (v.getViewedAt() == null) {
                 v.setViewedAt(Instant.now());
                 if (v.getStatus() == Voucher.Status.ISSUED || v.getStatus() == Voucher.Status.DELIVERED) {
@@ -239,6 +243,26 @@ public class VoucherService {
                 }
             }
         });
+    }
+
+    private void requireCallerMayViewVoucher(Voucher v) {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder
+                        .getContext().getAuthentication();
+        if (auth != null) {
+            boolean privileged = auth.getAuthorities().stream().anyMatch(a ->
+                    switch (a.getAuthority()) {
+                        case "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
+                             "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER" -> true;
+                        default -> false;
+                    });
+            if (privileged) return;
+        }
+        String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
+        if (callerPhone == null || !callerPhone.equals(v.getAssigneePhone())) {
+            throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                    "you can only act on your own vouchers");
+        }
     }
 
     public Dtos.RedemptionResponse redeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {

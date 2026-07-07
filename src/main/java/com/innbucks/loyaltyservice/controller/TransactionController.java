@@ -42,14 +42,18 @@ public class TransactionController {
     private final TenantContext tenantContext;
     private final com.innbucks.loyaltyservice.service.UserService users;
 
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
+
     public TransactionController(TransactionService transactions, TransferService transferService,
                                  RedemptionService redemptionService, TenantContext tenantContext,
-                                 com.innbucks.loyaltyservice.service.UserService users) {
+                                 com.innbucks.loyaltyservice.service.UserService users,
+                                 com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.transactions = transactions;
         this.transferService = transferService;
         this.redemptionService = redemptionService;
         this.tenantContext = tenantContext;
         this.users = users;
+        this.merchantAuthz = merchantAuthz;
     }
 
     @PostMapping("/transactions")
@@ -259,8 +263,14 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> adjust(@Valid @RequestBody Dtos.PointsAdjustRequestDTO body) {
-        Dtos.TransactionResponse data = transactions.adjust(tenantContext.requireTenantId(),
-                body.userId(), body.merchantId(), body.points(), body.reason());
+        UUID tenantId = tenantContext.requireTenantId();
+        // Resolve the effective merchant (SHOP_ADMIN → JWT claim, MERCHANT_ADMIN →
+        // body) and enforce the caller administers it, so a merchant admin can't
+        // adjust points against another merchant in the tenant.
+        UUID merchantId = CallerDetails.resolveMerchantId(body.merchantId());
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        Dtos.TransactionResponse data = transactions.adjust(tenantId,
+                body.userId(), merchantId, body.points(), body.reason());
         return ResponseEntity.ok(ApiResult.ok("Adjustment applied successfully", data));
     }
 

@@ -38,12 +38,15 @@ public class InvoiceController {
     private final InvoicingService invoicing;
     private final MerchantService merchants;
     private final TenantContext tenantContext;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
 
     public InvoiceController(InvoicingService invoicing, MerchantService merchants,
-                             TenantContext tenantContext) {
+                             TenantContext tenantContext,
+                             com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.invoicing = invoicing;
         this.merchants = merchants;
         this.tenantContext = tenantContext;
+        this.merchantAuthz = merchantAuthz;
     }
 
     @GetMapping("/merchant/{merchantId}")
@@ -124,8 +127,10 @@ public class InvoiceController {
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.InvoiceResponse>>> listForMerchant(@PathVariable UUID merchantId,
                                                                                           @ParameterObject Pageable pageable) {
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
         PageResponse<Dtos.InvoiceResponse> data = PageResponse.from(
-                invoicing.listForMerchant(tenantContext.requireTenantId(), merchantId, pageable));
+                invoicing.listForMerchant(tenantId, merchantId, pageable));
         return ResponseEntity.ok(ApiResult.ok("Invoices retrieved successfully", data));
     }
 
@@ -218,6 +223,7 @@ public class InvoiceController {
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> generate(@Valid @RequestBody Dtos.InvoiceGenerateRequestDTO body) {
         UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, body.merchantId());
         var m = merchants.requireMerchant(tenantId, body.merchantId());
         return invoicing.generate(m, body.periodStart(), body.periodEnd())
                 .map(inv -> ResponseEntity.status(HttpStatus.CREATED)

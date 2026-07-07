@@ -9,6 +9,7 @@ import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.QrTokenRepository;
+import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import org.junit.jupiter.api.AfterEach;
@@ -52,8 +53,9 @@ class QrServiceSecurityTest {
     private final FraudService fraud = mock(FraudService.class);
     private final UserService userService = mock(UserService.class);
     private final MerchantRepository merchants = mock(MerchantRepository.class);
+    private final ShopRepository shops = mock(ShopRepository.class);
 
-    private final MerchantAuthz merchantAuthz = new MerchantAuthz(merchants);
+    private final MerchantAuthz merchantAuthz = new MerchantAuthz(merchants, shops);
 
     private final LoyaltyProperties props =
             new LoyaltyProperties(null, new LoyaltyProperties.Qr(

@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.integration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.loyaltyservice.config.InnbucksNotifyProperties;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
+import com.innbucks.loyaltyservice.util.SmsTextSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -69,7 +70,10 @@ public class SmsNotificationClient {
                 : "TKT-SMS-" + UUID.randomUUID();
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("message", message);
+        // GSM-7 safety: the SMS gateway rejects non-GSM/non-ASCII chars (e.g. the
+        // em-dash in a "— The InnBucks Team" sign-off) with 400 "Invalid message".
+        // Transliterate to ASCII on the SMS path only (email keeps its typography).
+        payload.put("message", SmsTextSanitizer.toGsmSafe(message));
         payload.put("reference", ref);
         payload.put("destinationMsisdn", destination);
 

@@ -159,6 +159,11 @@ logging:
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+  # OWASP A02 stage-1 RS256/JWKS dual-verify. When JWT_PUBLIC_KEY is set this
+  # service verifies BOTH HS256 and RS256 tokens (alg selected per-token); unset
+  # = HS256 only, as before. Set fleet-wide BEFORE user-service flips to RS256
+  # minting. PKCS#8/X.509 PEM (-----BEGIN PUBLIC KEY-----).
+  public-key: ${JWT_PUBLIC_KEY:}
   expiration: ${JWT_EXPIRATION_MS:86400000}
 
 ---

@@ -57,7 +57,7 @@ public class JwtUtil {
             this.keyLocator = (Header header) -> {
                 if (header instanceof ProtectedHeader ph) {
                     String alg = ph.getAlgorithm();
-                    if (java.util.Objects.requireNonNullElse(alg, "").startsWith("RS")) {
+                    if ("RS256".equals(alg) || "RS384".equals(alg) || "RS512".equals(alg)) {
                         if (rsaPublicKey == null) {
                             throw new io.jsonwebtoken.security.SignatureException(
                                     "RS-signed token presented but no jwt.public-key is configured");

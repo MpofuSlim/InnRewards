@@ -76,6 +76,16 @@ public class ProductionSecretsGuard {
         if (jwt != null && jwt.length() < MIN_JWT_SECRET_LENGTH && !offenders.contains("jwt.secret")) {
             offenders.add("jwt.secret (too short: needs >= " + MIN_JWT_SECRET_LENGTH + " chars)");
         }
+        // A02: Redis holds session-revocation + rate-limit state. If this service
+        // is configured against Redis but the password is blank under a
+        // deployment profile, refuse to boot — require Redis AUTH. compose/k8s
+        // already provide REDIS_PASSWORD; this makes a forgotten one fail fast
+        // instead of silently running an unauthenticated Redis that an
+        // in-cluster attacker could use to tamper with revocation state.
+        String redisPassword = env.getProperty("spring.data.redis.password");
+        if (redisPassword != null && redisPassword.isBlank()) {
+            offenders.add("spring.data.redis.password (blank — Redis AUTH required under deployment)");
+        }
         if (!offenders.isEmpty()) {
             throw new IllegalStateException(
                     "Refusing to start under deployment profile " + Arrays.toString(active) +

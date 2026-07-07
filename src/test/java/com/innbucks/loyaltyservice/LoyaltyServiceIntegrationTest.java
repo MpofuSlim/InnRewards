@@ -158,18 +158,30 @@ class LoyaltyServiceIntegrationTest {
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000020", mr.id());
 
-        var qr = qrService.issue(t.getId(),
-                new Dtos.QrIssueRequest(QrToken.SourceType.MERCHANT, mr.id(),
-                        TransactionType.QR_PAY, new BigDecimal("25"), "USD", 60));
+        // A MERCHANT-sourced (points-awarding) QR may only be minted by staff who
+        // administer the merchant — a SUPER_ADMIN operator here. Issuing without an
+        // authorized caller is now (correctly) rejected as NOT_MERCHANT_OWNER.
+        var qrHolder = new Dtos.QrPayload[1];
+        withCaller("ops@platform.test", "SUPER_ADMIN", () ->
+                qrHolder[0] = qrService.issue(t.getId(),
+                        new Dtos.QrIssueRequest(QrToken.SourceType.MERCHANT, mr.id(),
+                                TransactionType.QR_PAY, new BigDecimal("25"), "USD", 60)));
+        var qr = qrHolder[0];
 
-        var txn = qrService.consume(t.getId(),
-                new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.getId(), "ref-qr-1"));
-        assertThat(txn.pointsDelta()).isEqualByComparingTo("25");
+        // The customer scans and consumes for THEIR OWN account — consume binds the
+        // credited userId to the authenticated caller.
+        var txnHolder = new Dtos.TransactionResponse[1];
+        withCaller(u.getPhoneNumber(), "CUSTOMER", () ->
+                txnHolder[0] = qrService.consume(t.getId(),
+                        new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.getId(), "ref-qr-1")));
+        assertThat(txnHolder[0].pointsDelta()).isEqualByComparingTo("25");
 
-        // Reuse must fail
-        assertThatThrownBy(() -> qrService.consume(t.getId(),
-                new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.getId(), "ref-qr-2")))
-                .isInstanceOf(LoyaltyException.class);
+        // Reuse must fail (single-use), still as the legitimate owner so the
+        // rejection is on the consumed flag — not authorization.
+        withCaller(u.getPhoneNumber(), "CUSTOMER", () ->
+                assertThatThrownBy(() -> qrService.consume(t.getId(),
+                        new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.getId(), "ref-qr-2")))
+                        .isInstanceOf(LoyaltyException.class));
     }
 
     @Test

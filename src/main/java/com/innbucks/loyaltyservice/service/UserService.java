@@ -155,6 +155,25 @@ public class UserService {
         }
     }
 
+    /**
+     * Strict owner check: the caller must be acting on their OWN loyalty account.
+     * Unlike {@link #requireCallerOwnsOrIsAdmin}, admin roles do NOT bypass this.
+     *
+     * <p>Use where "acting on behalf of another user" has no legitimate meaning and
+     * would be a minting/hijack vector — e.g. the user credited by consuming a QR
+     * MUST be the scanning caller, and the sender of a P2P transfer-QR MUST be the
+     * caller who drafted it. An admin bypass there would let a merchant admin (who
+     * can self-issue a merchant QR) or any privileged caller move value to/from an
+     * arbitrary account.
+     */
+    public void requireCallerOwns(LoyaltyUser target) {
+        String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
+        if (callerPhone == null || !callerPhone.equals(target.getPhoneNumber())) {
+            throw LoyaltyException.forbidden("NOT_WALLET_OWNER",
+                    "you can only act on your own loyalty account");
+        }
+    }
+
     // Internal lifecycle hooks used by FraudService and admin flows. These
     // affect the LoyaltyUser's status within the loyalty program only — they
     // do NOT change the user's account state in user-service.

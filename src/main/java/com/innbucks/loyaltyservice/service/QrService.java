@@ -3,11 +3,13 @@ package com.innbucks.loyaltyservice.service;
 import com.innbucks.loyaltyservice.config.LoyaltyProperties;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.FraudAttempt;
+import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.QrToken;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.QrTokenRepository;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
+import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +25,8 @@ public class QrService {
     private final TransactionService transactionService;
     private final TransferService transferService;
     private final FraudService fraud;
+    private final UserService userService;
+    private final MerchantAuthz merchantAuthz;
     private final CryptoSigner signer;
     private final int defaultTtl;
 
@@ -32,16 +36,40 @@ public class QrService {
 
     public QrService(QrTokenRepository qrs, TransactionService transactionService,
                      TransferService transferService, FraudService fraud,
+                     UserService userService, MerchantAuthz merchantAuthz,
                      LoyaltyProperties props) {
         this.qrs = qrs;
         this.transactionService = transactionService;
         this.transferService = transferService;
         this.fraud = fraud;
+        this.userService = userService;
+        this.merchantAuthz = merchantAuthz;
         this.signer = new CryptoSigner(props.qr().secret());
         this.defaultTtl = props.qr().ttlSeconds();
     }
 
     public Dtos.QrPayload issue(UUID tenantId, Dtos.QrIssueRequest req) {
+        // --- Authorization: who may mint THIS token? ---
+        // Without this a CUSTOMER could self-issue a MERCHANT-sourced QR for any
+        // merchant + arbitrary amount and then /consume it to mint points from
+        // nothing (the token is server-signed, so it verifies). Gate by source:
+        if (req.sourceType() == QrToken.SourceType.MERCHANT) {
+            // A points-awarding merchant QR may only be minted by staff who
+            // administer that merchant. Also confirms the merchant is in-tenant.
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, req.sourceId());
+        } else { // USER — a P2P transfer QR; sourceId is the SENDER's wallet.
+            // You may only draft a transfer that debits your OWN wallet. Strict
+            // ownership (no admin bypass) so nobody can mint a QR that drains
+            // another user's balance.
+            LoyaltyUser sender = userService.require(tenantId, req.sourceId());
+            userService.requireCallerOwns(sender);
+        }
+        // A QR encodes a fixed value; a negative amount is never valid and would
+        // otherwise flow into the transfer/earn as a sign-flipped credit.
+        if (req.amount() != null && req.amount().signum() < 0) {
+            throw LoyaltyException.badRequest("INVALID_AMOUNT", "amount must not be negative");
+        }
+
         QrToken q = new QrToken();
         q.setTenantId(tenantId);
         q.setSourceType(req.sourceType());
@@ -68,6 +96,16 @@ public class QrService {
     }
 
     public Dtos.TransactionResponse consume(UUID tenantId, Dtos.QrConsumeRequest req) {
+        // --- Authorization: the credited/receiving user MUST be the caller. ---
+        // consume() awards points (merchant QR) or receives a transfer (P2P QR)
+        // TO req.userId(). Without binding that to the authenticated principal, a
+        // caller could pass any/victim userId; combined with a merchant QR this is
+        // a mint-to-anyone primitive. Strict ownership (no admin bypass): you scan,
+        // you receive. This resolves + tenant-checks the user before touching the
+        // token, so an unauthorized userId is rejected up front.
+        LoyaltyUser recipient = userService.require(tenantId, req.userId());
+        userService.requireCallerOwns(recipient);
+
         QrToken q = qrs.lockByToken(req.token())
                 .orElseThrow(() -> {
                     fraud.record(tenantId, req.userId(), null, null,

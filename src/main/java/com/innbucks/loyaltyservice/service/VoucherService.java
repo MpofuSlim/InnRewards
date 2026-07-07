@@ -246,18 +246,12 @@ public class VoucherService {
     }
 
     private void requireCallerMayViewVoucher(Voucher v) {
-        org.springframework.security.core.Authentication auth =
-                org.springframework.security.core.context.SecurityContextHolder
-                        .getContext().getAuthentication();
-        if (auth != null) {
-            boolean privileged = auth.getAuthorities().stream().anyMatch(a ->
-                    switch (a.getAuthority()) {
-                        case "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
-                             "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER" -> true;
-                        default -> false;
-                    });
-            if (privileged) return;
+        // Issuing / merchant staff may record delivery + view lifecycle events.
+        if (com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole(
+                "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN", "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER")) {
+            return;
         }
+        // Otherwise the caller must be the voucher's own assignee.
         String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
         if (callerPhone == null || !callerPhone.equals(v.getAssigneePhone())) {
             throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",

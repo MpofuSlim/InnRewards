@@ -5,8 +5,6 @@ import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
@@ -69,13 +67,7 @@ public class MerchantAuthz {
                 .filter(m -> m.getTenantId().equals(tenantId))
                 .orElseThrow(() -> LoyaltyException.notFound("merchant"));
 
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null) {
-            // Defensive: TenantContext rejects unauthenticated requests before we
-            // get here, but never treat a null principal as a merchant owner.
-            throw notOwner();
-        }
-        if (hasRole(auth, "ROLE_SUPER_ADMIN")) {
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
             return merchant;
         }
 
@@ -124,11 +116,7 @@ public class MerchantAuthz {
                 .filter(s -> s.getTenantId().equals(tenantId))
                 .orElseThrow(() -> LoyaltyException.notFound("shop"));
 
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null) {
-            throw notShopMember();
-        }
-        if (hasRole(auth, "ROLE_SUPER_ADMIN")) {
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
             return shop;
         }
 
@@ -155,12 +143,5 @@ public class MerchantAuthz {
     private static LoyaltyException notShopMember() {
         return LoyaltyException.forbidden("NOT_SHOP_MEMBER",
                 "You can only access shops you are assigned to.");
-    }
-
-    private static boolean hasRole(Authentication auth, String role) {
-        // Callers guard against a null Authentication first (mirrors
-        // TenantContext.hasRole), so no null-check is needed here.
-        return auth.getAuthorities().stream()
-                .anyMatch(a -> role.equals(a.getAuthority()));
     }
 }

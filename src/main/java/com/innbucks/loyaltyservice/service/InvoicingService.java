@@ -6,10 +6,12 @@ import com.innbucks.loyaltyservice.entity.Invoice;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.integration.InvoiceGeneratedEvent;
 import com.innbucks.loyaltyservice.repository.InvoiceRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -35,18 +37,21 @@ public class InvoicingService {
     private final VoucherRepository vouchers;
     private final LoyaltyProperties props;
     private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
+    private final ApplicationEventPublisher events;
 
     public InvoicingService(InvoiceRepository invoices, MerchantRepository merchants,
                             LoyaltyTransactionRepository transactions,
                             VoucherRepository vouchers,
                             LoyaltyProperties props,
-                            com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
+                            com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
+                            ApplicationEventPublisher events) {
         this.invoices = invoices;
         this.merchants = merchants;
         this.transactions = transactions;
         this.vouchers = vouchers;
         this.props = props;
         this.merchantAuthz = merchantAuthz;
+        this.events = events;
     }
 
     /**
@@ -105,7 +110,16 @@ public class InvoicingService {
         inv.setTotalAmount(total);
         inv.setCurrency(m.getCurrency());
         inv.setInvoiceNumber(nextInvoiceNumber());
-        return Optional.of(invoices.save(inv));
+        Invoice saved = invoices.save(inv);
+        // Email the merchant its invoice AFTER the tx commits (best-effort, async
+        // — see InvoiceEmailNotifier). A value snapshot rides the event so the
+        // post-commit listener needs no entity reload.
+        events.publishEvent(new InvoiceGeneratedEvent(
+                m.getId(), m.getName(), m.getAdminEmail(), saved.getInvoiceNumber(),
+                saved.getPeriodStart(), saved.getPeriodEnd(),
+                saved.getVouchersIssued(), saved.getVouchersRedeemed(),
+                saved.getTotalAmount(), saved.getCurrency()));
+        return Optional.of(saved);
     }
 
     private String nextInvoiceNumber() {

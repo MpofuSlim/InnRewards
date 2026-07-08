@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class InvoicingServicePeriodTest {
 
-    private final InvoicingService svc = new InvoicingService(null, null, null, null, null, null);
+    private final InvoicingService svc = new InvoicingService(null, null, null, null, null, null, null);
 
     @Test
     void dailyPeriodIsTheSingleCompletedDay() {

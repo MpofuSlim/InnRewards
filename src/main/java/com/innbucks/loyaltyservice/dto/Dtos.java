@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class Dtos {
@@ -468,6 +469,122 @@ public class Dtos {
                                     BigDecimal pointsIssued, BigDecimal pointsRedeemed,
                                     long fraudAlerts24h,
                                     LocalDate nextInvoiceDate, BigDecimal estimatedInvoice) {}
+
+    // ── Merchant 360 report (GET /loyalty/reports/merchants/full) ────────────
+    // One row per merchant under the tenant, carrying EVERYTHING an operator
+    // needs to review the merchant in one screen: identity + configuration,
+    // shops, applicable rules, campaigns, lifetime points + voucher activity,
+    // full billing picture, and headline stats. Assembled by
+    // ReportingService.merchantFullReports; visibility is A01-scoped there.
+
+    /** A loyalty rule as it applies to this merchant. {@code scope} says whether
+     *  the row is the merchant's own override or a tenant-wide template. */
+    public record RuleLine(
+            UUID id,
+            @Schema(example = "MERCHANT", allowableValues = {"MERCHANT", "TENANT_GLOBAL"},
+                    description = "MERCHANT = rule targets this merchant specifically; TENANT_GLOBAL = tenant-wide template that also applies.")
+            String scope,
+            @Schema(example = "PURCHASE") String transactionType,
+            @Schema(example = "1.000000", description = "Points earned per currency unit.") BigDecimal pointsPerUnit,
+            @Schema(example = "1.0000") BigDecimal multiplier,
+            @Schema(example = "500.0000", nullable = true) BigDecimal maxPointsPerTxn,
+            @Schema(example = "default", nullable = true) String pocket,
+            boolean active,
+            @Schema(nullable = true) Instant startsAt,
+            @Schema(nullable = true) Instant endsAt) {}
+
+    /** A campaign that applies to this merchant (its own, or tenant-wide). */
+    public record CampaignLine(
+            UUID id,
+            @Schema(example = "Double points December") String name,
+            @Schema(example = "PURCHASE", nullable = true) String transactionType,
+            @Schema(example = "2.0000") BigDecimal multiplier,
+            boolean active,
+            @Schema(nullable = true) Instant startsAt,
+            @Schema(nullable = true) Instant endsAt,
+            @Schema(example = "1842", description = "Transactions this campaign has boosted so far.")
+            long matchedTransactions) {}
+
+    /** Lifetime points activity at the merchant. */
+    public record PointsSummary(
+            @Schema(example = "184200.0000", description = "All-time points issued at this merchant.")
+            BigDecimal issuedAllTime,
+            @Schema(example = "121500.0000") BigDecimal redeemedAllTime,
+            @Schema(example = "62700.0000", description = "issuedAllTime − redeemedAllTime: points originated here that are still outstanding.")
+            BigDecimal netOutstanding,
+            @Schema(example = "5231", description = "All-time POSTED transaction count.") long transactionCount,
+            @Schema(description = "POSTED transaction count per type (PURCHASE, REDEMPTION, ...).")
+            Map<String, Long> transactionsByType,
+            @Schema(nullable = true, description = "When the merchant first transacted; null if never.")
+            Instant firstTransactionAt,
+            @Schema(nullable = true) Instant lastTransactionAt) {}
+
+    /** Lifetime voucher activity at the merchant. */
+    public record VoucherSummary(
+            @Schema(example = "412") long total,
+            @Schema(description = "Voucher count per status (ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED).")
+            Map<String, Long> byStatus,
+            @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued.")
+            BigDecimal valueIssuedAllTime,
+            @Schema(example = "7150.0000", description = "Summed face value of vouchers that have been (fully or partially) redeemed.")
+            BigDecimal valueRedeemedAllTime,
+            @Schema(example = "38") long issuedLast30Days,
+            @Schema(example = "22") long redeemedLast30Days) {}
+
+    /** The merchant's full billing picture. */
+    public record InvoiceSummary(
+            @Schema(example = "14") long total,
+            @Schema(example = "1") long pending,
+            @Schema(example = "12") long paid,
+            @Schema(example = "1") long overdue,
+            @Schema(example = "0") long cancelled,
+            @Schema(example = "1260.5000", description = "Sum of every invoice ever raised (all statuses except none — cancelled included in count only).")
+            BigDecimal totalBilled,
+            @Schema(example = "1100.0000") BigDecimal totalPaid,
+            @Schema(example = "160.5000", description = "Sum of PENDING + OVERDUE invoice amounts.")
+            BigDecimal outstandingAmount,
+            @Schema(example = "2026-08-01", description = "When the next invoice will be generated, per the merchant's billing cycle.")
+            LocalDate nextInvoiceDate,
+            @Schema(example = "42.1500", description = "Fees accrued so far in the CURRENT (not yet invoiced) billing period, using the merchant's fee model.")
+            BigDecimal estimatedCurrentPeriodFees,
+            @Schema(description = "Most recent invoices, newest first (capped at 12; full history via /loyalty/invoices/merchant/{id}).")
+            List<InvoiceResponse> recentInvoices) {}
+
+    /** Headline operational stats for the merchant. */
+    public record MerchantStats(
+            @Schema(example = "3") long shopCount,
+            @Schema(example = "3") long activeShopCount,
+            @Schema(example = "1874", description = "Distinct customers who ever transacted at this merchant.")
+            long uniqueCustomers,
+            @Schema(example = "0") long fraudAlerts30Days,
+            @Schema(example = "1") long activeCampaigns,
+            @Schema(example = "5", description = "Live vouchers whose expiry falls within the next 30 days.")
+            long vouchersExpiringIn30Days) {}
+
+    /** Everything about one merchant, in one row. */
+    public record MerchantFullReport(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789") UUID id,
+            @Schema(example = "3fa85f64-5717-4562-b3fc-2c963f66afa6") UUID tenantId,
+            @Schema(example = "Innbucks Westgate") String name,
+            @Schema(example = "Coffee", nullable = true) String category,
+            @Schema(example = "USD") String currency,
+            @Schema(example = "MONTHLY") Merchant.BillingCycle billingCycle,
+            @Schema(example = "ACTIVE") Merchant.Status status,
+            @Schema(example = "owner@innbucks.co.zw", nullable = true,
+                    description = "Email of the MERCHANT_ADMIN who administers this merchant (ownership anchor).")
+            String adminEmail,
+            Instant createdAt,
+            @Schema(description = "Fee charged when a voucher is issued.") FeeModel feeIssued,
+            @Schema(description = "Fee charged when a voucher is redeemed.") FeeModel feeRedeemed,
+            @Schema(description = "Every shop (outlet) under this merchant.") List<ShopResponse> shops,
+            @Schema(description = "Rules that apply to this merchant: its own overrides plus tenant-global templates.")
+            List<RuleLine> rules,
+            @Schema(description = "Campaigns that apply to this merchant (its own plus tenant-wide).")
+            List<CampaignLine> campaigns,
+            PointsSummary points,
+            VoucherSummary vouchers,
+            InvoiceSummary invoices,
+            MerchantStats stats) {}
 
     public record UserDashboard(UUID userId, BigDecimal totalPoints,
                                 List<WalletResponse> wallets,

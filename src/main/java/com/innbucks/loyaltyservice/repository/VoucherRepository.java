@@ -10,7 +10,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -103,4 +105,22 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
                                          @Param("shopId") UUID shopId,
                                          @Param("from") Instant from,
                                          @Param("to") Instant to);
+
+    /**
+     * Total face value the merchant's customers have actually redeemed (fully or
+     * partially — {@code redeemedAt} is stamped on both). Powers the merchant-360
+     * report's voucher block; the issued-side value comes from
+     * {@link #reportSummaryByStatus} so it isn't duplicated here.
+     */
+    @Query("""
+        SELECT COALESCE(SUM(v.value), 0) FROM Voucher v
+        WHERE v.merchantId = :merchantId AND v.redeemedAt IS NOT NULL
+        """)
+    BigDecimal sumRedeemedValueByMerchantId(@Param("merchantId") UUID merchantId);
+
+    // Merchant-360 report: outstanding vouchers that will lapse inside the
+    // window. The caller passes the live statuses (ISSUED/DELIVERED/VIEWED/
+    // PARTIALLY_USED) — redeemed/expired/revoked ones can't "expire soon".
+    long countByMerchantIdAndExpiresAtBetweenAndStatusIn(UUID merchantId, Instant from, Instant to,
+                                                         Collection<Voucher.Status> statuses);
 }

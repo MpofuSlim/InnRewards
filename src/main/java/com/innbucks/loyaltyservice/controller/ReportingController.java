@@ -144,6 +144,178 @@ public class ReportingController {
         return ResponseEntity.ok(ApiResult.ok("Tenant dashboard retrieved successfully", data));
     }
 
+    @GetMapping("/merchants/full")
+    @Operation(summary = "Merchant 360 report — every merchant under the tenant, fully detailed",
+            description = "One row per merchant under the current X-Tenant-Id, carrying everything an " +
+                          "operator needs in a single call: identity + configuration (category, currency, " +
+                          "billing cycle, status, admin email, fee schedules), every shop, the rules that " +
+                          "apply to the merchant (its own overrides plus tenant-global templates), " +
+                          "campaigns, lifetime points activity (issued/redeemed/net outstanding, " +
+                          "transaction count + per-type mix, first/last activity), lifetime voucher " +
+                          "activity (status breakdown, face values, last-30-days movement), the full " +
+                          "billing picture (per-status invoice counts, total billed/paid/outstanding, " +
+                          "next invoice date, current-period fee estimate, 12 most recent invoices " +
+                          "inline), and headline stats (shops, unique customers, fraud alerts, vouchers " +
+                          "expiring soon).\n\n" +
+                          "**Visibility is ownership-scoped**: SUPER_ADMIN / TENANT_ADMIN / " +
+                          "PLATFORM_ADMIN see every merchant in the tenant; a MERCHANT_ADMIN sees only " +
+                          "merchants they administer (adminEmail match); SHOP_ADMIN sees only the " +
+                          "merchant pinned in their token. Out-of-scope merchants are absent rather " +
+                          "than 403 — the list is \"everything you administer\". Paginated (name-ordered); " +
+                          "page numbers are per-caller stable. Requires X-Tenant-Id.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Detailed merchant reports returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Merchant 360 page", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Merchant reports retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "name": "Innbucks Westgate",
+                                            "category": "Coffee",
+                                            "currency": "USD",
+                                            "billingCycle": "MONTHLY",
+                                            "status": "ACTIVE",
+                                            "adminEmail": "owner@innbucks.co.zw",
+                                            "createdAt": "2026-01-12T08:30:00Z",
+                                            "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                            "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
+                                            "shops": [
+                                              {
+                                                "id": "11111111-aaaa-bbbb-cccc-222222222222",
+                                                "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                                "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                                "name": "Innbucks Westgate Mall",
+                                                "address": "Westgate Shopping Centre, Harare",
+                                                "status": "ACTIVE",
+                                                "createdAt": "2026-01-12T09:00:00Z"
+                                              }
+                                            ],
+                                            "rules": [
+                                              {
+                                                "id": "77777777-1111-2222-3333-444444444444",
+                                                "scope": "MERCHANT",
+                                                "transactionType": "PURCHASE",
+                                                "pointsPerUnit": 1.000000,
+                                                "multiplier": 1.0000,
+                                                "maxPointsPerTxn": 500.0000,
+                                                "pocket": "default",
+                                                "active": true,
+                                                "startsAt": null,
+                                                "endsAt": null
+                                              }
+                                            ],
+                                            "campaigns": [
+                                              {
+                                                "id": "88888888-1111-2222-3333-444444444444",
+                                                "name": "Double points December",
+                                                "transactionType": "PURCHASE",
+                                                "multiplier": 2.0000,
+                                                "active": true,
+                                                "startsAt": "2026-12-01T00:00:00Z",
+                                                "endsAt": "2026-12-31T23:59:59Z",
+                                                "matchedTransactions": 1842
+                                              }
+                                            ],
+                                            "points": {
+                                              "issuedAllTime": 184200.0000,
+                                              "redeemedAllTime": 121500.0000,
+                                              "netOutstanding": 62700.0000,
+                                              "transactionCount": 5231,
+                                              "transactionsByType": { "PURCHASE": 4110, "REDEMPTION": 1121 },
+                                              "firstTransactionAt": "2026-01-15T10:11:12Z",
+                                              "lastTransactionAt": "2026-07-08T07:45:00Z"
+                                            },
+                                            "vouchers": {
+                                              "total": 412,
+                                              "byStatus": { "ISSUED": 40, "DELIVERED": 25, "REDEEMED": 310, "EXPIRED": 30, "REVOKED": 7 },
+                                              "valueIssuedAllTime": 10300.0000,
+                                              "valueRedeemedAllTime": 7150.0000,
+                                              "issuedLast30Days": 38,
+                                              "redeemedLast30Days": 22
+                                            },
+                                            "invoices": {
+                                              "total": 14,
+                                              "pending": 1,
+                                              "paid": 12,
+                                              "overdue": 1,
+                                              "cancelled": 0,
+                                              "totalBilled": 1260.5000,
+                                              "totalPaid": 1100.0000,
+                                              "outstandingAmount": 160.5000,
+                                              "nextInvoiceDate": "2026-08-01",
+                                              "estimatedCurrentPeriodFees": 42.1500,
+                                              "recentInvoices": [
+                                                {
+                                                  "id": "99999999-1111-2222-3333-444444444444",
+                                                  "invoiceNumber": "INV-1751925600000-4821",
+                                                  "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                                  "periodStart": "2026-06-01",
+                                                  "periodEnd": "2026-06-30",
+                                                  "pointsIssued": 30100.0000,
+                                                  "pointsRedeemed": 18700.0000,
+                                                  "vouchersIssued": 61,
+                                                  "vouchersRedeemed": 44,
+                                                  "totalAmount": 96.4000,
+                                                  "currency": "USD",
+                                                  "status": "PENDING",
+                                                  "paidAt": null
+                                                }
+                                              ]
+                                            },
+                                            "stats": {
+                                              "shopCount": 3,
+                                              "activeShopCount": 3,
+                                              "uniqueCustomers": 1874,
+                                              "fraudAlerts30Days": 0,
+                                              "activeCampaigns": 1,
+                                              "vouchersExpiringIn30Days": 5
+                                            }
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Caller's role may not access reporting, or the X-Tenant-Id membership check failed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not a member", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "You are not a member of this tenant",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantFullReport>>> merchantsFull(
+            @ParameterObject Pageable pageable) {
+        PageResponse<Dtos.MerchantFullReport> data = PageResponse.from(
+                reporting.merchantFullReports(tenantContext.requireTenantId(), pageable));
+        return ResponseEntity.ok(ApiResult.ok("Merchant reports retrieved successfully", data));
+    }
+
     @GetMapping("/merchant/{id}")
     @Operation(summary = "Merchant dashboard",
             description = "Per-merchant operational view: redemptions today, vouchers issued/redeemed, points " +

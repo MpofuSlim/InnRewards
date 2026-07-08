@@ -66,10 +66,12 @@ class ReportingServiceTest {
     private final ShopRepository shops = mock(ShopRepository.class);
     private final VoucherTemplateRepository voucherTemplates = mock(VoucherTemplateRepository.class);
     private final VoucherRedemptionRepository voucherRedemptions = mock(VoucherRedemptionRepository.class);
+    private final com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules =
+            mock(com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository.class);
 
     private final ReportingService reporting = new ReportingService(
             tenants, merchants, users, transactions, vouchers, invoices, fraud, campaigns,
-            merchantService, userService, shopService, shops, voucherTemplates, voucherRedemptions);
+            merchantService, userService, shopService, shops, voucherTemplates, voucherRedemptions, rules);
 
     private static final UUID TENANT_A = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID MERCHANT_B = UUID.fromString("22222222-2222-2222-2222-222222222222");

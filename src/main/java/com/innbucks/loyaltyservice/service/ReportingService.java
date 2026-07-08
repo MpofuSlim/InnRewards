@@ -8,6 +8,7 @@ import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherReport;
 import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherSummary;
 import com.innbucks.loyaltyservice.entity.Campaign;
 import com.innbucks.loyaltyservice.entity.Invoice;
+import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.entity.Voucher;
@@ -16,6 +17,7 @@ import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
 import com.innbucks.loyaltyservice.repository.InvoiceRepository;
+import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
@@ -24,8 +26,10 @@ import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.repository.VoucherTemplateRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -37,13 +41,17 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
@@ -73,6 +81,8 @@ public class ReportingService {
     private final ShopRepository shops;
     private final VoucherTemplateRepository voucherTemplates;
     private final VoucherRedemptionRepository voucherRedemptions;
+    // Merchant-360 report: rules block (merchant overrides + tenant templates).
+    private final LoyaltyRuleRepository rules;
 
     public ReportingService(TenantRepository tenants, MerchantRepository merchants,
                             LoyaltyUserRepository users,
@@ -86,7 +96,8 @@ public class ReportingService {
                             ShopService shopService,
                             ShopRepository shops,
                             VoucherTemplateRepository voucherTemplates,
-                            VoucherRedemptionRepository voucherRedemptions) {
+                            VoucherRedemptionRepository voucherRedemptions,
+                            LoyaltyRuleRepository rules) {
         this.tenants = tenants;
         this.merchants = merchants;
         this.users = users;
@@ -101,6 +112,7 @@ public class ReportingService {
         this.shops = shops;
         this.voucherTemplates = voucherTemplates;
         this.voucherRedemptions = voucherRedemptions;
+        this.rules = rules;
     }
 
     public Dtos.OperatorDashboard operator() {
@@ -207,6 +219,185 @@ public class ReportingService {
                         .reduce(BigDecimal.ZERO, BigDecimal::add));
         return new Dtos.MerchantDashboard(merchantId, today, issued, redeemed,
                 pointsIssued, pointsRedeemed, fraudAlerts, nextInvoice, estimatedInvoice);
+    }
+
+    /**
+     * Merchant-360 report: every merchant under the tenant with its full detail —
+     * identity + configuration, shops, applicable rules, campaigns, lifetime
+     * points + voucher activity, complete billing picture, and headline stats.
+     *
+     * <p><b>Visibility (A01):</b> tenant membership alone doesn't grant a view of
+     * every merchant's billing/points data, so results are scoped to the caller,
+     * mirroring {@code MerchantAuthz}'s ownership model:
+     * <ul>
+     *   <li>SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN — every merchant in the tenant;</li>
+     *   <li>SHOP_ADMIN / SHOP_USER — only the merchant pinned in their JWT claim;</li>
+     *   <li>MERCHANT_ADMIN — only merchants whose {@code adminEmail} is theirs.</li>
+     * </ul>
+     * Rather than 403-ing, out-of-scope merchants are simply absent — the list is
+     * "everything you administer", whoever asks.
+     *
+     * <p>Pagination slices AFTER the visibility filter (name-ordered) so page
+     * numbers are stable per caller. Tenant-wide rules + campaigns are fetched
+     * once and reused across every merchant on the page.
+     */
+    public Page<Dtos.MerchantFullReport> merchantFullReports(UUID tenantId, Pageable pageable) {
+        List<Merchant> visible = merchants.findByTenantId(tenantId).stream()
+                .filter(this::callerMaySeeMerchant)
+                .sorted(Comparator.comparing(Merchant::getName,
+                        Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                .toList();
+
+        List<LoyaltyRule> tenantRules = rules.findByTenantId(tenantId);
+        List<Campaign> tenantCampaigns = campaigns.findByTenantId(tenantId);
+
+        int start = (int) Math.min(pageable.getOffset(), visible.size());
+        int end = Math.min(start + pageable.getPageSize(), visible.size());
+        List<Dtos.MerchantFullReport> content = visible.subList(start, end).stream()
+                .map(m -> buildMerchantFullReport(m, tenantRules, tenantCampaigns))
+                .toList();
+        return new PageImpl<>(content, pageable, visible.size());
+    }
+
+    /** Mirrors MerchantAuthz's ownership model as a non-throwing predicate. */
+    private boolean callerMaySeeMerchant(Merchant m) {
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN")) {
+            return true;
+        }
+        UUID scopedMerchant = CallerDetails.currentMerchantId();   // SHOP_ADMIN / SHOP_USER
+        if (scopedMerchant != null) {
+            return scopedMerchant.equals(m.getId());
+        }
+        String callerEmail = CallerDetails.currentEmail();         // MERCHANT_ADMIN
+        return Objects.requireNonNullElse(m.getAdminEmail(), "").equalsIgnoreCase(callerEmail);
+    }
+
+    private Dtos.MerchantFullReport buildMerchantFullReport(Merchant m,
+                                                            List<LoyaltyRule> tenantRules,
+                                                            List<Campaign> tenantCampaigns) {
+        UUID id = m.getId();
+        Instant now = Instant.now();
+        Instant epoch = Instant.EPOCH;
+        Instant thirtyDaysAgo = now.minus(30, ChronoUnit.DAYS);
+
+        // Shops — every outlet under the merchant.
+        List<Dtos.ShopResponse> shopList = shops.findByTenantIdAndMerchantId(m.getTenantId(), id).stream()
+                .map(s -> new Dtos.ShopResponse(s.getId(), s.getTenantId(), s.getMerchantId(),
+                        s.getName(), s.getAddress(), s.getStatus(), s.getCreatedAt()))
+                .toList();
+
+        // Rules — the merchant's own overrides plus tenant-global templates.
+        List<Dtos.RuleLine> ruleLines = tenantRules.stream()
+                .filter(r -> r.getMerchantId() == null || id.equals(r.getMerchantId()))
+                .map(r -> new Dtos.RuleLine(r.getId(),
+                        r.getMerchantId() == null ? "TENANT_GLOBAL" : "MERCHANT",
+                        r.getTransactionType() == null ? null : r.getTransactionType().name(),
+                        r.getPointsPerUnit(), r.getMultiplier(), r.getMaxPointsPerTxn(),
+                        r.getPocket(), r.isActive(), r.getStartsAt(), r.getEndsAt()))
+                .toList();
+
+        // Campaigns — merchant-targeted plus tenant-wide (null merchantId).
+        List<Dtos.CampaignLine> campaignLines = tenantCampaigns.stream()
+                .filter(c -> c.getMerchantId() == null || id.equals(c.getMerchantId()))
+                .map(c -> new Dtos.CampaignLine(c.getId(), c.getName(),
+                        c.getTransactionType() == null ? null : c.getTransactionType().name(),
+                        c.getMultiplier(), c.isActive(), c.getStartsAt(), c.getEndsAt(),
+                        c.getMatchedTransactions()))
+                .toList();
+
+        // Points — lifetime activity.
+        BigDecimal ptsIssued = nz(transactions.sumPointsIssued(id, epoch, now));
+        BigDecimal ptsRedeemed = nz(transactions.sumPointsRedeemed(id, epoch, now));
+        Map<String, Long> txnsByType = new TreeMap<>();
+        for (Object[] row : transactions.countByType(m.getTenantId(), id, epoch, now)) {
+            txnsByType.put(String.valueOf(row[0]), ((Number) row[1]).longValue());
+        }
+        Dtos.PointsSummary points = new Dtos.PointsSummary(
+                ptsIssued, ptsRedeemed, ptsIssued.subtract(ptsRedeemed),
+                transactions.countByMerchantIdAndCreatedAtBetween(id, epoch, now),
+                txnsByType,
+                transactions.findFirstByMerchantIdOrderByCreatedAtAsc(id)
+                        .map(LoyaltyTransaction::getCreatedAt).orElse(null),
+                transactions.findFirstByMerchantIdOrderByCreatedAtDesc(id)
+                        .map(LoyaltyTransaction::getCreatedAt).orElse(null));
+
+        // Vouchers — lifetime status breakdown + face values in ONE grouped query.
+        Map<String, Long> vouchersByStatus = new TreeMap<>();
+        long voucherTotal = 0;
+        BigDecimal valueIssued = BigDecimal.ZERO;
+        for (Object[] row : vouchers.reportSummaryByStatus(null, null, id, null, epoch, now)) {
+            long count = ((Number) row[1]).longValue();
+            vouchersByStatus.put(String.valueOf(row[0]), count);
+            voucherTotal += count;
+            valueIssued = valueIssued.add((BigDecimal) row[2]);
+        }
+        Dtos.VoucherSummary voucherSummary = new Dtos.VoucherSummary(
+                voucherTotal, vouchersByStatus, valueIssued,
+                nz(vouchers.sumRedeemedValueByMerchantId(id)),
+                vouchers.countByMerchantIdAndIssuedAtBetween(id, thirtyDaysAgo, now),
+                vouchers.countByMerchantIdAndRedeemedAtBetween(id, thirtyDaysAgo, now));
+
+        // Invoices — full history rolled up, most recent 12 inlined.
+        List<Invoice> invoiceRows = invoices.findByMerchantIdOrderByPeriodEndDesc(id);
+        long pending = 0, paid = 0, overdue = 0, cancelled = 0;
+        BigDecimal billed = BigDecimal.ZERO, paidAmount = BigDecimal.ZERO, outstanding = BigDecimal.ZERO;
+        for (Invoice inv : invoiceRows) {
+            billed = billed.add(inv.getTotalAmount());
+            switch (inv.getStatus()) {
+                case PENDING -> { pending++; outstanding = outstanding.add(inv.getTotalAmount()); }
+                case PAID -> { paid++; paidAmount = paidAmount.add(inv.getTotalAmount()); }
+                case OVERDUE -> { overdue++; outstanding = outstanding.add(inv.getTotalAmount()); }
+                case CANCELLED -> cancelled++;
+            }
+        }
+        LocalDate today = LocalDate.now();
+        LocalDate nextInvoice = switch (m.getBillingCycle()) {
+            case DAILY -> today.plusDays(1);
+            case WEEKLY -> today.plusWeeks(1).with(java.time.DayOfWeek.MONDAY);
+            case MONTHLY -> today.withDayOfMonth(1).plusMonths(1);
+        };
+        // Fees accrued in the CURRENT (not yet invoiced) billing period, priced
+        // per voucher with the merchant's fee model — same math the invoice run
+        // will apply, so the figure previews the next bill.
+        LocalDate currentPeriodStart = switch (m.getBillingCycle()) {
+            case DAILY -> today;
+            case WEEKLY -> today.with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+            case MONTHLY -> today.withDayOfMonth(1);
+        };
+        Instant periodFrom = currentPeriodStart.atStartOfDay().toInstant(ZoneOffset.UTC);
+        BigDecimal estimatedFees = vouchers.findByMerchantIdAndIssuedAtBetween(id, periodFrom, now).stream()
+                .map(v -> MerchantFeeCalculator.feeForIssued(m, v))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(vouchers.findByMerchantIdAndRedeemedAtBetween(id, periodFrom, now).stream()
+                        .map(v -> MerchantFeeCalculator.feeForRedeemed(m, v))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+        Dtos.InvoiceSummary invoiceSummary = new Dtos.InvoiceSummary(
+                invoiceRows.size(), pending, paid, overdue, cancelled,
+                billed, paidAmount, outstanding, nextInvoice, estimatedFees,
+                invoiceRows.stream().limit(12).map(InvoicingService::toResponse).toList());
+
+        // Headline stats.
+        Dtos.MerchantStats stats = new Dtos.MerchantStats(
+                shopList.size(),
+                shopList.stream().filter(s -> s.status() == Shop.Status.ACTIVE).count(),
+                transactions.countDistinctUsersByMerchantId(id),
+                fraud.countByMerchantIdAndCreatedAtAfter(id, thirtyDaysAgo),
+                campaignLines.stream().filter(Dtos.CampaignLine::active).count(),
+                vouchers.countByMerchantIdAndExpiresAtBetweenAndStatusIn(id, now,
+                        now.plus(30, ChronoUnit.DAYS),
+                        List.of(Voucher.Status.ISSUED, Voucher.Status.DELIVERED,
+                                Voucher.Status.VIEWED, Voucher.Status.PARTIALLY_USED)));
+
+        return new Dtos.MerchantFullReport(id, m.getTenantId(), m.getName(), m.getCategory(),
+                m.getCurrency(), m.getBillingCycle(), m.getStatus(), m.getAdminEmail(), m.getCreatedAt(),
+                new Dtos.FeeModel(m.getFeeIssuedType(), m.getFeeIssuedFixed(), m.getFeeIssuedPercentage()),
+                new Dtos.FeeModel(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage()),
+                shopList, ruleLines, campaignLines, points, voucherSummary, invoiceSummary, stats);
+    }
+
+    /** Mock/driver safety: aggregate queries COALESCE to 0, but a null must never NPE a report. */
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
     }
 
     public Map<String, Long> transactionMix(UUID tenantId, UUID merchantId,

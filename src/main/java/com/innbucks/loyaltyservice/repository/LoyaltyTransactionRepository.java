@@ -244,4 +244,15 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     long countSinceExcludingTenant(@Param("from") Instant from, @Param("tenantId") UUID tenantId);
 
     long countByCampaignId(UUID campaignId);
+
+    /** Distinct customers who ever transacted at the merchant (merchant-360 report). */
+    @Query("""
+        SELECT COUNT(DISTINCT t.userId) FROM LoyaltyTransaction t
+        WHERE t.merchantId = :merchantId
+        """)
+    long countDistinctUsersByMerchantId(@Param("merchantId") UUID merchantId);
+
+    Optional<LoyaltyTransaction> findFirstByMerchantIdOrderByCreatedAtAsc(UUID merchantId);
+
+    Optional<LoyaltyTransaction> findFirstByMerchantIdOrderByCreatedAtDesc(UUID merchantId);
 }

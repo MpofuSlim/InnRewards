@@ -33,8 +33,11 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 # signed-message handling. Fixed in alpine 3.5.7-r0.
 # CVE-2026-2100 (HIGH) — p11-kit / p11-kit-trust NULL-deref via C_DeriveKey with
 # specific NULL params. Fixed in alpine p11-kit 0.26.2-r0.
+# CVE-2026-56131 / CVE-2026-56407 / CVE-2026-56408 (HIGH) — libexpat < 2.8.2
+# (missing call-depth tracking + integer overflows in doProlog / copyString).
+# Fixed in alpine libexpat 2.8.2-r0.
 RUN apk update \
- && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust
+ && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust libexpat
 RUN addgroup -S app && adduser -S -G app app \
     && mkdir -p /app/data \
     && chown -R app:app /app

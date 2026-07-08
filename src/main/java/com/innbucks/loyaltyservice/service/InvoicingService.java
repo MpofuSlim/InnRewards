@@ -34,16 +34,19 @@ public class InvoicingService {
     private final LoyaltyTransactionRepository transactions;
     private final VoucherRepository vouchers;
     private final LoyaltyProperties props;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
 
     public InvoicingService(InvoiceRepository invoices, MerchantRepository merchants,
                             LoyaltyTransactionRepository transactions,
                             VoucherRepository vouchers,
-                            LoyaltyProperties props) {
+                            LoyaltyProperties props,
+                            com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.invoices = invoices;
         this.merchants = merchants;
         this.transactions = transactions;
         this.vouchers = vouchers;
         this.props = props;
+        this.merchantAuthz = merchantAuthz;
     }
 
     /**
@@ -117,6 +120,10 @@ public class InvoicingService {
         if (!inv.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
+        // Object-level authz: a MERCHANT_ADMIN may only settle invoices of a
+        // merchant they administer (SUPER_ADMIN operators bypass). Without this,
+        // any merchant admin could mark a sibling merchant's invoice paid by id.
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, inv.getMerchantId());
         if (inv.getStatus() == Invoice.Status.PAID) {
             return inv;
         }

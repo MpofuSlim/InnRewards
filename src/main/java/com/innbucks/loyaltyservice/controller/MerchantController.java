@@ -33,10 +33,13 @@ public class MerchantController {
 
     private final MerchantService merchants;
     private final TenantContext tenantContext;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
 
-    public MerchantController(MerchantService merchants, TenantContext tenantContext) {
+    public MerchantController(MerchantService merchants, TenantContext tenantContext,
+                              com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.merchants = merchants;
         this.tenantContext = tenantContext;
+        this.merchantAuthz = merchantAuthz;
     }
 
     @PostMapping
@@ -253,7 +256,9 @@ public class MerchantController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantResponse>> activate(@PathVariable UUID id) {
-        Dtos.MerchantResponse data = merchants.setActive(tenantContext.requireTenantId(), id, true);
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
+        Dtos.MerchantResponse data = merchants.setActive(tenantId, id, true);
         return ResponseEntity.ok(ApiResult.ok("Merchant activated successfully", data));
     }
 
@@ -305,7 +310,9 @@ public class MerchantController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantResponse>> deactivate(@PathVariable UUID id) {
-        Dtos.MerchantResponse data = merchants.setActive(tenantContext.requireTenantId(), id, false);
+        UUID tenantId = tenantContext.requireTenantId();
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
+        Dtos.MerchantResponse data = merchants.setActive(tenantId, id, false);
         return ResponseEntity.ok(ApiResult.ok("Merchant deactivated successfully", data));
     }
 }

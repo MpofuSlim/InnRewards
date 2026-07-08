@@ -181,7 +181,10 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    // Platform-operator only. This returns EVERY tenant's identity (the whole
+    // white-label roster); a merchant/shop admin must not enumerate other tenants.
+    // Non-operators discover the tenants they belong to via GET /loyalty/tenants/me.
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
         log.info("GET /loyalty/tenants (listing all tenants)");
         PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));

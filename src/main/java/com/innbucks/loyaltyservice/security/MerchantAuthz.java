@@ -1,10 +1,10 @@
 package com.innbucks.loyaltyservice.security;
 
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
+import com.innbucks.loyaltyservice.repository.ShopRepository;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
@@ -40,9 +40,11 @@ import java.util.UUID;
 public class MerchantAuthz {
 
     private final MerchantRepository merchants;
+    private final ShopRepository shops;
 
-    public MerchantAuthz(MerchantRepository merchants) {
+    public MerchantAuthz(MerchantRepository merchants, ShopRepository shops) {
         this.merchants = merchants;
+        this.shops = shops;
     }
 
     /**
@@ -65,13 +67,7 @@ public class MerchantAuthz {
                 .filter(m -> m.getTenantId().equals(tenantId))
                 .orElseThrow(() -> LoyaltyException.notFound("merchant"));
 
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null) {
-            // Defensive: TenantContext rejects unauthenticated requests before we
-            // get here, but never treat a null principal as a merchant owner.
-            throw notOwner();
-        }
-        if (hasRole(auth, "ROLE_SUPER_ADMIN")) {
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
             return merchant;
         }
 
@@ -97,15 +93,55 @@ public class MerchantAuthz {
         throw notOwner();
     }
 
+    /**
+     * Enforces that the authenticated caller may read/act on the given shop.
+     *
+     * <p>A shop belongs to exactly one merchant within the tenant. Scoping model:
+     * <ul>
+     *   <li><b>SUPER_ADMIN</b> — any shop.</li>
+     *   <li><b>SHOP_ADMIN / SHOP_USER</b> — only the shop in their JWT {@code shopId}
+     *       claim (a cashier must not read a sibling outlet's customer data).</li>
+     *   <li><b>MERCHANT_ADMIN</b> — any shop belonging to a merchant they administer
+     *       (delegated to {@link #requireCallerAdministersMerchant}).</li>
+     * </ul>
+     *
+     * @throws LoyaltyException 404 if the shop is not in this tenant; 403
+     *         {@code NOT_SHOP_MEMBER} / {@code NOT_MERCHANT_OWNER} otherwise.
+     */
+    public Shop requireCallerAccessesShop(UUID tenantId, UUID shopId) {
+        if (shopId == null) {
+            throw LoyaltyException.badRequest("SHOP_REQUIRED", "shopId is required");
+        }
+        Shop shop = shops.findById(shopId)
+                .filter(s -> s.getTenantId().equals(tenantId))
+                .orElseThrow(() -> LoyaltyException.notFound("shop"));
+
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+            return shop;
+        }
+
+        // SHOP_ADMIN / SHOP_USER: pinned to the single outlet in their token.
+        UUID scopedShop = CallerDetails.currentShopId();
+        if (scopedShop != null) {
+            if (scopedShop.equals(shopId)) {
+                return shop;
+            }
+            throw notShopMember();
+        }
+
+        // MERCHANT_ADMIN (no shop claim): allowed iff they administer the shop's
+        // owning merchant. Reuses the merchant-ownership check (throws if not).
+        requireCallerAdministersMerchant(tenantId, shop.getMerchantId());
+        return shop;
+    }
+
     private static LoyaltyException notOwner() {
         return LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
                 "You can only act on merchants you administer.");
     }
 
-    private static boolean hasRole(Authentication auth, String role) {
-        // Callers guard against a null Authentication first (mirrors
-        // TenantContext.hasRole), so no null-check is needed here.
-        return auth.getAuthorities().stream()
-                .anyMatch(a -> role.equals(a.getAuthority()));
+    private static LoyaltyException notShopMember() {
+        return LoyaltyException.forbidden("NOT_SHOP_MEMBER",
+                "You can only access shops you are assigned to.");
     }
 }

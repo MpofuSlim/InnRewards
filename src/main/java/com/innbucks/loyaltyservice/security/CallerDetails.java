@@ -78,6 +78,18 @@ public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UU
         return null;
     }
 
+    /** True iff the current authentication carries any of the given authorities
+     *  (e.g. {@code "ROLE_SUPER_ADMIN"}). Null-safe: returns {@code false} when
+     *  unauthenticated. Centralises role checks so callers never touch the
+     *  {@link Authentication} (or its nullable {@code getAuthority()}) directly. */
+    public static boolean hasAnyRole(String... roles) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return false;
+        java.util.Set<String> wanted = java.util.Set.of(roles);
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> wanted.contains(a.getAuthority()));
+    }
+
     /**
      * Returns the JWT merchantId claim if present, otherwise the supplied body value.
      * Throws BAD_REQUEST if neither is set. Used by write endpoints that need a

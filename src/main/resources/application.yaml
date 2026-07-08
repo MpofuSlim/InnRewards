@@ -167,15 +167,19 @@ jwt:
   expiration: ${JWT_EXPIRATION_MS:86400000}
 
 ---
-# OWASP A05: backends serve no Swagger/OpenAPI in a deployed cell — the
-# gateway hosts the only (auth-gated, fail-closed) copy. Gated on prod; dev/test
-# keep docs on for local use.
+# OWASP A05: in a deployed cell each backend serves its OpenAPI SPEC ONLY
+# (/v3/api-docs) so the gateway can aggregate it — the interactive Swagger UI
+# stays OFF here. The gateway hosts the single UI behind an HTTP Basic login
+# (SWAGGER_PASSWORD), which also gates the proxied /*-service/v3/api-docs paths
+# and fails closed when unset. Backends are never published at the edge (gateway
+# only), so the spec is reachable only in-cluster or via that gated proxy.
+# dev/test keep the full UI on for local use.
 spring:
   config:
     activate:
       on-profile: prod
 springdoc:
   api-docs:
-    enabled: false
+    enabled: true
   swagger-ui:
     enabled: false

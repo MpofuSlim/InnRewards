@@ -86,7 +86,7 @@ public class Merchant {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
-    public enum BillingCycle { WEEKLY, MONTHLY }
+    public enum BillingCycle { WEEKLY, MONTHLY, DAILY }
     public enum Status { ACTIVE, INACTIVE }
 
     /**

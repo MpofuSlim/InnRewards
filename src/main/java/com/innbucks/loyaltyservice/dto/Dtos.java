@@ -60,7 +60,9 @@ public class Dtos {
             @Size(max = 100) String category,
             @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code. Defaults to this cell's currency (ZW=USD, KE=KES) when omitted.")
             String currency,
-            @Schema(example = "MONTHLY", allowableValues = {"WEEKLY", "MONTHLY"})
+            @Schema(example = "MONTHLY", allowableValues = {"DAILY", "WEEKLY", "MONTHLY"},
+                    description = "Billing period the merchant is invoiced on. Defaults to MONTHLY when omitted. "
+                            + "DAILY bills each completed day, WEEKLY the previous Mon–Sun week, MONTHLY the previous calendar month.")
             Merchant.BillingCycle billingCycle,
             @Schema(description = "Fee charged to the merchant when a voucher is issued. Defaults to FIXED 0 (no fee) if omitted.", nullable = true)
             FeeModel feeIssued,

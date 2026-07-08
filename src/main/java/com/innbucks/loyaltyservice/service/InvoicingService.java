@@ -155,15 +155,21 @@ public class InvoicingService {
     }
 
     public LocalDate previousPeriodStart(LocalDate today, Merchant.BillingCycle cycle) {
-        return cycle == Merchant.BillingCycle.WEEKLY
-                ? today.minusWeeks(1).with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
-                : today.withDayOfMonth(1).minusMonths(1);
+        return switch (cycle) {
+            // DAILY bills the single completed day (yesterday). The invoice job
+            // already runs daily, so each run closes off the prior day.
+            case DAILY -> today.minusDays(1);
+            case WEEKLY -> today.minusWeeks(1).with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+            case MONTHLY -> today.withDayOfMonth(1).minusMonths(1);
+        };
     }
 
     public LocalDate previousPeriodEnd(LocalDate today, Merchant.BillingCycle cycle) {
-        return cycle == Merchant.BillingCycle.WEEKLY
-                ? today.minusWeeks(1).with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY))
-                : today.withDayOfMonth(1).minusDays(1);
+        return switch (cycle) {
+            case DAILY -> today.minusDays(1);
+            case WEEKLY -> today.minusWeeks(1).with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY));
+            case MONTHLY -> today.withDayOfMonth(1).minusDays(1);
+        };
     }
 
     /** Run the periodic job: generate one PENDING invoice per active merchant for the previous period. */

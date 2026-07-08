@@ -192,10 +192,12 @@ public class ReportingService {
                 .filter(f -> merchantId.equals(f.getMerchantId()))
                 .filter(f -> f.getCreatedAt().isAfter(since24h))
                 .count();
-        LocalDate nextInvoice = m == null ? null
-                : (m.getBillingCycle() == Merchant.BillingCycle.WEEKLY
-                    ? LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY)
-                    : LocalDate.now().withDayOfMonth(1).plusMonths(1));
+        LocalDate nextInvoice = m == null ? null : switch (m.getBillingCycle()) {
+            // DAILY invoices each completed day, so the next run is tomorrow.
+            case DAILY -> LocalDate.now().plusDays(1);
+            case WEEKLY -> LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY);
+            case MONTHLY -> LocalDate.now().withDayOfMonth(1).plusMonths(1);
+        };
         BigDecimal estimatedInvoice = m == null ? BigDecimal.ZERO
                 : issuedVouchers.stream()
                         .map(v -> MerchantFeeCalculator.feeForIssued(m, v))

@@ -5,7 +5,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -13,7 +12,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-public class Tenant {
+public class Tenant extends Auditable {
 
     @Id
     @GeneratedValue
@@ -28,9 +27,6 @@ public class Tenant {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private Status status = Status.ACTIVE;
-
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt = Instant.now();
 
     /**
      * Email of the user (from user-service) who created/owns this tenant.

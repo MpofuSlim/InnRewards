@@ -5,7 +5,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -16,7 +15,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-public class VoucherTemplate {
+public class VoucherTemplate extends Auditable {
 
     @Id
     @GeneratedValue
@@ -65,9 +64,6 @@ public class VoucherTemplate {
 
     @Column(nullable = false)
     private boolean active = true;
-
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt = Instant.now();
 
     public enum VoucherType { SINGLE_USE, MULTI_USE, CAMPAIGN, REFERRAL, CORPORATE }
     public enum ValueType { AMOUNT, PERCENT, FREE_ITEM, COMBO }

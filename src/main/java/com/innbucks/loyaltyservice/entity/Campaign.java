@@ -16,7 +16,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-public class Campaign {
+public class Campaign extends Auditable {
 
     @Id
     @GeneratedValue
@@ -49,7 +49,4 @@ public class Campaign {
 
     @Column(name = "matched_transactions", nullable = false)
     private long matchedTransactions = 0;
-
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt = Instant.now();
 }

@@ -5,7 +5,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -22,7 +21,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-public class Shop {
+public class Shop extends Auditable {
 
     @Id
     @GeneratedValue
@@ -43,9 +42,6 @@ public class Shop {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private Status status = Status.ACTIVE;
-
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt = Instant.now();
 
     public enum Status { ACTIVE, INACTIVE }
 }

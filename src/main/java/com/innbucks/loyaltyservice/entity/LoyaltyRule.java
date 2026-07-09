@@ -16,7 +16,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-public class LoyaltyRule {
+public class LoyaltyRule extends Auditable {
 
     @Id
     @GeneratedValue
@@ -56,7 +56,4 @@ public class LoyaltyRule {
 
     @Column(name = "ends_at")
     private Instant endsAt;
-
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt = Instant.now();
 }

@@ -6,7 +6,6 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -16,7 +15,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-public class Merchant {
+public class Merchant extends Auditable {
 
     @Id
     @GeneratedValue
@@ -82,9 +81,6 @@ public class Merchant {
     // MERCHANT_ADMIN's merchantId at login without manual binding.
     @Column(name = "admin_email", length = 255)
     private String adminEmail;
-
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt = Instant.now();
 
     public enum BillingCycle { WEEKLY, MONTHLY, DAILY }
     public enum Status { ACTIVE, INACTIVE }

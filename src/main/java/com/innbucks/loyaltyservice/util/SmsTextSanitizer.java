@@ -1,6 +1,7 @@
 package com.innbucks.loyaltyservice.util;
 
 import java.text.Normalizer;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Makes SMS text safe for the InnBucks notification API / SMS gateway, which
@@ -27,7 +28,7 @@ public final class SmsTextSanitizer {
      * Returns a GSM/ASCII-safe form of {@code text}. Null/blank pass through
      * unchanged (the callers already reject blank before sending).
      */
-    public static String toGsmSafe(String text) {
+    public static @Nullable String toGsmSafe(@Nullable String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }

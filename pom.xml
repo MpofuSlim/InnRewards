@@ -512,6 +512,23 @@
                     <compilerArgs>
                         <arg>-parameters</arg>
                     </compilerArgs>
+                    <!-- Declare Lombok on the annotation-processor path explicitly.
+                         JDK 23+ javac no longer runs a processor found only on the
+                         compile classpath — it warned under JDK 21 ("a future
+                         release of javac may disable annotation processing unless
+                         at least one processor is specified") and temurin 25's
+                         javac acts on it, so @Slf4j's `log` field silently stopped
+                         being generated and the JDK-25 container build failed with
+                         "cannot find symbol: variable log". Naming the processor
+                         path here runs Lombok explicitly under every JDK. The
+                         version is resolved from the Spring Boot BOM (1.18.46),
+                         staying in lockstep with the compile-scope lombok above. -->
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
 

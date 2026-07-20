@@ -1,0 +1,16 @@
+version: "1.0"
+
+profile:
+  name: qodana.starter
+
+projectJDK: "21"
+
+failureConditions:
+  severityThresholds:
+    any: 15
+    critical: 5
+  testCoverageThresholds:
+    fresh: 70
+    total: 50
+
+linter: jetbrains/qodana-jvm-community:2025.3

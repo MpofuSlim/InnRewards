@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build from repo root:
-#     docker build -f loyalty-service/Dockerfile -t ticketing-loyalty-service .
+#     docker build -t loyalty-service .
 
 FROM eclipse-temurin:21-jdk-alpine AS builder
 WORKDIR /workspace
@@ -10,20 +10,11 @@ COPY mvnw pom.xml ./
 RUN chmod +x mvnw
 RUN for i in 1 2 3; do ./mvnw -B -ntp -version && break || sleep 15; done
 
-COPY api-gateway/pom.xml api-gateway/
-COPY user-service/pom.xml user-service/
-COPY event-service/pom.xml event-service/
-COPY seat-service/pom.xml seat-service/
-COPY booking-service/pom.xml booking-service/
-COPY payment-service/pom.xml payment-service/
-COPY discovery-server/pom.xml discovery-server/
-COPY loyalty-service/pom.xml loyalty-service/
+RUN ./mvnw -B -ntp -DskipTests dependency:go-offline || true
 
-RUN ./mvnw -B -pl loyalty-service -am -DskipTests dependency:go-offline || true
-
-COPY loyalty-service/src loyalty-service/src
-RUN ./mvnw -B -pl loyalty-service -am -DskipTests package spring-boot:repackage \
-    && cp loyalty-service/target/loyalty-service-*.jar /workspace/app.jar
+COPY src src
+RUN ./mvnw -B -ntp -DskipTests package spring-boot:repackage \
+    && cp target/loyalty-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
 # Refresh the apk index + force-upgrade OpenSSL by name. Without naming the

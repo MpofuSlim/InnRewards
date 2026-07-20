@@ -3,17 +3,289 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <parent>
-        <groupId>com.innbucks</groupId>
-        <artifactId>ticketing-system</artifactId>
-        <version>1.0.0</version>
-    </parent>
-
+    <!-- Standalone project. loyalty-service was extracted from the
+         MpofuSlim/ticketing-system monorepo (where it inherited the reactor
+         root POM). This POM replicates that root's dependencyManagement +
+         properties + shared dependencies + build wiring verbatim so the build
+         resolves identically and keeps publishing the same
+         ghcr.io/mpofuslim/loyalty-service image. We use the Spring Boot
+         import-BOM pattern (NOT spring-boot-starter-parent) exactly as the
+         monorepo did — the CVE version overrides below rely on first-wins
+         resolution, which only works with the import-BOM. -->
+    <groupId>com.innbucks</groupId>
     <artifactId>loyalty-service</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
     <name>loyalty-service</name>
     <description>Multi-tenant Loyalty &amp; Voucher Management Platform (LVMP)</description>
 
+    <properties>
+        <java.version>21</java.version>
+        <!-- 4.0.6 patches two Spring Boot CVEs (CVE-2026-40976 CRITICAL: default-
+             web-security bypass; CVE-2026-40973 HIGH: ACE + session hijacking via
+             predictable session IDs), and its BOM brings spring-security to 7.0.5
+             and jackson-core to 3.1.1 — closing CVE-2026-22753/4 and
+             GHSA-2m67-wjpj-xhg9 transitively. The Boot BOM does NOT yet ship the
+             fixed Tomcat 11.0.22 or postgres 42.7.11, so those still need explicit
+             overrides below. -->
+        <spring.boot.version>4.1.0</spring.boot.version>
+        <!-- tomcat-embed-core 11.0.21 (pinned by Boot 4.0.6's BOM) has 6 CVEs:
+             CVE-2026-41293 (CRITICAL, input validation), CVE-2026-43512 (CRITICAL,
+             digest-auth bypass), CVE-2026-43515 (CRITICAL, multi-method authz),
+             CVE-2026-41284 (HIGH, DoS), CVE-2026-42498 (HIGH, WebSocket auth-header
+             leak), CVE-2026-43513 (HIGH, LockOutRealm case-sensitivity). 11.0.22
+             is the fix-line. Drop this override on the next Boot upgrade if the
+             BOM has caught up. -->
+        <tomcat.version>11.0.24</tomcat.version>
+        <!-- postgres JDBC 42.7.10 (pinned by Boot 4.0.6's BOM) has CVE-2026-42198
+             (HIGH): client-side DoS via malicious SCRAM-SHA-256 response. 42.7.11
+             fixes it. Drop on Boot upgrade once BOM catches up. -->
+        <postgresql.version>42.7.13</postgresql.version>
+        <!-- netty pulled in transitively (reactor-netty / WebFlux DNS resolver
+             paths, Spring Cloud LoadBalancer). 4.2.14.Final has four HIGH CVEs
+             (CVE-2026-44249, CVE-2026-45416, CVE-2026-45674, CVE-2026-47691);
+             4.2.15.Final fixes all four. The netty-bom imported below pins every
+             netty-* artifact to ${netty.version}, so this single property bump
+             cascades cleanly. -->
+        <netty.version>4.2.16.Final</netty.version>
+        <!-- spring-kafka 4.0.5 (pinned by Boot 4.0.6's BOM) has CVE-2026-41731
+             (HIGH): overly broad trusted-package matching in JsonSerializer /
+             DefaultKafkaHeaderMapper / messaging header mappers. 4.0.6 (4.x line)
+             fixes it. Property name matches Spring Boot's BOM key. Drop on the
+             next Boot upgrade once the BOM catches up. -->
+        <spring-kafka.version>4.1.0</spring-kafka.version>
+        <spring.cloud.version>2025.1.2</spring.cloud.version>
+        <springdoc.version>3.0.3</springdoc.version>
+        <testcontainers.version>1.21.3</testcontainers.version>
+        <!-- jjwt centralized here to keep JWT verification aligned with the rest
+             of the fleet. 0.12.x cleans up Java 17/21 compatibility, tightens
+             algorithm validation, and replaces the deprecated 0.11.x builder API.
+             Token wire format is unchanged. -->
+        <jjwt.version>0.12.6</jjwt.version>
+        <!-- Logstash encoder for structured JSON logs. 8.x targets Logback 1.5
+             (shipped with Spring Boot 4.x). When the active profile is
+             json/docker/prod, the service emits one JSON object per log line
+             with traceId pulled out of MDC as a typed field; locally the default
+             Boot pattern is kept so console output stays readable. -->
+        <logstash.encoder.version>8.0</logstash.encoder.version>
+        <!-- Sentry SDK 8.x supports Spring Boot 3+ / Jakarta. The logback
+             appender auto-promotes ERROR-level log events to Sentry with the
+             active MDC (traceId/spanId/correlationId) attached. -->
+        <sentry.version>8.48.0</sentry.version>
+        <!-- Jsoup: allowlist HTML sanitization for user-supplied free text
+             (OWASP A03 / stored-XSS defense). Standalone jar, no transitive
+             deps, JDK 21 compatible. Used on write paths to neutralize markup
+             before persistence. -->
+        <jsoup.version>1.22.2</jsoup.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+
+            <!-- CVE overrides declared BEFORE the BOM imports. We use the
+                 import-BOM pattern (not <parent>spring-boot-starter-parent),
+                 which means property overrides do NOT propagate into the
+                 imported BOM's property scope — Boot's BOM resolves
+                 ${tomcat.version} etc. in its own pom, not ours. The fix is
+                 to pre-declare the exact GA:V here; the first-declared
+                 version wins over the BOM's later entry.
+                 Drop these on the next Spring Boot upgrade if the BOM has
+                 caught up to the fixed versions. -->
+            <!-- bouncycastle 1.81 (transitive via jjwt-impl) has CVE-2026-5598
+                 (HIGH): private-key leakage via non-constant-time comparisons.
+                 1.84 fixes it. -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcprov-jdk18on</artifactId>
+                <version>1.85</version>
+            </dependency>
+            <!-- commons-fileupload 1.5 (transitive via Spring's multipart support)
+                 has CVE-2025-48976 (HIGH): DoS via multipart form-data part-count
+                 amplification. 1.6.0 fixes it. -->
+            <dependency>
+                <groupId>commons-fileupload</groupId>
+                <artifactId>commons-fileupload</artifactId>
+                <version>1.6.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-el</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-websocket</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
+            </dependency>
+            <!-- spring-kafka 4.0.5 (from Boot 4.0.6's BOM) has CVE-2026-41731
+                 (HIGH). 4.0.6 fixes it. Declared BEFORE the Boot BOM import so
+                 first-wins resolution picks the override (a property override on
+                 `${spring-kafka.version}` does NOT work with import-BOM). Drop on
+                 the next Boot bump once the BOM catches up. -->
+            <dependency>
+                <groupId>org.springframework.kafka</groupId>
+                <artifactId>spring-kafka</artifactId>
+                <version>${spring-kafka.version}</version>
+            </dependency>
+            <!-- Netty pulled in transitively. Pin the BOM rather than each
+                 artifact — netty-bom keeps every netty-* artifact in lockstep. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring.boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring.cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+                <version>${springdoc.version}</version>
+            </dependency>
+
+            <!-- jjwt — managed centrally so the three artifacts stay on one
+                 version. Each is declared below without a version. -->
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-api</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-jackson</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+
+            <!-- Testcontainers BOM keeps testcontainers-core, junit-jupiter, and
+                 postgresql modules on the same version. Spring Boot 4 doesn't
+                 manage these so we import the BOM ourselves. -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>net.logstash.logback</groupId>
+                <artifactId>logstash-logback-encoder</artifactId>
+                <version>${logstash.encoder.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.sentry</groupId>
+                <artifactId>sentry-bom</artifactId>
+                <version>${sentry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jsoup</groupId>
+                <artifactId>jsoup</artifactId>
+                <version>${jsoup.version}</version>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
+
+        <!-- ===== Shared dependencies inherited from the reactor root ===== -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <!-- spring-cloud-netflix-eureka-client pulls `spring-boot-grpc-test` onto
+             the test classpath; that helper registers an ApplicationListener whose
+             generic signature references GrpcServerStartedEvent, but
+             `spring-grpc-core` (which defines that class) is NOT pulled in
+             transitively. At @SpringBootTest context init Spring introspects the
+             listener via Class.getGenericInterfaces() and dies with
+             TypeNotPresentException. Declaring `spring-grpc-core` at test scope
+             puts the class on the test classpath. Version managed by Boot 4.1.0's
+             BOM. Test scope keeps it out of production jars. Drop on the next Boot
+             upgrade once the BOM stops shipping the listener-without-its-class. -->
+        <dependency>
+            <groupId>org.springframework.grpc</groupId>
+            <artifactId>spring-grpc-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- Pulled in so logback-spring.xml's JSON appender resolves at runtime.
+             Encoder is a no-op until a profile that uses it (json/docker/prod) is
+             active, so local dev pays no cost. -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+        </dependency>
+        <!-- Distributed tracing. The OTel bridge wires Micrometer Observation API
+             onto an OpenTelemetry SDK; the OTLP exporter ships spans to whatever
+             collector OTLP_ENDPOINT points at. Sampling defaults to 10% — tune via
+             TRACE_SAMPLE env var. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+        <!-- Boot 4 ships Jackson 3 (tools.jackson) by default; this module also
+             registers the legacy com.fasterxml.jackson.databind.ObjectMapper bean
+             expected by jjwt-jackson and existing test code. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-jackson2</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ===== loyalty-service's own dependencies ===== -->
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -23,7 +295,7 @@
         <!-- Phone-number normalisation: canonicalise MSISDNs to E.164
              (+<cc><national>) before storing on loyalty_users / wallets and
              before phone-keyed lookups, so loyalty agrees with user-service on
-             one format. Same lib + version as booking-service's MsisdnValidator. -->
+             one format. -->
         <dependency>
             <groupId>com.googlecode.libphonenumber</groupId>
             <artifactId>libphonenumber</artifactId>
@@ -32,9 +304,7 @@
 
         <!-- Jsoup: HTML sanitization for user-supplied free text (OWASP A03 /
              stored-XSS hardening). Used by util/HtmlSanitizer to strip markup
-             from plain-text fields (shop/merchant names, addresses, categories,
-             voucher assignee names, ledger reasons) on write paths. Version is
-             managed by the parent dependencyManagement. -->
+             from plain-text fields on write paths. Version managed above. -->
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
@@ -46,16 +316,16 @@
         </dependency>
 
         <!-- Read side of the shared cross-service logout denylist (Redis).
-             user-service writes revoked-token hashes; this lets JwtFilter
-             reject a logged-out token fleet-wide. Version from the parent BOM. -->
+             user-service writes revoked-token hashes; this lets JwtFilter reject
+             a logged-out token fleet-wide. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
-        <!-- Service discovery: registers with the Eureka registry
-             (discovery-server) and resolves siblings by name via Spring Cloud
-             LoadBalancer (pulled in transitively). -->
+        <!-- Service discovery: registers with the Eureka registry and resolves
+             siblings by name via Spring Cloud LoadBalancer (pulled in
+             transitively). -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
@@ -80,11 +350,7 @@
         <!-- Flyway: schema is owned by versioned migrations under
              src/main/resources/db/migration. spring-boot-flyway carries the
              auto-configuration (Spring Boot 4 split per-tech autoconfig into
-             dedicated modules); without it Flyway is on the classpath but is
-             not wired into the EntityManagerFactory init order, so Hibernate
-             schema-validates against an empty schema and rejects every
-             @Entity as a "missing table". Surfaced by the new *PostgresIT
-             tests on CI; the other services already declared it. -->
+             dedicated modules). -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-flyway</artifactId>
@@ -116,8 +382,7 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Boot 4 moved MockMvc auto-config into a separate module
-             (org.springframework.boot.webmvc.test.autoconfigure). Without this
+        <!-- Boot 4 moved MockMvc auto-config into a separate module. Without this
              dep @AutoConfigureMockMvc and the @Autowired MockMvc bean don't exist. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -141,9 +406,7 @@
         </dependency>
 
         <!-- Caffeine: in-memory cache for the hot-path tenant + tenant-membership
-             lookups in TenantContext. Every authenticated request hits these
-             twice today; with Caffeine they're amortised to one DB lookup per
-             tenant per TTL window. spring-boot-starter-cache wires up the
+             lookups in TenantContext. spring-boot-starter-cache wires up the
              @Cacheable / @CacheEvict annotations. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -154,12 +417,10 @@
             <artifactId>caffeine</artifactId>
         </dependency>
 
-        <!-- ShedLock: leader-elects @Scheduled jobs via a DB row lock so we
-             can horizontally scale loyalty-service without every replica
-             firing the expiry / invoice / pending-sweep crons in parallel.
-             jdbc-template provider talks to the existing Hikari pool — no
-             extra connection. The shedlock table is provisioned by the V6
-             Flyway migration. -->
+        <!-- ShedLock: leader-elects @Scheduled jobs via a DB row lock so we can
+             horizontally scale loyalty-service without every replica firing the
+             expiry / invoice / pending-sweep crons in parallel. The shedlock
+             table is provisioned by the V6 Flyway migration. -->
         <dependency>
             <groupId>net.javacrumbs.shedlock</groupId>
             <artifactId>shedlock-spring</artifactId>
@@ -172,10 +433,8 @@
         </dependency>
 
         <!-- Testcontainers: spins up a real Postgres in Docker for integration
-             tests that exercise Postgres-specific behaviour the H2 in-memory
-             tests can't fake (partial unique indexes, row locks under load,
-             native enum columns, etc.). Test-scoped only — never ships in
-             the runtime JAR. Versions are managed by spring-boot-dependencies. -->
+             tests that exercise Postgres-specific behaviour the H2 in-memory tests
+             can't fake. Test-scoped only — never ships in the runtime JAR. -->
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
@@ -192,8 +451,8 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- WireMock for client contract tests (UserServiceClient, etc.),
-             per the CLAUDE.md cross-service-client mandate. Shaded standalone
+        <!-- WireMock for client contract tests (UserServiceClient, notification
+             clients), per the cross-service-client mandate. Shaded standalone
              classifier to avoid Jetty/Jackson conflicts. -->
         <dependency>
             <groupId>org.wiremock</groupId>
@@ -202,10 +461,9 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Sentry: ERROR logs become real-time alerts. Logback appender
-             owns the SDK lifecycle so we skip the Spring autoconfig (Sentry
-             8.x references Boot 3 classes that Boot 4 renamed); no-op when
-             SENTRY_DSN env var is blank, so dev/CI pay nothing. -->
+        <!-- Sentry: ERROR logs become real-time alerts. Logback appender owns the
+             SDK lifecycle so we skip the Spring autoconfig; no-op when SENTRY_DSN
+             env var is blank, so dev/CI pay nothing. -->
         <dependency>
             <groupId>io.sentry</groupId>
             <artifactId>sentry-logback</artifactId>
@@ -214,6 +472,32 @@
     </dependencies>
 
     <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring.boot.version}</version>
+                    <configuration>
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
+                    <!-- repackage is NOT bound here. This project imports the
+                         Spring Boot BOM (not spring-boot-starter-parent), so
+                         repackage is not auto-bound; binding it to `package`
+                         would relocate classes into BOOT-INF/ before the Failsafe
+                         integration tests run, breaking them. Instead the
+                         Dockerfile runs `mvn package spring-boot:repackage` (with
+                         -DskipTests, so Failsafe never runs there) to produce the
+                         fat jar. -->
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
@@ -229,6 +513,47 @@
                         <arg>-parameters</arg>
                     </compilerArgs>
                 </configuration>
+            </plugin>
+
+            <!-- Failsafe runs *IT.java / IT*.java / *ITCase.java during `verify`.
+                 Without an explicit binding, integration tests sit on the
+                 classpath but never execute. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- JaCoCo line/branch/method coverage. prepare-agent injects the
+                 coverage agent into surefire's argLine before unit tests run;
+                 report reads target/jacoco.exec and writes
+                 target/site/jacoco/{index.html,jacoco.xml} on `mvn verify`. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.15</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

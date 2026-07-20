@@ -17,53 +17,76 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for {@link TenantMemberNotifier}: pins the WhatsApp-primary /
- * SMS-fallback ordering, the best-effort no-throw contract, and the guard rails
- * (no contact / blank phone / null userId → no channel touched). Pure JUnit +
- * Mockito, no Spring context — the @Async annotation is a no-op when the bean is
- * called directly.
+ * Unit tests for {@link TenantMemberNotifier}: pins the email-primary /
+ * WhatsApp-fallback / SMS-last ordering, the best-effort no-throw contract, and
+ * the guard rails (no contact / no channels / null userId → nothing touched).
+ * Pure JUnit + Mockito, no Spring context — the @Async annotation is a no-op
+ * when the bean is called directly.
  */
 class TenantMemberNotifierTest {
 
     private UserServiceClient userServiceClient;
+    private EmailNotificationClient email;
     private WhatsAppNotificationClient whatsApp;
     private SmsNotificationClient sms;
     private TenantMemberNotifier notifier;
 
     private static final UUID USER_ID = UUID.randomUUID();
     private static final String PHONE = "+263771234567";
+    private static final String EMAIL = "alice@example.com";
 
     @BeforeEach
     void setUp() {
         userServiceClient = mock(UserServiceClient.class);
+        email = mock(EmailNotificationClient.class);
         whatsApp = mock(WhatsAppNotificationClient.class);
         sms = mock(SmsNotificationClient.class);
-        notifier = new TenantMemberNotifier(userServiceClient, whatsApp, sms);
+        notifier = new TenantMemberNotifier(userServiceClient, email, whatsApp, sms);
     }
 
-    private void stubContact(String firstName, String phone) {
+    private void stubContact(String firstName, String emailAddr, String phone) {
         when(userServiceClient.getUserContact(USER_ID))
-                .thenReturn(Optional.of(new UserServiceClient.UserContact(USER_ID, phone, "a@b.com", firstName)));
+                .thenReturn(Optional.of(new UserServiceClient.UserContact(USER_ID, phone, emailAddr, firstName)));
     }
 
     @Test
-    @DisplayName("WhatsApp succeeds → SMS is never called; message carries the tenant name")
-    void whatsAppSuccess_smsNotCalled() {
-        stubContact("Alice", PHONE);
+    @DisplayName("email succeeds → WhatsApp and SMS never called; email carries subject + tenant + name")
+    void emailSuccess_noFallback() {
+        stubContact("Alice", EMAIL, PHONE);
 
         notifier.notifyAddedToTenant(USER_ID, "Innbucks Financial Services");
+
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(email).sendEmail(eq(EMAIL), subject.capture(), body.capture(), eq(null));
+        verifyNoInteractions(whatsApp);
+        verifyNoInteractions(sms);
+        assertThat(subject.getValue()).contains("Innbucks Financial Services");
+        assertThat(body.getValue()).contains("Innbucks Financial Services");
+        assertThat(body.getValue()).contains("Alice");
+    }
+
+    @Test
+    @DisplayName("email throws → WhatsApp fallback with the same message; SMS not called")
+    void emailThrows_whatsAppFallback() {
+        stubContact("Alice", EMAIL, PHONE);
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(email).sendEmail(eq(EMAIL), anyString(), anyString(), eq(null));
+
+        notifier.notifyAddedToTenant(USER_ID, "Acme Coffee");
 
         ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
         verify(whatsApp).sendCustomNotification(eq(PHONE), msg.capture());
         verifyNoInteractions(sms);
-        assertThat(msg.getValue()).contains("Innbucks Financial Services");
-        assertThat(msg.getValue()).contains("Alice");
+        assertThat(msg.getValue()).contains("Acme Coffee");
     }
 
     @Test
-    @DisplayName("WhatsApp throws → SMS is called as fallback with the same message")
-    void whatsAppThrows_smsFallback() {
-        stubContact("Alice", PHONE);
+    @DisplayName("email + WhatsApp throw → SMS fallback with the same message")
+    void emailAndWhatsAppThrow_smsFallback() {
+        stubContact("Alice", EMAIL, PHONE);
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(email).sendEmail(eq(EMAIL), anyString(), anyString(), eq(null));
         doThrow(new NotificationDeliveryException("wa down"))
                 .when(whatsApp).sendCustomNotification(eq(PHONE), anyString());
 
@@ -75,9 +98,11 @@ class TenantMemberNotifierTest {
     }
 
     @Test
-    @DisplayName("both channels throw → no exception escapes (best-effort)")
-    void bothThrow_noException() {
-        stubContact("Alice", PHONE);
+    @DisplayName("all three channels throw → no exception escapes (best-effort)")
+    void allThrow_noException() {
+        stubContact("Alice", EMAIL, PHONE);
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(email).sendEmail(eq(EMAIL), anyString(), anyString(), eq(null));
         doThrow(new NotificationDeliveryException("wa down"))
                 .when(whatsApp).sendCustomNotification(eq(PHONE), anyString());
         doThrow(new NotificationDeliveryException("sms down"))
@@ -86,28 +111,57 @@ class TenantMemberNotifierTest {
         assertThatCode(() -> notifier.notifyAddedToTenant(USER_ID, "Acme Coffee"))
                 .doesNotThrowAnyException();
 
+        verify(email).sendEmail(eq(EMAIL), anyString(), anyString(), eq(null));
         verify(whatsApp).sendCustomNotification(eq(PHONE), anyString());
         verify(sms).sendSms(eq(PHONE), anyString(), eq(null));
     }
 
     @Test
-    @DisplayName("no contact resolved → neither channel is touched")
-    void noContact_noChannel() {
-        when(userServiceClient.getUserContact(USER_ID)).thenReturn(Optional.empty());
+    @DisplayName("no email on file → WhatsApp is used directly (email skipped)")
+    void noEmail_whatsAppUsed() {
+        stubContact("Alice", "  ", PHONE);
 
         notifier.notifyAddedToTenant(USER_ID, "Acme Coffee");
 
+        verifyNoInteractions(email);
+        verify(whatsApp).sendCustomNotification(eq(PHONE), anyString());
+    }
+
+    @Test
+    @DisplayName("email-only contact, email fails → nothing left; no phone channels touched")
+    void emailOnly_emailFails_noPhoneChannels() {
+        stubContact("Alice", EMAIL, "  ");   // no phone
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(email).sendEmail(eq(EMAIL), anyString(), anyString(), eq(null));
+
+        assertThatCode(() -> notifier.notifyAddedToTenant(USER_ID, "Acme Coffee"))
+                .doesNotThrowAnyException();
+
+        verify(email).sendEmail(eq(EMAIL), anyString(), anyString(), eq(null));
         verifyNoInteractions(whatsApp);
         verifyNoInteractions(sms);
     }
 
     @Test
-    @DisplayName("contact present but phone blank → neither channel is touched")
-    void blankPhone_noChannel() {
-        stubContact("Alice", "   ");
+    @DisplayName("no contact resolved → no channel is touched")
+    void noContact_noChannel() {
+        when(userServiceClient.getUserContact(USER_ID)).thenReturn(Optional.empty());
 
         notifier.notifyAddedToTenant(USER_ID, "Acme Coffee");
 
+        verifyNoInteractions(email);
+        verifyNoInteractions(whatsApp);
+        verifyNoInteractions(sms);
+    }
+
+    @Test
+    @DisplayName("contact present but email AND phone blank → no channel is touched")
+    void noEmailNoPhone_noChannel() {
+        stubContact("Alice", "  ", "  ");
+
+        notifier.notifyAddedToTenant(USER_ID, "Acme Coffee");
+
+        verifyNoInteractions(email);
         verifyNoInteractions(whatsApp);
         verifyNoInteractions(sms);
     }
@@ -118,6 +172,7 @@ class TenantMemberNotifierTest {
         notifier.notifyAddedToTenant(null, "Acme Coffee");
 
         verifyNoInteractions(userServiceClient);
+        verifyNoInteractions(email);
         verifyNoInteractions(whatsApp);
         verifyNoInteractions(sms);
     }
@@ -125,13 +180,13 @@ class TenantMemberNotifierTest {
     @Test
     @DisplayName("blank first name → message drops the greeting but still names the tenant")
     void blankFirstName_dropsGreeting() {
-        stubContact("", PHONE);
+        stubContact("", EMAIL, PHONE);
 
         notifier.notifyAddedToTenant(USER_ID, "Acme Coffee");
 
-        ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
-        verify(whatsApp).sendCustomNotification(eq(PHONE), msg.capture());
-        assertThat(msg.getValue()).doesNotContain("Hi ,");
-        assertThat(msg.getValue()).startsWith("You've been added to Acme Coffee");
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(email).sendEmail(eq(EMAIL), anyString(), body.capture(), eq(null));
+        assertThat(body.getValue()).doesNotContain("Hi ,");
+        assertThat(body.getValue()).startsWith("You've been added to Acme Coffee");
     }
 }

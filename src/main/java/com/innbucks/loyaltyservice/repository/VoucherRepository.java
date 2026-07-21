@@ -123,4 +123,21 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
     // PARTIALLY_USED) — redeemed/expired/revoked ones can't "expire soon".
     long countByMerchantIdAndExpiresAtBetweenAndStatusIn(UUID merchantId, Instant from, Instant to,
                                                          Collection<Voucher.Status> statuses);
+
+    /** Unredeemed vouchers entering the warning window (expiring after
+     *  {@code now} but by {@code cutoff}) that were never warned and have a
+     *  reachable assignee — drives the daily ExpiryWarningSweeper. */
+    @Query("""
+        SELECT v FROM Voucher v
+        WHERE v.expiresAt IS NOT NULL AND v.expiryWarnedAt IS NULL
+          AND v.expiresAt > :now AND v.expiresAt <= :cutoff
+          AND v.status IN (com.innbucks.loyaltyservice.entity.Voucher.Status.ISSUED,
+                           com.innbucks.loyaltyservice.entity.Voucher.Status.DELIVERED,
+                           com.innbucks.loyaltyservice.entity.Voucher.Status.VIEWED,
+                           com.innbucks.loyaltyservice.entity.Voucher.Status.PARTIALLY_USED)
+        ORDER BY v.expiresAt ASC
+        """)
+    List<Voucher> findExpiringForWarning(@Param("now") Instant now,
+                                         @Param("cutoff") Instant cutoff,
+                                         Pageable pageable);
 }

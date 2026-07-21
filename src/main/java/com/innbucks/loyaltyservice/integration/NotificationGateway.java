@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
@@ -69,6 +70,42 @@ public class NotificationGateway {
                     voucher.getId(), MsisdnMasking.mask(recipientPhone));
         } catch (RuntimeException e) {
             log.warn("Voucher id={} delivery failed on both channels for {} (still issued): {}",
+                    voucher.getId(), MsisdnMasking.mask(recipientPhone), e.getMessage());
+        }
+    }
+
+    /**
+     * Expiry-warning nudge from the daily sweep: the voucher lapses soon and is
+     * still unredeemed. Same channel order (WhatsApp first, SMS fallback) and
+     * best-effort contract as {@link #deliver}. The code itself is NOT resent —
+     * it was delivered at issuance; this is only the reminder.
+     */
+    @Async("notificationExecutor")
+    public void warnExpiring(Voucher voucher, String recipientPhone, LocalDate expiresOn) {
+        if (voucher == null || recipientPhone == null || recipientPhone.isBlank() || expiresOn == null) {
+            return;
+        }
+        String worth = describeValue(voucher);
+        String message = "Reminder: your InnBucks voucher"
+                + (worth == null ? "" : " (" + worth + ")")
+                + " expires on " + expiresOn
+                + ". Redeem it before then so it doesn't go to waste!";
+        String ref = "VOUCHER-EXPIRY-" + voucher.getId();
+        try {
+            whatsApp.sendCustomNotification(recipientPhone, message);
+            log.info("Voucher id={} expiry warning sent via WhatsApp -> {}",
+                    voucher.getId(), MsisdnMasking.mask(recipientPhone));
+            return;
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} expiry-warning WhatsApp failed for {}, falling back to SMS: {}",
+                    voucher.getId(), MsisdnMasking.mask(recipientPhone), e.getMessage());
+        }
+        try {
+            sms.sendSms(recipientPhone, message, ref);
+            log.info("Voucher id={} expiry warning sent via SMS -> {}",
+                    voucher.getId(), MsisdnMasking.mask(recipientPhone));
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} expiry warning failed on both channels for {}: {}",
                     voucher.getId(), MsisdnMasking.mask(recipientPhone), e.getMessage());
         }
     }

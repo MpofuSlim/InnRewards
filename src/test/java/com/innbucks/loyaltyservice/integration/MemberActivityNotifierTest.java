@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -16,6 +17,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+/**
+ * Channel order is SMS-primary, WhatsApp-fallback (flipped from the original
+ * WhatsApp-first order as a product decision — SMS reaches every handset).
+ */
 class MemberActivityNotifierTest {
 
     private SmsNotificationClient sms;
@@ -32,29 +37,29 @@ class MemberActivityNotifierTest {
     }
 
     @Test
-    void earned_usesWhatsAppPrimary_smsNotTouched() {
+    void earned_usesSmsPrimary_whatsAppNotTouched() {
         notifier.notifyPointsEarned(PHONE, new BigDecimal("50"), new BigDecimal("150"));
 
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("earned 50"));
-        verify(sms, never()).sendSms(anyString(), anyString(), anyString());
+        verify(sms).sendSms(eq(PHONE), contains("earned 50"), isNull());
+        verify(whatsApp, never()).sendCustomNotification(anyString(), anyString());
     }
 
     @Test
-    void whatsAppFails_fallsBackToSms_withSameMessage() {
-        doThrow(new RuntimeException("gw down"))
-                .when(whatsApp).sendCustomNotification(anyString(), anyString());
+    void smsFails_fallsBackToWhatsApp_withSameMessage() {
+        doThrow(new RuntimeException("sms gw down"))
+                .when(sms).sendSms(anyString(), anyString(), isNull());
 
         notifier.notifyPointsRedeemed(PHONE, new BigDecimal("30"), new BigDecimal("120"));
 
-        verify(sms).sendSms(eq(PHONE), contains("redeemed 30"), isNull());
+        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("redeemed 30"));
     }
 
     @Test
     void bothChannelsFail_doesNotThrow() {
+        doThrow(new RuntimeException("sms down"))
+                .when(sms).sendSms(anyString(), anyString(), isNull());
         doThrow(new RuntimeException("wa down"))
                 .when(whatsApp).sendCustomNotification(anyString(), anyString());
-        doThrow(new RuntimeException("sms down"))
-                .when(sms).sendSms(anyString(), anyString(), anyString());
 
         assertThatCode(() -> notifier.notifyPointsEarned(PHONE, new BigDecimal("5"), new BigDecimal("5")))
                 .doesNotThrowAnyException();
@@ -63,22 +68,22 @@ class MemberActivityNotifierTest {
     @Test
     void transferSent_andReceived_haveDirectionalCopy() {
         notifier.notifyTransferSent(PHONE, new BigDecimal("20"), new BigDecimal("80"));
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("sent 20"));
+        verify(sms).sendSms(eq(PHONE), contains("sent 20"), isNull());
 
         notifier.notifyTransferReceived(PHONE, new BigDecimal("20"), new BigDecimal("40"));
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("received 20"));
+        verify(sms).sendSms(eq(PHONE), contains("received 20"), isNull());
     }
 
     @Test
     void adjusted_credit_saysCredited() {
         notifier.notifyPointsAdjusted(PHONE, new BigDecimal("15"), new BigDecimal("115"));
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("credited 15"));
+        verify(sms).sendSms(eq(PHONE), contains("credited 15"), isNull());
     }
 
     @Test
     void adjusted_debit_saysReducedByAbsoluteValue() {
         notifier.notifyPointsAdjusted(PHONE, new BigDecimal("-15"), new BigDecimal("85"));
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("reduced by 15"));
+        verify(sms).sendSms(eq(PHONE), contains("reduced by 15"), isNull());
     }
 
     @Test
@@ -90,7 +95,21 @@ class MemberActivityNotifierTest {
     @Test
     void unlocked_sendsActivationCopy() {
         notifier.notifyPointsUnlocked(PHONE);
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("now active"));
+        verify(sms).sendSms(eq(PHONE), contains("now active"), isNull());
+    }
+
+    @Test
+    void expiring_sendsRetentionNudge_withAmountAndDate() {
+        notifier.notifyPointsExpiring(PHONE, new BigDecimal("40"), LocalDate.of(2026, 7, 28));
+        verify(sms).sendSms(eq(PHONE),
+                contains("40 of your InnBucks loyalty points expire on 2026-07-28"), isNull());
+    }
+
+    @Test
+    void expiring_missingDateOrAmount_isNoOp() {
+        notifier.notifyPointsExpiring(PHONE, new BigDecimal("40"), null);
+        notifier.notifyPointsExpiring(PHONE, BigDecimal.ZERO, LocalDate.now());
+        verifyNoInteractions(whatsApp, sms);
     }
 
     @Test

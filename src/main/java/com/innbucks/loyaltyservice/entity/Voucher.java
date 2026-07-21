@@ -114,6 +114,11 @@ public class Voucher {
     @Column(name = "expires_at")
     private Instant expiresAt;
 
+    /** When the pre-expiry warning was sent (or consumed) by the daily
+     *  ExpiryWarningSweeper. Null = not yet warned; at most one warning. */
+    @Column(name = "expiry_warned_at")
+    private Instant expiryWarnedAt;
+
     @Column(name = "campaign_source", length = 200)
     private String campaignSource;
 

@@ -36,4 +36,28 @@ public interface PointLotRepository extends JpaRepository<PointLot, UUID> {
         WHERE l.remainingAmount > 0 AND l.expiresAt <= :now
         """)
     List<UUID> findWalletsWithDueLots(@Param("now") Instant now, Pageable pageable);
+
+    /** Distinct wallets holding live lots that enter the warning window
+     *  (expiring after {@code now} but by {@code cutoff}) and were never
+     *  warned — drives the daily ExpiryWarningSweeper. */
+    @Query("""
+        SELECT DISTINCT l.walletId FROM PointLot l
+        WHERE l.remainingAmount > 0 AND l.expiryWarnedAt IS NULL
+          AND l.expiresAt > :now AND l.expiresAt <= :cutoff
+        """)
+    List<UUID> findWalletsWithLotsToWarn(@Param("now") Instant now,
+                                         @Param("cutoff") Instant cutoff,
+                                         Pageable pageable);
+
+    /** One wallet's warnable lots (same window as findWalletsWithLotsToWarn),
+     *  soonest-to-expire first. */
+    @Query("""
+        SELECT l FROM PointLot l
+        WHERE l.walletId = :walletId AND l.remainingAmount > 0 AND l.expiryWarnedAt IS NULL
+          AND l.expiresAt > :now AND l.expiresAt <= :cutoff
+        ORDER BY l.expiresAt ASC
+        """)
+    List<PointLot> findWarnableLots(@Param("walletId") UUID walletId,
+                                    @Param("now") Instant now,
+                                    @Param("cutoff") Instant cutoff);
 }

@@ -59,6 +59,12 @@ public class PointLot {
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
+    /** When the pre-expiry warning for this lot was sent (or consumed) by the
+     *  daily ExpiryWarningSweeper. Null = not yet warned. Stamped on the
+     *  attempt so a lot is warned at most once. */
+    @Column(name = "expiry_warned_at")
+    private Instant expiryWarnedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 }

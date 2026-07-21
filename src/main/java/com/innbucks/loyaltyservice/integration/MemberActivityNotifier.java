@@ -6,6 +6,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 /**
  * Best-effort activity alerts to an ONBOARDED loyalty customer for the money
@@ -13,9 +14,9 @@ import java.math.BigDecimal;
  * adjusted, and the one-time "your points are now active" unlock when a
  * previously phone-keyed (PENDING) account finishes registration.
  *
- * <p>Channel order is WhatsApp-primary, SMS-fallback — the onboarded-customer
- * convention (mirrors {@link TenantMemberNotifier}; {@link GuestCheckoutNotifier}
- * is the reverse because a walk-in may have no WhatsApp). Brand is InnBucks.
+ * <p>Channel order is SMS-primary, WhatsApp-fallback (product decision:
+ * SMS reaches every handset, WhatsApp catches SMS delivery failures — same
+ * order as {@link GuestCheckoutNotifier}). Brand is InnBucks.
  * Every method is {@link Async @Async} on the {@code notificationExecutor} so it
  * never delays the caller, and is strictly best-effort: all failures are logged
  * and swallowed — a notification never affects the (already-applied)
@@ -66,23 +67,35 @@ public class MemberActivityNotifier {
         dispatch(phone, body + " Balance: " + fmt(balance) + ".");
     }
 
+    /**
+     * Retention nudge from the daily expiry-warning sweep: {@code amount}
+     * points across the member's soon-to-expire lots lapse on
+     * {@code expiresOn} unless spent.
+     */
+    @Async("notificationExecutor")
+    public void notifyPointsExpiring(String phone, BigDecimal amount, LocalDate expiresOn) {
+        if (isBlank(phone) || isNonPositive(amount) || expiresOn == null) return;
+        dispatch(phone, fmt(amount) + " of your InnBucks loyalty points expire on " + expiresOn
+                + ". Redeem them before then so they don't go to waste!");
+    }
+
     @Async("notificationExecutor")
     public void notifyPointsUnlocked(String phone) {
         if (isBlank(phone)) return;
         dispatch(phone, "Good news! Your InnBucks loyalty points are now active and ready to spend.");
     }
 
-    /** WhatsApp-primary, SMS-fallback; best-effort — never throws. */
+    /** SMS-primary, WhatsApp-fallback; best-effort — never throws. */
     private void dispatch(String phone, String message) {
         try {
-            whatsApp.sendCustomNotification(phone, message);
+            sms.sendSms(phone, message, null);
             return;
         } catch (RuntimeException e) {
-            log.warn("Member-activity WhatsApp failed for {}, falling back to SMS: {}",
+            log.warn("Member-activity SMS failed for {}, falling back to WhatsApp: {}",
                     MsisdnMasking.mask(phone), e.getMessage());
         }
         try {
-            sms.sendSms(phone, message, null);
+            whatsApp.sendCustomNotification(phone, message);
         } catch (RuntimeException e) {
             log.warn("Member-activity notification failed on both channels for {}: {}",
                     MsisdnMasking.mask(phone), e.getMessage());

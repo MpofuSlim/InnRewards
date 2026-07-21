@@ -100,6 +100,12 @@ loyalty:
     invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
     points-expiry-cron: ${LOYALTY_POINTS_EXPIRY_CRON:0 15 * * * *}
     reconciliation-cron: ${LOYALTY_RECONCILIATION_CRON:0 45 2 * * *}
+    # Daily "expires soon" nudges (ExpiryWarningSweeper): points + vouchers
+    # entering the warning window get one notification each. 08:00 UTC =
+    # mid-morning in ZW (UTC+2) — a humane send time.
+    expiry-warning-cron: ${LOYALTY_EXPIRY_WARNING_CRON:0 0 8 * * *}
+  expiry-warning:
+    days: ${LOYALTY_EXPIRY_WARNING_DAYS:7}
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}

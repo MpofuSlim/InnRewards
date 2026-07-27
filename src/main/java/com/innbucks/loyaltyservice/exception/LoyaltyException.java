@@ -13,7 +13,11 @@ public class LoyaltyException extends RuntimeException {
     }
 
     public static LoyaltyException notFound(String what) {
-        return new LoyaltyException(HttpStatus.NOT_FOUND, "NOT_FOUND", what + " not found");
+        // Fleet-standard status-format code ("404 NOT_FOUND", per ApiResult.error)
+        // so runtime matches the controllers' Swagger @ExampleObject bodies and
+        // the other services' 404s. badRequest/conflict/forbidden below keep
+        // their explicit DOMAIN codes (e.g. MERCHANT_NAME_TAKEN) by design.
+        return new LoyaltyException(HttpStatus.NOT_FOUND, "404 NOT_FOUND", what + " not found");
     }
 
     public static LoyaltyException badRequest(String code, String message) {

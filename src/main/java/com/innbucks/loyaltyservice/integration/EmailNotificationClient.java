@@ -69,7 +69,9 @@ public class EmailNotificationClient {
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("subject", subject);
-        payload.put("message", message);
+        // Close every email with the standard InnBucks sign-off + contact +
+        // Deposit-Protection disclosure (email channel only — see EmailSignature).
+        payload.put("message", EmailSignature.appendTo(message));
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
 

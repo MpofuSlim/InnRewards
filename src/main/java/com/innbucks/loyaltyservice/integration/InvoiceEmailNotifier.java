@@ -60,7 +60,6 @@ public class InvoiceEmailNotifier {
                 + "Vouchers issued:   " + e.vouchersIssued() + "\n"
                 + "Vouchers redeemed: " + e.vouchersRedeemed() + "\n"
                 + "Amount due:        " + cur + e.totalAmount() + "\n\n"
-                + "You can view and settle this invoice from your merchant billing dashboard.\n\n"
-                + "The InnBucks Team";
+                + "You can view and settle this invoice from your merchant billing dashboard.";
     }
 }

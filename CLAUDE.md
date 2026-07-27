@@ -114,7 +114,16 @@ Invariants — weakening any needs a deliberate, called-out reason:
   reason + review-date comment. Prefer fixing/upgrading over waiving; POM CVE
   overrides live in `pom.xml`.
 - **PR-time SCA**: `ci.yml`'s `dependency-review` flags any *new* High/Critical
-  direct dependency a PR introduces (diff-scoped).
+  direct dependency a PR introduces (diff-scoped). **Called-out exception:** the
+  `dependency-review` job is **gated to public repos**
+  (`github.event.repository.visibility == 'public'`) because the action needs
+  GitHub's Dependency Graph, which on a **private** repo requires paid GitHub
+  Advanced Security — without it the action hard-errors and reds every PR. This
+  repo is currently private without GHAS, so the job self-skips here; it
+  auto-re-enables if the repo goes public or GHAS is licensed. This drops only
+  the PR-time *direct-dependency* advisory surface — transitive/library CVEs
+  remain covered by the Release workflow's Trivy image scan. (The public
+  `ticketing-system` repo runs this job normally.)
 
 ## Local build (no Docker in some sandboxes)
 

@@ -61,7 +61,7 @@
              of the fleet. 0.12.x cleans up Java 17/21 compatibility, tightens
              algorithm validation, and replaces the deprecated 0.11.x builder API.
              Token wire format is unchanged. -->
-        <jjwt.version>0.12.6</jjwt.version>
+        <jjwt.version>0.13.0</jjwt.version>
         <!-- Logstash encoder for structured JSON logs. 8.x targets Logback 1.5
              (shipped with Spring Boot 4.x). When the active profile is
              json/docker/prod, the service emits one JSON object per log line

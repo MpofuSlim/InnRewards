@@ -67,6 +67,11 @@ innbucks-notify:
   password: ${BANK_API_PASSWORD:}
   connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
   read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:30000}
+  # Branded HTML emails ON by default (the gateway renders the message field as
+  # HTML). NOTIFY_HTML_ENABLED=false rolls back to plain text. LOGO_URL blank =
+  # crisp CSS-drawn logo (preferred over a hosted PNG that can proxy faintly).
+  html-enabled: ${NOTIFY_HTML_ENABLED:true}
+  logo-url: ${NOTIFY_LOGO_URL:}
 
 loyalty:
   points:

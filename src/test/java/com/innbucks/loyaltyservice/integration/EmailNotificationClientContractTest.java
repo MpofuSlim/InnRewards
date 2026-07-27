@@ -52,14 +52,36 @@ class EmailNotificationClientContractTest {
     }
 
     private static EmailNotificationClient client(int port) {
+        // 1-arg helper pins the plain-text path so the footer-path assertions
+        // below stay meaningful; the HTML default is exercised by client(port, true).
+        return client(port, false);
+    }
+
+    private static EmailNotificationClient client(int port, boolean htmlEnabled) {
         InnbucksNotifyProperties props = new InnbucksNotifyProperties();
         props.setBaseUrl("http://localhost:" + port);
         props.setApiKey(API_KEY);
         props.setUsername("test-user");
         props.setPassword("test-pass");
+        props.setHtmlEnabled(htmlEnabled);
         return new EmailNotificationClient(
                 RestClient.builder().baseUrl("http://localhost:" + port).build(),
                 props, new ObjectMapper());
+    }
+
+    @Test
+    @DisplayName("html-enabled (default): message carries branded HTML with the body, footer and logo")
+    void sendEmail_htmlEnabled_putsBrandedHtmlOnTheWire() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port(), true).sendEmail("merchant@example.com",
+                "InnBucks loyalty invoice INV-1", "Amount due: USD 12.50", "INV-1");
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.message", containing("<table")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Amount due: USD 12.50")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme"))));
     }
 
     @Test

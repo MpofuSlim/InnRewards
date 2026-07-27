@@ -56,7 +56,7 @@
         <spring-kafka.version>4.1.0</spring-kafka.version>
         <spring.cloud.version>2025.1.2</spring.cloud.version>
         <springdoc.version>3.0.3</springdoc.version>
-        <testcontainers.version>1.21.3</testcontainers.version>
+        <testcontainers.version>2.0.5</testcontainers.version>
         <!-- jjwt centralized here to keep JWT verification aligned with the rest
              of the fleet. 0.12.x cleans up Java 17/21 compatibility, tightens
              algorithm validation, and replaces the deprecated 0.11.x builder API.

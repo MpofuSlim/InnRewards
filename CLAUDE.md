@@ -116,14 +116,19 @@ Invariants — weakening any needs a deliberate, called-out reason:
 - **PR-time SCA**: `ci.yml`'s `dependency-review` flags any *new* High/Critical
   direct dependency a PR introduces (diff-scoped). **Called-out exception:** the
   `dependency-review` job is **gated to public repos**
-  (`github.event.repository.visibility == 'public'`) because the action needs
-  GitHub's Dependency Graph, which on a **private** repo requires paid GitHub
-  Advanced Security — without it the action hard-errors and reds every PR. This
-  repo is currently private without GHAS, so the job self-skips here; it
-  auto-re-enables if the repo goes public or GHAS is licensed. This drops only
-  the PR-time *direct-dependency* advisory surface — transitive/library CVEs
-  remain covered by the Release workflow's Trivy image scan. (The public
-  `ticketing-system` repo runs this job normally.)
+  (`github.event.repository.private == false`) AND its step carries
+  `continue-on-error: true`, because the action needs GitHub's Dependency Graph,
+  which on a **private** repo requires paid GitHub Advanced Security — without it
+  the action hard-errors and reds every PR. Belt-and-suspenders: an earlier gate
+  on `repository.visibility == 'public'` did NOT skip (that payload field read
+  as truthy on this private repo, so the job ran and failed), so the `if` now
+  uses the canonical `repository.private` boolean AND `continue-on-error`
+  guarantees the "not supported" error can never red a PR even if the metadata
+  is wrong again. This repo is currently private without GHAS, so the job
+  self-skips; it auto-re-enables if the repo goes public or GHAS is licensed.
+  This drops only the PR-time *direct-dependency* advisory surface —
+  transitive/library CVEs remain covered by the Release workflow's Trivy image
+  scan. (The public `ticketing-system` repo runs this job normally.)
 
 ## Local build (no Docker in some sandboxes)
 

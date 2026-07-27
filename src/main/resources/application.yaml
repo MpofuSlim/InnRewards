@@ -138,6 +138,16 @@ eureka:
     prefer-ip-address: true
     instance-id: ${spring.application.name}:${random.uuid}
 
+
+# Static token the Prometheus scraper (in the ticketing cell's monitoring
+# stack) presents on X-Metrics-Token to read /actuator/prometheus (see
+# MetricsScrapeAuthFilter). Blank (the default) fail-closes: the endpoint
+# stays JWT-401 and scraping is off until the cell provisions
+# METRICS_SCRAPE_TOKEN — same value fleet-wide, lock-step with
+# ticketing-system's prometheus/prometheus.yml loyalty-service job.
+monitoring:
+  scrape-token: ${METRICS_SCRAPE_TOKEN:}
+
 management:
   endpoints:
     web:

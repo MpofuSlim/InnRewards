@@ -110,7 +110,16 @@ jobs:
   # time before an image is even built, and covers every dependency manifest in
   # the repo (including any that don't produce a container image).
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # dependency-review-action needs GitHub's Dependency Graph, which on a
+    # PRIVATE repo requires paid GitHub Advanced Security (it's free on public
+    # repos). This repo is private without GHAS, so the action hard-errors
+    # "Dependency review is not supported on this repository" and reds every PR.
+    # Gate the job to public repos: it self-skips here and auto-re-enables if the
+    # repo is ever made public (or GHAS is licensed). Called-out A08 exception
+    # (see CLAUDE.md) — NOT a silent removal: transitive/library CVEs stay
+    # covered by the Release workflow's Trivy image scan; only the PR-time
+    # direct-dependency advisory surface is dropped while private + no GHAS.
+    if: github.event_name == 'pull_request' && github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     permissions:
       contents: read

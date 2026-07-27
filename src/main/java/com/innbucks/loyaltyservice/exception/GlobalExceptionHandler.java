@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.exception;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -12,10 +13,22 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-import java.time.Instant;
 import java.util.Map;
-import java.util.stream.Collectors;
 
+/**
+ * Every error response uses the fleet's standard {@link ApiResult} envelope
+ * ({@code {code, message, data}}) — the SAME shape the six ticketing-system
+ * services emit and the same shape this service's own Swagger {@code @ExampleObject}
+ * bodies document, so the frontend has one render path for errors across the API.
+ *
+ * <p>Previously these handlers returned a raw {@code {timestamp, status, code,
+ * message}} Map, which diverged from every other service (extra keys, missing
+ * {@code data}, and a bare {@code code} like {@code NOT_FOUND} instead of the
+ * fleet's {@code 404 NOT_FOUND}). Generic handlers now use
+ * {@link ApiResult#error(HttpStatus, String)} (code = "{@code <value> <NAME>}");
+ * {@link LoyaltyException} keeps its intentional domain code (e.g.
+ * {@code MERCHANT_NAME_TAKEN}) since those are part of the documented contract.
+ */
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
@@ -25,49 +38,38 @@ public class GlobalExceptionHandler {
     // falls through to the generic Exception handler below and returns 500
     // instead of 403, masking permission errors as server errors.
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<Map<String, Object>> handle(AccessDeniedException ex) {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 403,
-                "code", "FORBIDDEN",
-                "message", "You don't have permission to do that."
-        ));
+    public ResponseEntity<ApiResult<Void>> handle(AccessDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResult.error(HttpStatus.FORBIDDEN, "You don't have permission to do that."));
     }
 
     @ExceptionHandler(AuthenticationException.class)
-    public ResponseEntity<Map<String, Object>> handle(AuthenticationException ex) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 401,
-                "code", "UNAUTHORIZED",
-                "message", "Please sign in to continue."
-        ));
+    public ResponseEntity<ApiResult<Void>> handle(AuthenticationException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Please sign in to continue."));
     }
 
     @ExceptionHandler(LoyaltyException.class)
-    public ResponseEntity<Map<String, Object>> handle(LoyaltyException ex) {
-        return ResponseEntity.status(ex.getStatus()).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", ex.getStatus().value(),
-                "code", ex.getCode(),
-                "message", ex.getMessage()
-        ));
+    public ResponseEntity<ApiResult<Void>> handle(LoyaltyException ex) {
+        // Preserve the intentional domain code (e.g. MERCHANT_NAME_TAKEN) — it's
+        // part of the documented contract the FE switches on — in the standard
+        // ApiResult envelope.
+        return ResponseEntity.status(ex.getStatus()).body(
+                ApiResult.<Void>builder()
+                        .code(ex.getCode())
+                        .message(ex.getMessage())
+                        .data(null)
+                        .build());
     }
 
     /**
-     * @Valid bean-validation failures on @RequestBody. Returns the project's
-     * standard ApiResult envelope with field-level messages in data — same
-     * shape as the matching handler in user-service / seat-service /
-     * booking-service / event-service / payment-service so the frontend has
-     * one render path for validation errors across the API.
-     *
-     * <p>Previously returned a raw Map with a top-level "fields" key — that
-     * worked but differed from every other service. data: { field → msg }
-     * is now the canonical shape.
+     * @Valid bean-validation failures on @RequestBody. ApiResult with field-level
+     * messages in {@code data} — same shape as the matching handler in
+     * user-service / seat-service / booking-service / event-service /
+     * payment-service so the frontend has one render path for validation errors.
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<com.innbucks.loyaltyservice.dto.ApiResult<Map<String, String>>> handle(
-            MethodArgumentNotValidException ex) {
+    public ResponseEntity<ApiResult<Map<String, String>>> handle(MethodArgumentNotValidException ex) {
         Map<String, String> fields = new java.util.LinkedHashMap<>();
         for (var fe : ex.getBindingResult().getFieldErrors()) {
             fields.putIfAbsent(fe.getField(),
@@ -75,7 +77,7 @@ public class GlobalExceptionHandler {
         }
         log.warn("Validation failed fields={}", fields);
         return ResponseEntity.badRequest().body(
-                com.innbucks.loyaltyservice.dto.ApiResult.<Map<String, String>>builder()
+                ApiResult.<Map<String, String>>builder()
                         .code("400 BAD_REQUEST")
                         .message("Validation failed")
                         .data(fields)
@@ -91,17 +93,12 @@ public class GlobalExceptionHandler {
      * own / library code.
      */
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<Map<String, Object>> handle(ResponseStatusException ex) {
+    public ResponseEntity<ApiResult<Void>> handle(ResponseStatusException ex) {
         HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
         if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
         String reason = ex.getReason() == null ? status.getReasonPhrase() : ex.getReason();
         log.warn("ResponseStatusException status={} reason={}", status.value(), reason);
-        return ResponseEntity.status(status).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", status.value(),
-                "code", status.name(),
-                "message", reason
-        ));
+        return ResponseEntity.status(status).body(ApiResult.error(status, reason));
     }
 
     /**
@@ -112,14 +109,10 @@ public class GlobalExceptionHandler {
      * it and return a clean generic message.
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<Map<String, Object>> handle(HttpMessageNotReadableException ex) {
+    public ResponseEntity<ApiResult<Void>> handle(HttpMessageNotReadableException ex) {
         log.warn("Malformed request body: {}", ex.getMostSpecificCause().getMessage());
-        return ResponseEntity.badRequest().body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 400,
-                "code", "BAD_REQUEST",
-                "message", "Malformed or unreadable request body."
-        ));
+        return ResponseEntity.badRequest()
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Malformed or unreadable request body."));
     }
 
     /**
@@ -128,17 +121,13 @@ public class GlobalExceptionHandler {
      * catch-all and surfaces as a 500. A missing route is a client error → 404.
      */
     @ExceptionHandler(NoResourceFoundException.class)
-    public ResponseEntity<Map<String, Object>> handle(NoResourceFoundException ex) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 404,
-                "code", "NOT_FOUND",
-                "message", "The requested resource was not found."
-        ));
+    public ResponseEntity<ApiResult<Void>> handle(NoResourceFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResult.error(HttpStatus.NOT_FOUND, "The requested resource was not found."));
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> handle(Exception ex) {
+    public ResponseEntity<ApiResult<Void>> handle(Exception ex) {
         // Don't swallow the cause: a 500 with an opaque body is hard enough to
         // diagnose in prod without the stack trace also being missing from the
         // logs. The response stays generic so we don't leak internals; the log
@@ -153,11 +142,8 @@ public class GlobalExceptionHandler {
         // Removed: an accidental IAE now falls through to here and produces
         // the same sanitised 500 a NullPointerException would.
         log.error("Unhandled exception bubbled to GlobalExceptionHandler", ex);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 500,
-                "code", "INTERNAL",
-                "message", "Something went wrong on our end. Please try again."
-        ));
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResult.error(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Something went wrong on our end. Please try again."));
     }
 }

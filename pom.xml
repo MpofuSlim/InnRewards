@@ -67,7 +67,7 @@
              json/docker/prod, the service emits one JSON object per log line
              with traceId pulled out of MDC as a typed field; locally the default
              Boot pattern is kept so console output stays readable. -->
-        <logstash.encoder.version>8.0</logstash.encoder.version>
+        <logstash.encoder.version>9.0</logstash.encoder.version>
         <!-- Sentry SDK 8.x supports Spring Boot 3+ / Jakarta. The logback
              appender auto-promotes ERROR-level log events to Sentry with the
              active MDC (traceId/spanId/correlationId) attached. -->

@@ -79,7 +79,12 @@ class EmailNotificationClientContractTest {
                 .withHeader("X-Api-Key", equalTo(API_KEY))
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
                 .withRequestBody(matchingJsonPath("$.subject", equalTo("InnBucks loyalty invoice INV-1")))
-                .withRequestBody(matchingJsonPath("$.message", equalTo("Amount due: USD 12.50")))
+                // The caller's body is carried verbatim, then the standard
+                // InnBucks footer is appended (email channel only). Assert both
+                // so a regression that drops the body OR the footer fails here.
+                .withRequestBody(matchingJsonPath("$.message", containing("Amount due: USD 12.50")))
+                .withRequestBody(matchingJsonPath("$.message", containing("The InnBucks Team")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme")))
                 .withRequestBody(matchingJsonPath("$.destinationEmail", equalTo("merchant@example.com")))
                 .withRequestBody(matchingJsonPath("$.reference", equalTo("INV-1"))));
     }

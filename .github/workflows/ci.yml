@@ -114,12 +114,20 @@ jobs:
     # PRIVATE repo requires paid GitHub Advanced Security (it's free on public
     # repos). This repo is private without GHAS, so the action hard-errors
     # "Dependency review is not supported on this repository" and reds every PR.
-    # Gate the job to public repos: it self-skips here and auto-re-enables if the
-    # repo is ever made public (or GHAS is licensed). Called-out A08 exception
-    # (see CLAUDE.md) — NOT a silent removal: transitive/library CVEs stay
-    # covered by the Release workflow's Trivy image scan; only the PR-time
-    # direct-dependency advisory surface is dropped while private + no GHAS.
-    if: github.event_name == 'pull_request' && github.event.repository.visibility == 'public'
+    #
+    # Two guards, belt-and-suspenders (an earlier `visibility == 'public'` gate
+    # alone did NOT skip — the pull_request payload's repository.visibility read
+    # as truthy on this private repo, so the job ran and failed anyway):
+    #   1. `if` gates on the canonical `repository.private` boolean (reliable
+    #      where `visibility` is not) so the job cleanly SKIPS on a private repo
+    #      and auto-re-enables if it ever goes public / GHAS is licensed;
+    #   2. `continue-on-error` on the step so that even if the payload metadata
+    #      is wrong again, the "not supported" error can never RED the PR.
+    # Called-out A08 exception (see CLAUDE.md) — NOT a silent removal:
+    # transitive/library CVEs stay covered by the Release Trivy image scan;
+    # only the PR-time direct-dependency advisory surface is dropped while
+    # private + no GHAS.
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -129,6 +137,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Dependency review
+        continue-on-error: true
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high

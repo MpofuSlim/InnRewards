@@ -69,9 +69,11 @@ public class EmailNotificationClient {
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("subject", subject);
-        // Close every email with the standard InnBucks sign-off + contact +
-        // Deposit-Protection disclosure (email channel only — see EmailSignature).
-        payload.put("message", EmailSignature.appendTo(message));
+        // Branded HTML (default — the gateway renders the message field as HTML)
+        // or, as a rollback, plain text closed with the standard footer.
+        payload.put("message", properties.isHtmlEnabled()
+                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
+                : EmailSignature.appendTo(message));
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
 

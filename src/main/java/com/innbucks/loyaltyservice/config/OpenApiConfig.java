@@ -4,13 +4,16 @@ import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.parameters.HeaderParameter;
+import io.swagger.v3.oas.models.parameters.Parameter;
 import io.swagger.v3.oas.models.media.StringSchema;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
+import org.springdoc.core.customizers.OperationCustomizer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.bind.annotation.RequestMapping;
 
 import java.util.List;
 
@@ -85,5 +88,55 @@ public class OpenApiConfig {
                                         .description("Tenant short code — required on every tenant-scoped endpoint (alternative to X-Tenant-Id).")
                                         .required(false)
                                         .schema(new StringSchema())));
+    }
+
+    /**
+     * Attaches the {@code X-Tenant-Id} / {@code X-Tenant-Code} header
+     * parameters (defined as reusable components above) to every tenant-scoped
+     * operation, so Swagger UI renders actual input fields for them. Before
+     * this, the components existed but were never referenced — the description
+     * SAID "requires X-Tenant-Id" while the Try-it-out form gave you nowhere to
+     * type it, making tenant-scoped endpoints untestable from the UI.
+     *
+     * <p>Skipped (no tenant header field rendered):
+     * <ul>
+     *   <li>{@code /loyalty/internal/**} — S2S endpoints gated by
+     *       X-Internal-Token, not a tenant header;</li>
+     *   <li>operations marked public with an empty method-level
+     *       {@code @SecurityRequirements} (e.g. guest-checkout) — the tenant
+     *       comes from the resource itself;</li>
+     *   <li>{@code TenantController} — tenant discovery/creation is what you
+     *       call BEFORE you have a tenant to scope by;</li>
+     *   <li>operations that already declare an X-Tenant-Id parameter
+     *       explicitly (no duplicates).</li>
+     * </ul>
+     */
+    @Bean
+    public OperationCustomizer tenantHeaderOperationCustomizer() {
+        return (operation, handlerMethod) -> {
+            Class<?> controller = handlerMethod.getBeanType();
+            if ("TenantController".equals(controller.getSimpleName())) {
+                return operation;
+            }
+            RequestMapping classMapping = controller.getAnnotation(RequestMapping.class);
+            if (classMapping != null && classMapping.value().length > 0
+                    && classMapping.value()[0].startsWith("/loyalty/internal")) {
+                return operation;
+            }
+            io.swagger.v3.oas.annotations.security.SecurityRequirements publicMarker =
+                    handlerMethod.getMethodAnnotation(
+                            io.swagger.v3.oas.annotations.security.SecurityRequirements.class);
+            if (publicMarker != null && publicMarker.value().length == 0) {
+                return operation;
+            }
+            boolean alreadyDeclared = operation.getParameters() != null
+                    && operation.getParameters().stream()
+                            .anyMatch(p -> "X-Tenant-Id".equals(p.getName()));
+            if (!alreadyDeclared) {
+                operation.addParametersItem(new Parameter().$ref("#/components/parameters/X-Tenant-Id"));
+                operation.addParametersItem(new Parameter().$ref("#/components/parameters/X-Tenant-Code"));
+            }
+            return operation;
+        };
     }
 }

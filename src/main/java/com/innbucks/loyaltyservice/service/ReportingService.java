@@ -11,6 +11,7 @@ import com.innbucks.loyaltyservice.entity.Invoice;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
+import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherRedemption;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
@@ -210,13 +211,21 @@ public class ReportingService {
             case WEEKLY -> LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY);
             case MONTHLY -> LocalDate.now().withDayOfMonth(1).plusMonths(1);
         };
-        BigDecimal estimatedInvoice = m == null ? BigDecimal.ZERO
-                : issuedVouchers.stream()
-                        .map(v -> MerchantFeeCalculator.feeForIssued(m, v))
-                        .reduce(BigDecimal.ZERO, BigDecimal::add)
-                  .add(redeemedVouchers.stream()
-                        .map(v -> MerchantFeeCalculator.feeForRedeemed(m, v))
-                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+        // Fee schedule resolved the same way the invoice run resolves it (V29:
+        // merchant rule -> merchant record -> global rule), so the estimate and
+        // the eventual bill can't drift apart.
+        BigDecimal estimatedInvoice = BigDecimal.ZERO;
+        if (m != null) {
+            EffectiveFees fees = EffectiveFees.resolve(m,
+                    rules.findApplicable(m.getTenantId(), merchantId, TransactionType.PURCHASE),
+                    Instant.now());
+            estimatedInvoice = issuedVouchers.stream()
+                    .map(fees::feeForIssued)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .add(redeemedVouchers.stream()
+                            .map(fees::feeForRedeemed)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add));
+        }
         return new Dtos.MerchantDashboard(merchantId, today, issued, redeemed,
                 pointsIssued, pointsRedeemed, fraudAlerts, nextInvoice, estimatedInvoice);
     }
@@ -365,11 +374,13 @@ public class ReportingService {
             case MONTHLY -> today.withDayOfMonth(1);
         };
         Instant periodFrom = currentPeriodStart.atStartOfDay().toInstant(ZoneOffset.UTC);
+        EffectiveFees fees = EffectiveFees.resolve(m,
+                EffectiveFees.applicable(tenantRules, id, TransactionType.PURCHASE), now);
         BigDecimal estimatedFees = vouchers.findByMerchantIdAndIssuedAtBetween(id, periodFrom, now).stream()
-                .map(v -> MerchantFeeCalculator.feeForIssued(m, v))
+                .map(fees::feeForIssued)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .add(vouchers.findByMerchantIdAndRedeemedAtBetween(id, periodFrom, now).stream()
-                        .map(v -> MerchantFeeCalculator.feeForRedeemed(m, v))
+                        .map(fees::feeForRedeemed)
                         .reduce(BigDecimal.ZERO, BigDecimal::add));
         Dtos.InvoiceSummary invoiceSummary = new Dtos.InvoiceSummary(
                 invoiceRows.size(), pending, paid, overdue, cancelled,

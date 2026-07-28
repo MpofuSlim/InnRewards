@@ -160,4 +160,136 @@ class RulesEngineTest {
         var eval = engine.evaluate(tenantId, UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("9999"));
         assertThat(eval.points()).isEqualByComparingTo("10");
     }
+
+    // ── Earning floor (V29: min_transaction_amount) ──────────────────────────
+
+    @Test
+    void spendBelowTheFloorEarnsNothing() {
+        LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
+        CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+
+        LoyaltyRule rule = new LoyaltyRule();
+        rule.setId(UUID.randomUUID());
+        rule.setTenantId(tenantId);
+        rule.setTransactionType(TransactionType.PURCHASE);
+        rule.setPointsPerUnit(BigDecimal.ONE);
+        rule.setMultiplier(BigDecimal.ONE);
+        rule.setPocket("MAIN");
+        rule.setMinTransactionAmount(new BigDecimal("5.00"));
+
+        Mockito.when(rules.findApplicable(Mockito.any(), Mockito.any(), Mockito.eq(TransactionType.PURCHASE)))
+                .thenReturn(List.of(rule));
+        Mockito.when(campaigns.findActive(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(List.of());
+
+        RulesEngine engine = new RulesEngine(rules, campaigns);
+
+        var below = engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("4.99"));
+        assertThat(below.points()).isEqualByComparingTo("0");
+        // The rule that floored the transaction is still stamped, so the ledger
+        // records WHY nothing was earned.
+        assertThat(below.ruleId()).isEqualTo(rule.getId());
+        assertThat(below.pocket()).isEqualTo("MAIN");
+
+        // Exactly at the floor earns — the comparison is "strictly below".
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("5.00")).points())
+                .isEqualByComparingTo("5");
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("20")).points())
+                .isEqualByComparingTo("20");
+    }
+
+    @Test
+    void merchantRuleWithoutAFloorInheritsTheGlobalOne() {
+        LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
+        CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+
+        LoyaltyRule global = new LoyaltyRule();
+        global.setTenantId(tenantId);
+        global.setTransactionType(TransactionType.PURCHASE);
+        global.setPointsPerUnit(BigDecimal.ONE);
+        global.setMultiplier(BigDecimal.ONE);
+        global.setMinTransactionAmount(new BigDecimal("10.00"));
+
+        LoyaltyRule merchantRule = new LoyaltyRule();
+        merchantRule.setId(UUID.randomUUID());
+        merchantRule.setTenantId(tenantId);
+        merchantRule.setMerchantId(merchantId);
+        merchantRule.setTransactionType(TransactionType.PURCHASE);
+        merchantRule.setPointsPerUnit(new BigDecimal("2"));
+        merchantRule.setMultiplier(BigDecimal.ONE);
+        // no floor of its own -> inherits the tenant standard
+
+        Mockito.when(rules.findApplicable(tenantId, merchantId, TransactionType.PURCHASE))
+                .thenReturn(List.of(merchantRule, global));
+        Mockito.when(campaigns.findActive(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(List.of());
+
+        RulesEngine engine = new RulesEngine(rules, campaigns);
+
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("9.99")).points())
+                .isEqualByComparingTo("0");
+        // Above the inherited floor, the merchant's own 2 points/unit applies.
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("10")).points())
+                .isEqualByComparingTo("20");
+    }
+
+    @Test
+    void merchantFloorOverridesTheGlobalFloor() {
+        LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
+        CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+
+        LoyaltyRule global = new LoyaltyRule();
+        global.setTenantId(tenantId);
+        global.setTransactionType(TransactionType.PURCHASE);
+        global.setPointsPerUnit(BigDecimal.ONE);
+        global.setMultiplier(BigDecimal.ONE);
+        global.setMinTransactionAmount(new BigDecimal("10.00"));
+
+        LoyaltyRule merchantRule = new LoyaltyRule();
+        merchantRule.setTenantId(tenantId);
+        merchantRule.setMerchantId(merchantId);
+        merchantRule.setTransactionType(TransactionType.PURCHASE);
+        merchantRule.setPointsPerUnit(BigDecimal.ONE);
+        merchantRule.setMultiplier(BigDecimal.ONE);
+        merchantRule.setMinTransactionAmount(new BigDecimal("1.00"));
+
+        Mockito.when(rules.findApplicable(tenantId, merchantId, TransactionType.PURCHASE))
+                .thenReturn(List.of(merchantRule, global));
+        Mockito.when(campaigns.findActive(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(List.of());
+
+        RulesEngine engine = new RulesEngine(rules, campaigns);
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("5")).points())
+                .isEqualByComparingTo("5");
+    }
+
+    @Test
+    void noFloorConfiguredAnywhereEarnsAsBefore() {
+        LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
+        CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
+        UUID tenantId = UUID.randomUUID();
+
+        LoyaltyRule rule = new LoyaltyRule();
+        rule.setTenantId(tenantId);
+        rule.setTransactionType(TransactionType.PURCHASE);
+        rule.setPointsPerUnit(BigDecimal.ONE);
+        rule.setMultiplier(BigDecimal.ONE);
+
+        Mockito.when(rules.findApplicable(Mockito.any(), Mockito.any(), Mockito.eq(TransactionType.PURCHASE)))
+                .thenReturn(List.of(rule));
+        Mockito.when(campaigns.findActive(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(List.of());
+
+        RulesEngine engine = new RulesEngine(rules, campaigns);
+        assertThat(engine.evaluate(tenantId, UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("0.01"))
+                .points()).isEqualByComparingTo("0");   // floors on rounding, not on a minimum
+        assertThat(engine.evaluate(tenantId, UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("3"))
+                .points()).isEqualByComparingTo("3");
+    }
 }

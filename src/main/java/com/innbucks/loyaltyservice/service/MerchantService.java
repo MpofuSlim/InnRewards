@@ -84,7 +84,7 @@ public class MerchantService {
         m.setFeeRedeemedPercentage(nz(f.percentage()));
     }
 
-    private static void validate(Dtos.FeeModel f, String fieldName) {
+    static void validate(Dtos.FeeModel f, String fieldName) {
         BigDecimal fixed = nz(f.fixed());
         BigDecimal pct   = nz(f.percentage());
         if (fixed.signum() < 0 || pct.signum() < 0) {
@@ -117,7 +117,7 @@ public class MerchantService {
         }
     }
 
-    private static BigDecimal nz(BigDecimal b) {
+    static BigDecimal nz(BigDecimal b) {
         return b == null ? BigDecimal.ZERO : b;
     }
 

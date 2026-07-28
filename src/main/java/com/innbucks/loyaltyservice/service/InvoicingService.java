@@ -6,8 +6,10 @@ import com.innbucks.loyaltyservice.entity.Invoice;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.integration.InvoiceGeneratedEvent;
 import com.innbucks.loyaltyservice.repository.InvoiceRepository;
+import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
@@ -35,6 +37,7 @@ public class InvoicingService {
     private final MerchantRepository merchants;
     private final LoyaltyTransactionRepository transactions;
     private final VoucherRepository vouchers;
+    private final LoyaltyRuleRepository rules;
     private final LoyaltyProperties props;
     private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
     private final ApplicationEventPublisher events;
@@ -42,6 +45,7 @@ public class InvoicingService {
     public InvoicingService(InvoiceRepository invoices, MerchantRepository merchants,
                             LoyaltyTransactionRepository transactions,
                             VoucherRepository vouchers,
+                            LoyaltyRuleRepository rules,
                             LoyaltyProperties props,
                             com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
                             ApplicationEventPublisher events) {
@@ -49,6 +53,7 @@ public class InvoicingService {
         this.merchants = merchants;
         this.transactions = transactions;
         this.vouchers = vouchers;
+        this.rules = rules;
         this.props = props;
         this.merchantAuthz = merchantAuthz;
         this.events = events;
@@ -84,11 +89,18 @@ public class InvoicingService {
         long voucherIssued   = issuedVouchers.size();
         long voucherRedeemed = redeemedVouchers.size();
 
+        // V29: fee schedules now also live on loyalty rules (global rule = the
+        // tenant standard, merchant rule = override) — EffectiveFees resolves
+        // the precedence once per merchant; MerchantFeeCalculator still does
+        // the row arithmetic.
+        EffectiveFees fees = EffectiveFees.resolve(m,
+                rules.findApplicable(m.getTenantId(), m.getId(), TransactionType.PURCHASE),
+                Instant.now());
         BigDecimal feeVoucherIssued = issuedVouchers.stream()
-                .map(v -> MerchantFeeCalculator.feeForIssued(m, v))
+                .map(fees::feeForIssued)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal feeVoucherRedeemed = redeemedVouchers.stream()
-                .map(v -> MerchantFeeCalculator.feeForRedeemed(m, v))
+                .map(fees::feeForRedeemed)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal total = feeVoucherIssued.add(feeVoucherRedeemed);
 

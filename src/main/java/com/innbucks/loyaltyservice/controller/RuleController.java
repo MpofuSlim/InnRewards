@@ -54,7 +54,17 @@ public class RuleController {
                           "the tenant that has no override. MERCHANT_ADMIN tokens carry the merchantId " +
                           "they manage, creating a **merchant-specific override** that supersedes the " +
                           "global rule for that outlet only. `pointsPerUnit` × `multiplier` is applied to " +
-                          "the transaction amount; `maxPointsPerTxn` caps the result if set.")
+                          "the transaction amount; `maxPointsPerTxn` caps the result if set.\n\n" +
+                          "**Earning floor** — `minTransactionAmount` is the amount a transaction must reach " +
+                          "before it earns anything: spend below it and the transaction still completes but " +
+                          "awards ZERO points. A merchant rule that omits it inherits the global rule's floor.\n\n" +
+                          "**Fee schedules** — `feeIssued` / `feeRedeemed` are the per-voucher fees the merchant " +
+                          "is billed. Set on a GLOBAL rule they are the tenant STANDARD every merchant inherits; " +
+                          "set on a merchant rule they override the standard for that merchant only. Each side " +
+                          "resolves independently in this order: **merchant rule → the merchant record's own " +
+                          "fee (only when it was set explicitly at onboarding) → global rule → no fee**. A " +
+                          "merchant that should pay nothing while a tenant standard exists gets a merchant rule " +
+                          "with `FIXED` / `fixed: 0`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -75,6 +85,13 @@ public class RuleController {
                                         "multiplier": 1.0000,
                                         "maxPointsPerTxn": 500.0000,
                                         "pocket": "MAIN",
+                                        "minTransactionAmount": 5.00,
+                                        "feeIssuedType": "FIXED_PLUS_PERCENTAGE",
+                                        "feeIssuedFixed": 0.300000,
+                                        "feeIssuedPercentage": 2.5000,
+                                        "feeRedeemedType": "FIXED",
+                                        "feeRedeemedFixed": 0.150000,
+                                        "feeRedeemedPercentage": 0.0000,
                                         "active": true,
                                         "startsAt": "2026-05-04T00:00:00Z",
                                         "endsAt": null,
@@ -86,17 +103,34 @@ public class RuleController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation failure (missing required fields)",
+                    description = "Validation failure (missing required fields, negative earning floor, "
+                            + "or an inconsistent fee schedule)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "transactionType: must not be null",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Missing field", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "transactionType: must not be null",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Negative earning floor", value = """
+                                            {
+                                              "code": "MIN_TXN_NEGATIVE",
+                                              "message": "minTransactionAmount must be >= 0",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Inconsistent fee schedule", value = """
+                                            {
+                                              "code": "FEE_BOTH_REQUIRED",
+                                              "message": "feeIssued: type=FIXED_PLUS_PERCENTAGE requires both fixed > 0 and percentage > 0",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             )
     })
@@ -113,7 +147,9 @@ public class RuleController {
     @GetMapping
     @Operation(summary = "List rules for the current tenant",
             description = "Returns every rule belonging to the tenant — both merchant-specific and tenant-wide. " +
-                          "Useful to audit which earn rates are currently in effect.")
+                          "Useful to audit which earn rates, earning floors and voucher fees are currently in " +
+                          "effect. A null fee field means \"not configured at this level\": the merchant " +
+                          "inherits the tenant-wide (global) rule's value.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -136,6 +172,13 @@ public class RuleController {
                                             "multiplier": 1.0000,
                                             "maxPointsPerTxn": 500.0000,
                                             "pocket": "MAIN",
+                                            "minTransactionAmount": 5.00,
+                                            "feeIssuedType": "FIXED_PLUS_PERCENTAGE",
+                                            "feeIssuedFixed": 0.300000,
+                                            "feeIssuedPercentage": 2.5000,
+                                            "feeRedeemedType": "FIXED",
+                                            "feeRedeemedFixed": 0.150000,
+                                            "feeRedeemedPercentage": 0.0000,
                                             "active": true,
                                             "startsAt": "2026-05-01T00:00:00Z",
                                             "endsAt": null,
@@ -150,6 +193,13 @@ public class RuleController {
                                             "multiplier": 1.0000,
                                             "maxPointsPerTxn": null,
                                             "pocket": "MAIN",
+                                            "minTransactionAmount": 2.00,
+                                            "feeIssuedType": "PERCENTAGE",
+                                            "feeIssuedFixed": 0.000000,
+                                            "feeIssuedPercentage": 1.5000,
+                                            "feeRedeemedType": null,
+                                            "feeRedeemedFixed": null,
+                                            "feeRedeemedPercentage": null,
                                             "active": true,
                                             "startsAt": null,
                                             "endsAt": null,
@@ -202,6 +252,13 @@ public class RuleController {
                                         "multiplier": 1.0000,
                                         "maxPointsPerTxn": 500.0000,
                                         "pocket": "MAIN",
+                                        "minTransactionAmount": 5.00,
+                                        "feeIssuedType": "FIXED_PLUS_PERCENTAGE",
+                                        "feeIssuedFixed": 0.300000,
+                                        "feeIssuedPercentage": 2.5000,
+                                        "feeRedeemedType": "FIXED",
+                                        "feeRedeemedFixed": 0.150000,
+                                        "feeRedeemedPercentage": 0.0000,
                                         "active": false,
                                         "startsAt": "2026-05-01T00:00:00Z",
                                         "endsAt": "2026-05-04T15:30:00Z",

@@ -135,7 +135,62 @@ public class RuleController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<LoyaltyRule>> create(@Valid @RequestBody Dtos.RuleRequest req) {
+    public ResponseEntity<ApiResult<LoyaltyRule>> create(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Tenant standard (global rule)",
+                                    description = "No merchantId — the baseline every merchant inherits: 1 point per "
+                                            + "unit, no points under $5, and the standard voucher fees.",
+                                    value = """
+                                    {
+                                      "transactionType": "PURCHASE",
+                                      "pointsPerUnit": 1,
+                                      "multiplier": 1,
+                                      "pocket": "MAIN",
+                                      "minTransactionAmount": 5.00,
+                                      "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                      "feeRedeemed": { "type": "FIXED",                 "fixed": 0.15, "percentage": 0 }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Merchant override",
+                                    description = "Beats the global rule for this merchant only. Omitted fields keep "
+                                            + "inheriting the standard — here the redeem fee does.",
+                                    value = """
+                                    {
+                                      "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                      "transactionType": "PURCHASE",
+                                      "pointsPerUnit": 2,
+                                      "multiplier": 1,
+                                      "maxPointsPerTxn": 500,
+                                      "pocket": "MAIN",
+                                      "minTransactionAmount": 2.00,
+                                      "feeIssued": { "type": "PERCENTAGE", "fixed": 0, "percentage": 1 }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Merchant pays no voucher fees",
+                                    description = "The explicit opt-out: FIXED 0 on a merchant rule beats a tenant "
+                                            + "standard, where omitting the field would inherit it.",
+                                    value = """
+                                    {
+                                      "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                      "transactionType": "PURCHASE",
+                                      "pointsPerUnit": 1,
+                                      "feeIssued":   { "type": "FIXED", "fixed": 0, "percentage": 0 },
+                                      "feeRedeemed": { "type": "FIXED", "fixed": 0, "percentage": 0 }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Earn rate only",
+                                    description = "Pre-V29 shape — no floor, no fees, everything inherited.",
+                                    value = """
+                                    {
+                                      "transactionType": "QR_PAY",
+                                      "pointsPerUnit": 2,
+                                      "multiplier": 1
+                                    }
+                                    """)
+                    }))
+            @Valid @RequestBody Dtos.RuleRequest req) {
         // Rule creation accepts a null merchantId (= tenant-wide global rule), so we
         // use the non-throwing helper instead of resolveMerchantId.
         UUID merchantId = CallerDetails.merchantIdOrBody(req.merchantId());

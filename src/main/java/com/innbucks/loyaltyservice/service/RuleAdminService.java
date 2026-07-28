@@ -33,6 +33,20 @@ public class RuleAdminService {
 
     public LoyaltyRule createRule(UUID tenantId, UUID merchantId, Dtos.RuleRequest req) {
         if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
+        return rules.save(build(tenantId, merchantId, req));
+    }
+
+    /**
+     * Map a {@link Dtos.RuleRequest} onto a new (unsaved) rule, applying every
+     * default and validation the create endpoint applies.
+     *
+     * <p>Static and caller-agnostic so merchant onboarding can create a
+     * merchant's rule from its {@code loyaltyOverride} block without depending
+     * on this bean — {@code RuleAdminService} already depends on
+     * {@code MerchantService}, so a bean-level edge back would be a cycle.
+     * Callers are responsible for the merchant-exists check and the save.
+     */
+    static LoyaltyRule build(UUID tenantId, UUID merchantId, Dtos.RuleRequest req) {
         LoyaltyRule r = new LoyaltyRule();
         r.setTenantId(tenantId);
         r.setMerchantId(merchantId);
@@ -63,7 +77,7 @@ public class RuleAdminService {
             r.setFeeRedeemedFixed(MerchantService.nz(req.feeRedeemed().fixed()));
             r.setFeeRedeemedPercentage(MerchantService.nz(req.feeRedeemed().percentage()));
         }
-        return rules.save(r);
+        return r;
     }
 
     @Transactional(readOnly = true)

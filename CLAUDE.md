@@ -112,6 +112,17 @@ All V29 columns are nullable — null means "not configured at this level,
 inherit" — so existing rows keep their pre-V29 behaviour. `Dtos.RuleRequest`
 keeps a back-compat 8-arg constructor for callers built against the old shape.
 
+**Onboarding shortcut:** `POST /loyalty/merchants` takes an optional
+`loyaltyOverride` block (earn rate, floor, both fee schedules) and creates the
+merchant's own rule in the same transaction, so an operator never onboards a
+merchant and then forgets to POST its rule. The override lands in
+`loyalty_rules` — NOT on new merchant columns — so there stays one home for rule
+config and the existing merchant-beats-global precedence applies unchanged.
+`MerchantService` injects `LoyaltyRuleRepository` (not `RuleAdminService`, which
+already depends on `MerchantService` — that edge back would be a bean cycle) and
+shares the mapping/validation through the static `RuleAdminService.build`. Add
+new rule fields there, not in a second mapper.
+
 ## Cryptography & key management (OWASP A02)
 
 At-rest sensitive fields are keyed/hashed, never plaintext: loyalty voucher/QR

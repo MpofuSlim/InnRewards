@@ -54,6 +54,41 @@ public class Dtos {
             BigDecimal percentage
     ) {}
 
+    /**
+     * Optional at-onboarding override of the tenant's standard loyalty terms.
+     * Supplying it creates the merchant's own {@code loyalty_rules} row in the
+     * same call, so an operator never has to onboard the merchant and then
+     * remember to POST a rule. Every field is optional — omit one and the
+     * merchant keeps inheriting the tenant's global rule for it.
+     */
+    public record MerchantRuleOverride(
+            @Schema(example = "PURCHASE", nullable = true,
+                    description = "Transaction type the override applies to. Defaults to PURCHASE — the type "
+                            + "the earning floor and the voucher fee schedules ride on.")
+            TransactionType transactionType,
+            @Schema(example = "2.000000", nullable = true,
+                    description = "Points awarded per 1 unit of currency spent at this merchant. Defaults to 1.")
+            BigDecimal pointsPerUnit,
+            @Schema(example = "1.0000", nullable = true, description = "Multiplier applied on top of pointsPerUnit. Defaults to 1.")
+            BigDecimal multiplier,
+            @Schema(example = "500.0000", nullable = true, description = "Cap on points earnable in a single transaction. Null = uncapped.")
+            BigDecimal maxPointsPerTxn,
+            @Schema(example = "MAIN", nullable = true, description = "Target wallet pocket for earned points.")
+            String pocket,
+            @Schema(example = "5.00", nullable = true,
+                    description = "Earning floor for this merchant: a transaction strictly below it earns ZERO "
+                            + "points. Omit to inherit the tenant's global floor.")
+            BigDecimal minTransactionAmount,
+            @Schema(nullable = true,
+                    description = "Voucher-issue fee for this merchant, overriding the tenant standard. "
+                            + "Omit to inherit the global rule's fee.")
+            FeeModel feeIssued,
+            @Schema(nullable = true,
+                    description = "Voucher-redeem fee for this merchant, overriding the tenant standard. "
+                            + "Omit to inherit the global rule's fee.")
+            FeeModel feeRedeemed
+    ) {}
+
     public record MerchantRequest(
             @Schema(example = "Innbucks Westgate", description = "Display name of the merchant outlet (e.g. \"Chicken Inn Westgate\").")
             @NotBlank @Size(max = 200) String name,
@@ -65,16 +100,37 @@ public class Dtos {
                     description = "Billing period the merchant is invoiced on. Defaults to MONTHLY when omitted. "
                             + "DAILY bills each completed day, WEEKLY the previous Mon–Sun week, MONTHLY the previous calendar month.")
             Merchant.BillingCycle billingCycle,
-            @Schema(description = "Fee charged to the merchant when a voucher is issued. Defaults to FIXED 0 (no fee) if omitted.", nullable = true)
+            @Schema(description = "Legacy per-merchant voucher-issue fee written straight onto the merchant record. "
+                    + "Prefer loyaltyOverride.feeIssued, which puts the fee on the merchant's rule alongside the "
+                    + "rest of its terms. Omit both to inherit the tenant standard.", nullable = true)
             FeeModel feeIssued,
-            @Schema(description = "Fee charged to the merchant when a voucher is redeemed. Defaults to FIXED 0 (no fee) if omitted.", nullable = true)
-            FeeModel feeRedeemed
-    ) {}
+            @Schema(description = "Legacy per-merchant voucher-redeem fee written straight onto the merchant record. "
+                    + "Prefer loyaltyOverride.feeRedeemed.", nullable = true)
+            FeeModel feeRedeemed,
+            @Schema(nullable = true,
+                    description = "Override the tenant's standard loyalty terms for this merchant at onboarding. "
+                            + "Creates the merchant's own rule in the same call. Omit it entirely and the merchant "
+                            + "inherits every global rule as-is.")
+            MerchantRuleOverride loyaltyOverride
+    ) {
+        /** Back-compat constructor for the pre-override shape. */
+        public MerchantRequest(String name, String category, String currency,
+                               Merchant.BillingCycle billingCycle,
+                               FeeModel feeIssued, FeeModel feeRedeemed) {
+            this(name, category, currency, billingCycle, feeIssued, feeRedeemed, null);
+        }
+    }
 
     public record MerchantResponse(UUID id, UUID tenantId, String name, String category,
                                    String currency, Merchant.BillingCycle billingCycle,
                                    Merchant.Status status,
-                                   FeeModel feeIssued, FeeModel feeRedeemed) {}
+                                   FeeModel feeIssued, FeeModel feeRedeemed,
+                                   @Schema(nullable = true,
+                                           description = "Id of the merchant-specific rule created from loyaltyOverride "
+                                                   + "at onboarding. Null when the merchant was onboarded without an "
+                                                   + "override; not populated on list/get — read GET /loyalty/rules for "
+                                                   + "the merchant's current rules.")
+                                   UUID loyaltyRuleId) {}
 
     // A Shop is a physical outlet under a Merchant. e.g. "Pizza Inn Avondale"
     // and "Pizza Inn Westgate" are two shops under the "Pizza Inn" merchant.

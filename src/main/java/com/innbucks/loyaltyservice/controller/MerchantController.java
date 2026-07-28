@@ -63,7 +63,16 @@ public class MerchantController {
                           "Omit `feeIssued` / `feeRedeemed` (or supply `null`) to default that side to " +
                           "FIXED 0 (no fee). The fee model is applied per voucher at invoice generation " +
                           "time, so a billing period accumulates as the sum of per-voucher fees, not a " +
-                          "single count × flat.")
+                          "single count × flat.\n\n" +
+                          "**Overriding the tenant standard at onboarding.** By default a new merchant " +
+                          "inherits every global (tenant-wide) rule: the earn rate, the earning floor " +
+                          "(`minTransactionAmount`) and both voucher fee schedules. Supply the optional " +
+                          "`loyaltyOverride` block to give this merchant its own terms in the same call — " +
+                          "it creates the merchant's rule under the covers, so there is no second POST to " +
+                          "`/loyalty/rules`. Every field inside it is optional and inherits the global rule " +
+                          "when omitted, so you can override just the floor, just a fee, or the whole set. " +
+                          "The created rule's id comes back as `loyaltyRuleId`; change the terms later with " +
+                          "`POST /loyalty/rules` (and deactivate the old rule).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -84,7 +93,8 @@ public class MerchantController {
                                         "billingCycle": "MONTHLY",
                                         "status": "ACTIVE",
                                         "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
-                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
+                                        "loyaltyRuleId": "d6e2f4a5-4567-8901-bcde-f01234567890"
                                       }
                                     }
                                     """)
@@ -122,7 +132,62 @@ public class MerchantController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.MerchantResponse>> create(@Valid @RequestBody Dtos.MerchantRequest req) {
+    public ResponseEntity<ApiResult<Dtos.MerchantResponse>> create(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Inherit the tenant standard",
+                                    description = "No fees, no override — the merchant follows every global rule.",
+                                    value = """
+                                    {
+                                      "name": "Innbucks Westgate",
+                                      "category": "Coffee",
+                                      "currency": "USD",
+                                      "billingCycle": "MONTHLY"
+                                    }
+                                    """),
+                            @ExampleObject(name = "Override the tenant standard",
+                                    description = "Own earn rate, own earning floor, own voucher fees — created as "
+                                            + "the merchant's rule in this same call.",
+                                    value = """
+                                    {
+                                      "name": "Innbucks Westgate",
+                                      "category": "Coffee",
+                                      "currency": "USD",
+                                      "billingCycle": "MONTHLY",
+                                      "loyaltyOverride": {
+                                        "transactionType": "PURCHASE",
+                                        "pointsPerUnit": 2,
+                                        "multiplier": 1,
+                                        "maxPointsPerTxn": 500,
+                                        "pocket": "MAIN",
+                                        "minTransactionAmount": 5.00,
+                                        "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.15, "percentage": 0 }
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Override only the earning floor",
+                                    description = "Everything else — earn rate and both fees — keeps inheriting the "
+                                            + "tenant standard.",
+                                    value = """
+                                    {
+                                      "name": "Innbucks Avondale",
+                                      "category": "Coffee",
+                                      "loyaltyOverride": { "minTransactionAmount": 2.00 }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Legacy: fee on the merchant record",
+                                    description = "Pre-override shape, still accepted. Prefer loyaltyOverride.",
+                                    value = """
+                                    {
+                                      "name": "Innbucks Borrowdale",
+                                      "feeIssued":   { "type": "PERCENTAGE", "fixed": 0, "percentage": 2.5 },
+                                      "feeRedeemed": { "type": "FIXED",      "fixed": 0.10, "percentage": 0 }
+                                    }
+                                    """)
+                    }))
+            @Valid @RequestBody Dtos.MerchantRequest req) {
         Dtos.MerchantResponse data = merchants.create(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Merchant created successfully", data));

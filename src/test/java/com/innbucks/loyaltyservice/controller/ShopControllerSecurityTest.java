@@ -120,53 +120,25 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
 
     // --- Guest checkout (earn for an unregistered customer) ---------------------
 
-    // Guest-checkout is PUBLIC again (current product decision): an anonymous
-    // walk-in caller — no bearer token, no X-Tenant-Id — earns points. The
-    // tenant/merchant come from the shop itself.
+    // A04/A01: guest-checkout is merchant-authenticated again. No bearer token -> 401.
     @Test
-    void guest_checkout_without_token_isPublic_returns_201() throws Exception {
-        UUID merchantId = UUID.randomUUID();
-        UUID tenantId = UUID.randomUUID();
-        UUID shopId = UUID.randomUUID();
-        UUID loyaltyUserId = UUID.randomUUID();
-
-        when(shopService.getById(eq(shopId)))
-                .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
-                        "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
-        when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))
-                .thenReturn(new ShopCheckoutService.Result(shopId, merchantId, tenantId, loyaltyUserId,
-                        new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("10.0000"),
-                        new BigDecimal("10.0000"), UUID.randomUUID(), null));
-
-        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
+    void guest_checkout_without_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_GUEST_BODY))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.loyaltyUserId").value(loyaltyUserId.toString()));
+                .andExpect(status().isUnauthorized());
     }
 
-    // A token WITHOUT merchant scope (e.g. a CUSTOMER) is treated like the
-    // anonymous public caller — no ownership guard to trip, checkout succeeds.
+    // A04/A01: a CUSTOMER is not a shop operator -> 403 (guest-checkout is limited
+    // to SHOP_USER/SHOP_ADMIN/MERCHANT_ADMIN/SUPER_ADMIN).
     @Test
-    void customer_token_guest_checkout_isPublic_returns_201() throws Exception {
-        UUID merchantId = UUID.randomUUID();
-        UUID tenantId = UUID.randomUUID();
-        UUID shopId = UUID.randomUUID();
-
-        when(shopService.getById(eq(shopId)))
-                .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
-                        "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
-        when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))
-                .thenReturn(new ShopCheckoutService.Result(shopId, merchantId, tenantId, UUID.randomUUID(),
-                        new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("10.0000"),
-                        new BigDecimal("10.0000"), UUID.randomUUID(), null));
-
+    void customer_cannot_guest_checkout_returns_403() throws Exception {
         String customerToken = jwt("customer@test.local", "CUSTOMER");
-        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
                         .header("Authorization", bearer(customerToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_GUEST_BODY))
-                .andExpect(status().isCreated());
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -181,7 +153,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         UUID otherMerchant = UUID.randomUUID();
         UUID shopId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.get(any(), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, otherMerchant,
                         "Someone Else's Shop", "addr", Shop.Status.ACTIVE, Instant.now()));
 
@@ -204,7 +176,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         UUID loyaltyUserId = UUID.randomUUID();
         UUID purchaseTxnId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.get(any(), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
                         "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
         // Cash-only: the controller MUST pass ZERO points so the guest earns but
@@ -244,7 +216,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         UUID shopId = UUID.randomUUID();
         UUID loyaltyUserId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.get(any(), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
                         "Pizza Inn Westgate", "addr", Shop.Status.ACTIVE, Instant.now()));
         when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))

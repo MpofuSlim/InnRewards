@@ -91,15 +91,19 @@ public class ShopService {
     }
 
     /**
-     * Loads a shop by id WITHOUT a tenant scope. Used by the public
-     * guest-checkout endpoint (TODO(demo)) where an anonymous caller has no
-     * tenant membership to scope by — the shop carries its own tenantId and
-     * merchantId, which the downstream checkout resolves from the shop. Uses the
-     * same {@link #toResponse(Shop)} mapper as {@link #get(UUID, UUID)}.
+     * Tenant-scoped shop load for the public guest-checkout endpoint. The
+     * caller is anonymous (no membership to verify — the tenant id comes from
+     * the X-Tenant-Id header alone), so a shop that exists under a DIFFERENT
+     * tenant is reported as 404, not 403: unlike {@link #requireShop}'s
+     * CROSS_TENANT answer to authenticated members, an anonymous caller must
+     * not be able to confirm a shop id exists outside the tenant it named.
      */
     @Transactional(readOnly = true)
-    public Dtos.ShopResponse getById(UUID shopId) {
+    public Dtos.ShopResponse getById(UUID tenantId, UUID shopId) {
         Shop s = shops.findById(shopId).orElseThrow(() -> LoyaltyException.notFound("shop"));
+        if (!s.getTenantId().equals(tenantId)) {
+            throw LoyaltyException.notFound("shop");
+        }
         return toResponse(s);
     }
 

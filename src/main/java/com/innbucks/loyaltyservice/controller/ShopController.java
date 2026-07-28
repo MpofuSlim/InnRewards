@@ -498,16 +498,31 @@ public class ShopController {
     @PostMapping("/{shopId}/guest-checkout")
     @io.swagger.v3.oas.annotations.security.SecurityRequirements({})
     @Operation(summary = "Guest checkout — earn points for an unregistered customer",
-            description = "PUBLIC (no bearer token, no X-Tenant-Id) — current product decision so a " +
-                          "walk-in flow can earn without an operator login; the gateway's per-IP rate " +
-                          "limit is the throttle. The shop earns loyalty points on a cash amount for a " +
-                          "walk-in customer identified by phone number only — no account required. The " +
-                          "customer RECEIVES points immediately (a PENDING wallet is auto-created and keyed " +
-                          "to the phone) but cannot REDEEM until they register, at which point the accrued " +
-                          "balance becomes spendable. Cash-only: no points are burned. The merchant AND " +
-                          "tenant are derived from the shop, so neither is in the request. When a " +
-                          "merchant-scoped bearer token IS presented (SHOP_ADMIN/SHOP_USER), the ownership " +
-                          "guard still fires: they may only earn through their own merchant's shops.")
+            description = "PUBLIC (no bearer token) — current product decision so a walk-in flow can " +
+                          "earn without an operator login; the gateway's per-IP rate limit is the " +
+                          "throttle. The `X-Tenant-Id` (or `X-Tenant-Code`) header IS required: it names " +
+                          "the tenant the shop must belong to, and a shop outside that tenant answers " +
+                          "404. No tenant MEMBERSHIP is checked (anonymous callers have none). The shop " +
+                          "earns loyalty points on a cash amount for a walk-in customer identified by " +
+                          "phone number only — no account required. The customer RECEIVES points " +
+                          "immediately (a PENDING wallet is auto-created and keyed to the phone) but " +
+                          "cannot REDEEM until they register, at which point the accrued balance becomes " +
+                          "spendable. Cash-only: no points are burned. The merchant is derived from the " +
+                          "shop, so it is not in the request. When a merchant-scoped bearer token IS " +
+                          "presented (SHOP_ADMIN/SHOP_USER), the ownership guard still fires: they may " +
+                          "only earn through their own merchant's shops.",
+            // Declared explicitly so Swagger UI shows the header input: TenantContext
+            // reads these straight off the HttpServletRequest, so springdoc can't
+            // infer them from the method signature.
+            parameters = {
+                    @Parameter(name = "X-Tenant-Id", in = io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER,
+                            description = "Tenant UUID the shop belongs to. Required unless X-Tenant-Code is sent.",
+                            schema = @Schema(type = "string", format = "uuid",
+                                    example = "3fa85f64-5717-4562-b3fc-2c963f66afa6")),
+                    @Parameter(name = "X-Tenant-Code", in = io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER,
+                            description = "Tenant short code — alternative to X-Tenant-Id.",
+                            schema = @Schema(type = "string"))
+            })
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -530,15 +545,24 @@ public class ShopController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure (blank phoneNumber / non-positive cashAmount)",
+                    description = "Validation failure (blank phoneNumber / non-positive cashAmount) or " +
+                                  "missing/malformed tenant header",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Validation error", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "cashAmount: must be greater than 0",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "cashAmount: must be greater than 0",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing tenant header", value = """
+                                            {
+                                              "code": "MISSING_TENANT",
+                                              "message": "X-Tenant-Id or X-Tenant-Code header is required",
+                                              "data": null
+                                            }
+                                            """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "An authenticated merchant-scoped caller tried a shop outside their merchant",
                     content = @Content(mediaType = "application/json",
@@ -550,18 +574,22 @@ public class ShopController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "No shop with that id")
+                    description = "Unknown tenant, or no shop with that id in the named tenant " +
+                                  "(a shop under a different tenant deliberately answers 404, not 403)")
     })
     public ResponseEntity<ApiResult<Dtos.GuestShopCheckoutResponse>> guestCheckout(
             @PathVariable UUID shopId,
             @Valid @RequestBody Dtos.GuestShopCheckoutRequest req) {
         // PUBLIC endpoint (SecurityConfig permitAll; current product decision):
-        // an anonymous walk-in caller has no tenant membership to scope by, so
-        // the shop is loaded by id alone — it carries its own tenantId and
-        // merchantId, which the checkout resolves from the shop. Abuse surface
-        // is bounded by the gateway's per-IP rate limit and by points being
-        // unredeemable until the phone's owner registers.
-        Dtos.ShopResponse shop = shops.getById(shopId);
+        // no bearer token, but the X-Tenant-Id header IS required. Anonymous
+        // callers hold no tenant_members row, so this resolves the header
+        // WITHOUT the membership check and instead scopes the shop load by the
+        // named tenant — the caller must know the (tenant, shop) pair, not just
+        // a shop id. Abuse surface is further bounded by the gateway's per-IP
+        // rate limit and by points being unredeemable until the phone's owner
+        // registers.
+        UUID tenantId = tenantContext.requireTenantIdWithoutMembership();
+        Dtos.ShopResponse shop = shops.getById(tenantId, shopId);
         // The merchant is taken from the SHOP itself (a shop belongs to exactly one
         // merchant). Ownership guard: a merchant-scoped caller (SHOP_ADMIN/SHOP_USER
         // carry merchantId in the JWT) may only earn through its OWN shops.

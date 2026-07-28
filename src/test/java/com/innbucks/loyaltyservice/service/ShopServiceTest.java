@@ -79,6 +79,56 @@ class ShopServiceTest {
         verify(shops, never()).save(any(Shop.class));
     }
 
+    // --- Guest-checkout shop load (tenant-scoped, anonymous caller) -----------
+
+    @Test
+    void getById_shopInNamedTenant_returnsShop() {
+        ShopRepository shops = mock(ShopRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        Shop s = new Shop();
+        s.setId(shopId);
+        s.setTenantId(tenantId);
+        s.setName("Pizza Inn Avondale");
+        when(shops.findById(shopId)).thenReturn(java.util.Optional.of(s));
+
+        Dtos.ShopResponse resp = newService(shops, mock(MerchantService.class)).getById(tenantId, shopId);
+
+        assertThat(resp.id()).isEqualTo(shopId);
+        assertThat(resp.tenantId()).isEqualTo(tenantId);
+    }
+
+    @Test
+    void getById_shopUnderDifferentTenant_throwsNotFound_not403() {
+        // Anonymous guest-checkout callers must not learn a shop id exists in
+        // another tenant — cross-tenant answers 404, unlike requireShop's 403.
+        ShopRepository shops = mock(ShopRepository.class);
+        UUID shopId = UUID.randomUUID();
+        Shop s = new Shop();
+        s.setId(shopId);
+        s.setTenantId(UUID.randomUUID());
+        when(shops.findById(shopId)).thenReturn(java.util.Optional.of(s));
+
+        assertThatThrownBy(() -> newService(shops, mock(MerchantService.class))
+                .getById(UUID.randomUUID(), shopId))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
+                        .isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void getById_missingShop_throwsNotFound() {
+        ShopRepository shops = mock(ShopRepository.class);
+        UUID shopId = UUID.randomUUID();
+        when(shops.findById(shopId)).thenReturn(java.util.Optional.empty());
+
+        assertThatThrownBy(() -> newService(shops, mock(MerchantService.class))
+                .getById(UUID.randomUUID(), shopId))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
+                        .isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND));
+    }
+
     // --- Bulk upload ----------------------------------------------------------
 
     @Test

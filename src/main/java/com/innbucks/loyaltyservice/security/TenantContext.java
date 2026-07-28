@@ -62,6 +62,23 @@ public class TenantContext {
         return requireTenant().getId();
     }
 
+    /**
+     * Resolves the tenant from the X-Tenant-Id / X-Tenant-Code headers WITHOUT
+     * the membership check — for the public guest-checkout endpoint, whose
+     * callers are anonymous and so can never hold a {@code tenant_members} row.
+     * The header must still name a real tenant (404 otherwise); the caller is
+     * responsible for scoping every subsequent lookup by the returned id.
+     *
+     * <p>Deliberately does NOT populate {@link #cached}: that field is only
+     * ever read by {@link #requireTenant()}, which treats a cache hit as
+     * "membership already verified" — seeding it here would let an
+     * unauthenticated resolution skip the membership check for any later
+     * authenticated use in the same request.
+     */
+    public UUID requireTenantIdWithoutMembership() {
+        return resolveFromHeaders().getId();
+    }
+
     private Tenant resolveFromHeaders() {
         String idHeader = request.getHeader("X-Tenant-Id");
         if (idHeader != null && !idHeader.isBlank()) {

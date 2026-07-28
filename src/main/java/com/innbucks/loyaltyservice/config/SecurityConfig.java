@@ -63,11 +63,13 @@ public class SecurityConfig {
                         .requestMatchers("/loyalty/internal/**").permitAll()
                         // Guest checkout is deliberately PUBLIC (current product
                         // decision): a walk-in flow earns points with no operator
-                        // login. Abuse surface is bounded by the gateway's per-IP
-                        // rate limit and by points being unredeemable until the
-                        // phone's owner registers. The controller still enforces
-                        // the merchant-ownership guard when a merchant-scoped
-                        // token IS presented.
+                        // login. It still requires the X-Tenant-Id header (no
+                        // membership check — the shop load is scoped to the named
+                        // tenant instead). Abuse surface is bounded by the
+                        // gateway's per-IP rate limit and by points being
+                        // unredeemable until the phone's owner registers. The
+                        // controller still enforces the merchant-ownership guard
+                        // when a merchant-scoped token IS presented.
                         .requestMatchers(HttpMethod.POST, "/loyalty/shops/*/guest-checkout").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who

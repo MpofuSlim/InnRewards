@@ -120,17 +120,18 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
 
     // --- Guest checkout (earn for an unregistered customer) ---------------------
 
-    // Guest-checkout is PUBLIC again (current product decision): an anonymous
-    // walk-in caller — no bearer token, no X-Tenant-Id — earns points. The
-    // tenant/merchant come from the shop itself.
+    // Guest-checkout is PUBLIC (current product decision): an anonymous walk-in
+    // caller — no bearer token — earns points. The X-Tenant-Id header IS
+    // required (no membership check for anonymous callers); the shop must
+    // belong to the named tenant, and the merchant comes from the shop itself.
     @Test
     void guest_checkout_without_token_isPublic_returns_201() throws Exception {
         UUID merchantId = UUID.randomUUID();
-        UUID tenantId = UUID.randomUUID();
+        UUID tenantId = newTenant("shop-guest-anon");
         UUID shopId = UUID.randomUUID();
         UUID loyaltyUserId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.getById(eq(tenantId), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
                         "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
         when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))
@@ -139,6 +140,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
                         new BigDecimal("10.0000"), UUID.randomUUID(), null));
 
         mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
+                        .header("X-Tenant-Id", tenantId.toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_GUEST_BODY))
                 .andExpect(status().isCreated())
@@ -150,10 +152,10 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
     @Test
     void customer_token_guest_checkout_isPublic_returns_201() throws Exception {
         UUID merchantId = UUID.randomUUID();
-        UUID tenantId = UUID.randomUUID();
+        UUID tenantId = newTenant("shop-guest-cust");
         UUID shopId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.getById(eq(tenantId), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
                         "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
         when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))
@@ -164,9 +166,41 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         String customerToken = jwt("customer@test.local", "CUSTOMER");
         mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
                         .header("Authorization", bearer(customerToken))
+                        .header("X-Tenant-Id", tenantId.toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_GUEST_BODY))
                 .andExpect(status().isCreated());
+    }
+
+    // The tenant header is the one thing an anonymous caller MUST supply —
+    // without it the request never reaches the shop lookup.
+    @Test
+    void guest_checkout_without_tenant_header_returns_400() throws Exception {
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("MISSING_TENANT"));
+    }
+
+    @Test
+    void guest_checkout_with_malformed_tenant_header_returns_400() throws Exception {
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
+                        .header("X-Tenant-Id", "not-a-uuid")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_TENANT"));
+    }
+
+    @Test
+    void guest_checkout_with_unknown_tenant_returns_404() throws Exception {
+        // Valid UUID, but no such tenant row — rejected before the shop lookup.
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
+                        .header("X-Tenant-Id", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -181,7 +215,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         UUID otherMerchant = UUID.randomUUID();
         UUID shopId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.getById(eq(tenantId), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, otherMerchant,
                         "Someone Else's Shop", "addr", Shop.Status.ACTIVE, Instant.now()));
 
@@ -204,7 +238,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         UUID loyaltyUserId = UUID.randomUUID();
         UUID purchaseTxnId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.getById(eq(tenantId), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
                         "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
         // Cash-only: the controller MUST pass ZERO points so the guest earns but
@@ -244,7 +278,7 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         UUID shopId = UUID.randomUUID();
         UUID loyaltyUserId = UUID.randomUUID();
 
-        when(shopService.getById(eq(shopId)))
+        when(shopService.getById(eq(tenantId), eq(shopId)))
                 .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
                         "Pizza Inn Westgate", "addr", Shop.Status.ACTIVE, Instant.now()));
         when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))

@@ -2,10 +2,14 @@ package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.client.UserServiceClient;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -51,7 +55,7 @@ class MerchantServiceTest {
                 .thenReturn(new PageImpl<>(List.of(merchant(UUID.randomUUID(), tenantId, "A"))));
 
         Page<Dtos.MerchantResponse> result =
-                new MerchantService(repo, userClient).list(tenantId, page);
+                new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class)).list(tenantId, page);
 
         assertThat(result.getContent()).hasSize(1);
         verify(repo).findByTenantId(tenantId, page);
@@ -71,7 +75,7 @@ class MerchantServiceTest {
                 .thenReturn(new PageImpl<>(List.of(merchant(UUID.randomUUID(), tenantId, "Solo"))));
 
         Page<Dtos.MerchantResponse> result =
-                new MerchantService(repo, userClient).list(tenantId, page, true);
+                new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class)).list(tenantId, page, true);
 
         assertThat(result.getContent()).hasSize(1);
         verify(repo).findByTenantId(tenantId, page);
@@ -91,7 +95,7 @@ class MerchantServiceTest {
                 .thenReturn(new PageImpl<>(List.of(merchant(free, tenantId, "Up for grabs"))));
 
         Page<Dtos.MerchantResponse> result =
-                new MerchantService(repo, userClient).list(tenantId, page, true);
+                new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class)).list(tenantId, page, true);
 
         assertThat(result.getContent()).extracting(Dtos.MerchantResponse::id).containsExactly(free);
         verify(repo).findByTenantIdAndIdNotIn(tenantId, Set.of(claimed), page);
@@ -110,13 +114,13 @@ class MerchantServiceTest {
         when(userClient.assignedMerchantIds())
                 .thenThrow(new IllegalStateException("user-service unavailable"));
 
-        assertThatThrownBy(() -> new MerchantService(repo, userClient).list(tenantId, page, true))
+        assertThatThrownBy(() -> new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class)).list(tenantId, page, true))
                 .isInstanceOf(IllegalStateException.class);
         verifyNoInteractions(repo);
     }
 
     private static MerchantService newService(MerchantRepository repo) {
-        return new MerchantService(repo, mock(UserServiceClient.class));
+        return new MerchantService(repo, mock(UserServiceClient.class), mock(LoyaltyRuleRepository.class));
     }
 
     private static Dtos.MerchantRequest req(Dtos.FeeModel issued, Dtos.FeeModel redeemed) {
@@ -139,6 +143,102 @@ class MerchantServiceTest {
         assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0.30");
         assertThat(resp.feeIssued().percentage()).isEqualByComparingTo("2.5");
         assertThat(resp.feeRedeemed().type()).isEqualTo(Merchant.FeeType.FIXED_PLUS_PERCENTAGE);
+    }
+
+    // --- Onboarding override: the merchant's own rule, created in the same call ---
+
+    @Test
+    void create_withoutOverride_createsNoRule() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(), req(null, null));
+
+        // No override -> the merchant simply inherits every global rule.
+        verifyNoInteractions(rules);
+        assertThat(resp.loyaltyRuleId()).isNull();
+    }
+
+    @Test
+    void create_withOverride_createsTheMerchantsOwnRule() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID ruleId = UUID.randomUUID();
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> {
+            Merchant m = inv.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+        when(rules.save(any(LoyaltyRule.class))).thenAnswer(inv -> {
+            LoyaltyRule r = inv.getArgument(0);
+            r.setId(ruleId);
+            return r;
+        });
+
+        Dtos.MerchantRuleOverride override = new Dtos.MerchantRuleOverride(
+                null,                                    // transactionType defaults to PURCHASE
+                new java.math.BigDecimal("2"),           // 2 points per unit
+                null, null, "MAIN",
+                new java.math.BigDecimal("5.00"),        // earning floor
+                new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE, java.math.BigDecimal.ZERO, new java.math.BigDecimal("1")),
+                null);                                   // redeem fee keeps inheriting
+
+        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(tenantId, new Dtos.MerchantRequest("Cafe A", "F&B", "USD",
+                        Merchant.BillingCycle.MONTHLY, null, null, override));
+
+        assertThat(resp.loyaltyRuleId()).isEqualTo(ruleId);
+
+        ArgumentCaptor<LoyaltyRule> saved = ArgumentCaptor.forClass(LoyaltyRule.class);
+        verify(rules).save(saved.capture());
+        LoyaltyRule r = saved.getValue();
+        assertThat(r.getTenantId()).isEqualTo(tenantId);
+        assertThat(r.getMerchantId()).isEqualTo(resp.id());          // merchant-specific, so it beats the global rule
+        assertThat(r.getTransactionType()).isEqualTo(TransactionType.PURCHASE);
+        assertThat(r.getPointsPerUnit()).isEqualByComparingTo("2");
+        assertThat(r.getMultiplier()).isEqualByComparingTo("1");     // defaulted
+        assertThat(r.getMinTransactionAmount()).isEqualByComparingTo("5.00");
+        assertThat(r.getFeeIssuedType()).isEqualTo(Merchant.FeeType.PERCENTAGE);
+        assertThat(r.getFeeIssuedPercentage()).isEqualByComparingTo("1");
+        // Omitted side stays null = inherit the tenant standard, NOT zero.
+        assertThat(r.getFeeRedeemedType()).isNull();
+    }
+
+    @Test
+    void create_overrideWithBadFee_rejectsBeforeSavingTheRule() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Dtos.MerchantRuleOverride bad = new Dtos.MerchantRuleOverride(
+                null, null, null, null, null, null,
+                new Dtos.FeeModel(Merchant.FeeType.FIXED,
+                        new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5")),
+                null);
+
+        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, bad)))
+                .hasMessageContaining("FIXED")
+                .hasMessageContaining("percentage");
+        verify(rules, never()).save(any());
+    }
+
+    @Test
+    void create_overrideWithNegativeFloor_isRejected() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Dtos.MerchantRuleOverride bad = new Dtos.MerchantRuleOverride(
+                null, null, null, null, null, new java.math.BigDecimal("-1"), null, null);
+
+        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, bad)))
+                .hasMessageContaining("minTransactionAmount");
+        verify(rules, never()).save(any());
     }
 
     @Test

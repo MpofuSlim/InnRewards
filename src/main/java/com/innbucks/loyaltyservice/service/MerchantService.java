@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.service;
 import com.innbucks.loyaltyservice.client.UserServiceClient;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
@@ -24,14 +25,22 @@ public class MerchantService {
 
     private final MerchantRepository merchants;
     private final UserServiceClient userServiceClient;
+    // Onboarding may create the merchant's own rule from its loyaltyOverride
+    // block. The repository (not RuleAdminService) is injected deliberately:
+    // RuleAdminService depends on THIS bean, so the reverse edge would be a
+    // circular reference. The mapping/validation is still shared, via
+    // RuleAdminService.build.
+    private final com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules;
 
     @org.springframework.beans.factory.annotation.Value("${innbucks.currency:USD}")
     private String cellCurrency;
 
 
-    public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient) {
+    public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient,
+                           com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules) {
         this.merchants = merchants;
         this.userServiceClient = userServiceClient;
+        this.rules = rules;
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
@@ -57,7 +66,39 @@ public class MerchantService {
         applyFeeRedeemed(m, req.feeRedeemed());
         m.setAdminEmail(callerEmail());
         merchants.save(m);
-        return toResponse(m);
+        return toResponse(m, createOverrideRule(tenantId, m.getId(), req.loyaltyOverride()));
+    }
+
+    /**
+     * Turn the onboarding {@code loyaltyOverride} block into the merchant's own
+     * rule, so an operator sets the merchant's terms in ONE call instead of
+     * onboarding it and then remembering to POST a rule.
+     *
+     * <p>The override lands in {@code loyalty_rules}, not on extra merchant
+     * columns, so there stays exactly one home for rule config and the existing
+     * merchant-beats-global precedence applies unchanged. Omitted fields stay
+     * null = "inherit the tenant's global rule for this field".
+     *
+     * @return the new rule's id, or null when no override was supplied.
+     */
+    private UUID createOverrideRule(UUID tenantId, UUID merchantId, Dtos.MerchantRuleOverride o) {
+        if (o == null) {
+            return null;
+        }
+        Dtos.RuleRequest asRule = new Dtos.RuleRequest(
+                merchantId,
+                o.transactionType() == null ? TransactionType.PURCHASE : o.transactionType(),
+                o.pointsPerUnit() == null ? BigDecimal.ONE : o.pointsPerUnit(),
+                o.multiplier(),
+                o.maxPointsPerTxn(),
+                o.pocket(),
+                null, null,                       // no start/end window at onboarding
+                o.minTransactionAmount(),
+                o.feeIssued(),
+                o.feeRedeemed());
+        // The merchant was just created in this transaction, so the
+        // requireMerchant round-trip createRule would do is redundant here.
+        return rules.save(RuleAdminService.build(tenantId, merchantId, asRule)).getId();
     }
 
     /**
@@ -180,9 +221,15 @@ public class MerchantService {
     }
 
     public static Dtos.MerchantResponse toResponse(Merchant m) {
+        return toResponse(m, null);
+    }
+
+    /** {@code loyaltyRuleId} is only known on the onboarding path — see the DTO. */
+    public static Dtos.MerchantResponse toResponse(Merchant m, UUID loyaltyRuleId) {
         return new Dtos.MerchantResponse(m.getId(), m.getTenantId(), m.getName(),
                 m.getCategory(), m.getCurrency(), m.getBillingCycle(), m.getStatus(),
                 new Dtos.FeeModel(m.getFeeIssuedType(),   m.getFeeIssuedFixed(),   m.getFeeIssuedPercentage()),
-                new Dtos.FeeModel(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage()));
+                new Dtos.FeeModel(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage()),
+                loyaltyRuleId);
     }
 }

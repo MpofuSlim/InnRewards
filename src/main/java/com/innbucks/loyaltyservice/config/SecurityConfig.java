@@ -61,14 +61,6 @@ public class SecurityConfig {
                         // rather than the user JWT. The JwtFilter also skips this
                         // path so no Authentication is required.
                         .requestMatchers("/loyalty/internal/**").permitAll()
-                        // Guest checkout is deliberately PUBLIC (current product
-                        // decision): a walk-in flow earns points with no operator
-                        // login. Abuse surface is bounded by the gateway's per-IP
-                        // rate limit and by points being unredeemable until the
-                        // phone's owner registers. The controller still enforces
-                        // the merchant-ownership guard when a merchant-scoped
-                        // token IS presented.
-                        .requestMatchers(HttpMethod.POST, "/loyalty/shops/*/guest-checkout").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who
                         // can call what; TenantContext enforces tenant ownership

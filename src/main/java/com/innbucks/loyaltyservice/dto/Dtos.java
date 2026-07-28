@@ -214,8 +214,28 @@ public class Dtos {
             @Schema(example = "2026-06-01T00:00:00Z", nullable = true, description = "When this rule becomes active (null = immediately).")
             Instant startsAt,
             @Schema(example = "2026-12-31T23:59:59Z", nullable = true, description = "When this rule expires (null = no expiry).")
-            Instant endsAt
-    ) {}
+            Instant endsAt,
+            @Schema(example = "5.00", nullable = true,
+                    description = "Earning floor: a transaction amount strictly below this earns ZERO points. " +
+                                  "Null on a merchant rule inherits the global rule's floor; null everywhere = no floor.")
+            BigDecimal minTransactionAmount,
+            @Schema(nullable = true,
+                    description = "Voucher-issue fee schedule at rule level. On a GLOBAL rule this is the tenant " +
+                                  "STANDARD every merchant inherits; on a merchant rule it overrides the standard " +
+                                  "for that merchant. Null = not configured at this level (inherit).")
+            FeeModel feeIssued,
+            @Schema(nullable = true,
+                    description = "Voucher-redeem fee schedule at rule level — same inheritance as feeIssued.")
+            FeeModel feeRedeemed
+    ) {
+        /** Back-compat constructor for the pre-V29 shape (no floor, no rule-level fees). */
+        public RuleRequest(UUID merchantId, TransactionType transactionType, BigDecimal pointsPerUnit,
+                           BigDecimal multiplier, BigDecimal maxPointsPerTxn, String pocket,
+                           Instant startsAt, Instant endsAt) {
+            this(merchantId, transactionType, pointsPerUnit, multiplier, maxPointsPerTxn,
+                    pocket, startsAt, endsAt, null, null, null);
+        }
+    }
 
     // merchantId follows the same rules as RuleRequest.
     public record CampaignRequest(

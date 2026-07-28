@@ -75,8 +75,42 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V27**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V29**; never edit an applied
 migration — add the next version.
+
+## Rules are the tenant STANDARD — earning floor + voucher fees (V29)
+
+`loyalty_rules` carries the commercial config, with the same two-tier
+inheritance the earn rate has always used (global rule = tenant template,
+merchant rule = override, `LoyaltyRuleRepository.findApplicable` returns
+merchant-specific first):
+
+- **`min_transaction_amount`** — the earning floor. A transaction strictly
+  below it completes normally but earns **ZERO** points. `RulesEngine` reads
+  the chosen rule's floor and falls back to the first time-valid GLOBAL rule's
+  floor when the merchant rule leaves it null, so a merchant inherits the
+  standard without restating it. The floored evaluation still carries the
+  `ruleId` + pocket so the ledger records *why* nothing was earned.
+- **`fee_issued_*` / `fee_redeemed_*`** — the per-voucher fees the merchant is
+  billed, same shapes as the merchant-record columns (percentage is
+  whole-number, 2.5 = 2.5%). Resolution lives in **one** place,
+  `EffectiveFees.resolve`, and each side resolves independently:
+  **merchant rule → merchant record (only when explicitly configured, i.e.
+  anything other than the onboarding default FIXED 0/0) → global rule → no
+  fee**. A merchant that must pay nothing while a tenant standard exists sets a
+  merchant rule with `FIXED` / fixed 0.
+
+Every fee call-site goes through `EffectiveFees` (invoicing and both reporting
+estimates) so the previewed figure and the eventual bill can't drift —
+`MerchantFeeCalculator` still owns the arithmetic but must not be called
+directly with a `Merchant` for new billing code. Fee lookups ride the
+**PURCHASE** applicable-rule list; when a report already holds every tenant
+rule, use `EffectiveFees.applicable(...)` (the in-memory twin of the repository
+query) rather than re-querying per merchant.
+
+All V29 columns are nullable — null means "not configured at this level,
+inherit" — so existing rows keep their pre-V29 behaviour. `Dtos.RuleRequest`
+keeps a back-compat 8-arg constructor for callers built against the old shape.
 
 ## Cryptography & key management (OWASP A02)
 

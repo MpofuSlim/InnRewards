@@ -43,6 +43,26 @@ public class RuleAdminService {
         r.setPocket(req.pocket());
         r.setStartsAt(req.startsAt());
         r.setEndsAt(req.endsAt());
+        // V29: earning floor + rule-level fee schedules (tenant standard on a
+        // global rule; per-merchant override on a merchant rule). Same
+        // validation as merchant onboarding; null = not configured -> inherit.
+        if (req.minTransactionAmount() != null && req.minTransactionAmount().signum() < 0) {
+            throw com.innbucks.loyaltyservice.exception.LoyaltyException.badRequest(
+                    "MIN_TXN_NEGATIVE", "minTransactionAmount must be >= 0");
+        }
+        r.setMinTransactionAmount(req.minTransactionAmount());
+        if (req.feeIssued() != null && req.feeIssued().type() != null) {
+            MerchantService.validate(req.feeIssued(), "feeIssued");
+            r.setFeeIssuedType(req.feeIssued().type());
+            r.setFeeIssuedFixed(MerchantService.nz(req.feeIssued().fixed()));
+            r.setFeeIssuedPercentage(MerchantService.nz(req.feeIssued().percentage()));
+        }
+        if (req.feeRedeemed() != null && req.feeRedeemed().type() != null) {
+            MerchantService.validate(req.feeRedeemed(), "feeRedeemed");
+            r.setFeeRedeemedType(req.feeRedeemed().type());
+            r.setFeeRedeemedFixed(MerchantService.nz(req.feeRedeemed().fixed()));
+            r.setFeeRedeemedPercentage(MerchantService.nz(req.feeRedeemed().percentage()));
+        }
         return rules.save(r);
     }
 

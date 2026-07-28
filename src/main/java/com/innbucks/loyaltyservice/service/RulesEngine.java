@@ -39,13 +39,32 @@ public class RulesEngine {
 
         var applicable = rules.findApplicable(tenantId, merchantId, type);
         Instant now = Instant.now();
-        LoyaltyRule rule = applicable.stream()
+        var timeValid = applicable.stream()
                 .filter(r -> r.getStartsAt() == null || !now.isBefore(r.getStartsAt()))
                 .filter(r -> r.getEndsAt() == null || !now.isAfter(r.getEndsAt()))
-                .findFirst().orElse(null);
+                .toList();
+        LoyaltyRule rule = timeValid.stream().findFirst().orElse(null);
 
         if (rule == null) {
             return new Evaluation(BigDecimal.ZERO, null, null, null);
+        }
+
+        // Earning floor (V29): a transaction strictly below the effective
+        // minimum earns ZERO points. Per-field inheritance: the chosen rule's
+        // floor wins; a merchant rule with a null floor inherits the first
+        // time-valid GLOBAL rule's floor (matching "merchant inherits the
+        // global standard unless it overrides"). The transaction itself still
+        // proceeds — only the earn leg is floored, and we keep the ruleId for
+        // the audit trail.
+        BigDecimal minTxn = rule.getMinTransactionAmount() != null
+                ? rule.getMinTransactionAmount()
+                : timeValid.stream()
+                        .filter(r -> r.getMerchantId() == null)
+                        .map(LoyaltyRule::getMinTransactionAmount)
+                        .filter(java.util.Objects::nonNull)
+                        .findFirst().orElse(null);
+        if (minTxn != null && amount.compareTo(minTxn) < 0) {
+            return new Evaluation(BigDecimal.ZERO, rule.getId(), null, rule.getPocket());
         }
 
         BigDecimal points = amount.multiply(rule.getPointsPerUnit())

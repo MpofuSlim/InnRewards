@@ -41,16 +41,36 @@ public class EmailNotificationClient {
     private final RestClient restClient;
     private final InnbucksNotifyProperties properties;
     private final ObjectMapper objectMapper;
+    /**
+     * Own-SMTP delivery (SES). The notification API composes the From header
+     * itself, so mail sent through it arrives as "Online Banking" whatever
+     * product it belongs to; only this path can present our own name.
+     */
+    private final SmtpEmailSender smtpEmailSender;
 
     private String accessToken;
     private Instant tokenExpiry = Instant.EPOCH;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
                                    InnbucksNotifyProperties properties,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   SmtpEmailSender smtpEmailSender) {
         this.restClient = restClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.smtpEmailSender = smtpEmailSender;
+    }
+
+    /**
+     * Notification-API-only constructor: no SMTP sender, so {@link #sendEmail}
+     * always takes the API path. Used by the contract test, which pins that
+     * wire format.
+     */
+    public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
+                                   InnbucksNotifyProperties properties,
+                                   ObjectMapper objectMapper) {
+        this(restClient, properties, objectMapper, null);
     }
 
     public void sendEmail(String to, String subject, String message, String reference) {
@@ -63,10 +83,35 @@ public class EmailNotificationClient {
         if (message == null || message.isBlank()) {
             throw new NotificationDeliveryException("Email message is blank");
         }
-        requireConfigured();
         String ref = (reference != null && !reference.isBlank())
                 ? reference
                 : "TKT-EMAIL-" + UUID.randomUUID();
+
+        // Rendered once so both delivery paths send byte-identical content.
+        String body = properties.isHtmlEnabled()
+                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
+                : EmailSignature.appendTo(message);
+
+        // Own SMTP first when the cell is configured for it (app.mail.enabled):
+        // the only path where WE compose the From header. The notification API
+        // stays as the fallback, so a broken SES config degrades to the previous
+        // behaviour rather than dropping the message.
+        if (smtpEmailSender != null && smtpEmailSender.isEnabled()) {
+            try {
+                // Raw subject: SES is UTF-8 clean. The transliteration below exists
+                // only for the notification API's charset validator, and applying
+                // it here would needlessly strip colons from our own copy.
+                smtpEmailSender.send(to, subject, body, properties.isHtmlEnabled());
+                log.info("Email delivered via SMTP ref={}", ref);
+                return;
+            } catch (RuntimeException e) {
+                log.warn("SMTP email delivery failed, falling back to the notification API: {}",
+                        e.getMessage());
+            }
+        }
+
+        // Only the API path needs the API's credentials.
+        requireConfigured();
 
         Map<String, Object> payload = new LinkedHashMap<>();
         // The notification API charset-validates the SUBJECT and answers
@@ -83,9 +128,7 @@ public class EmailNotificationClient {
         payload.put("subject", SmsTextSanitizer.toGsmSafe(subject));
         // Branded HTML (default — the gateway renders the message field as HTML)
         // or, as a rollback, plain text closed with the standard footer.
-        payload.put("message", properties.isHtmlEnabled()
-                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
-                : EmailSignature.appendTo(message));
+        payload.put("message", body);
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
 

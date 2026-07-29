@@ -37,35 +37,53 @@ public final class SmsTextSanitizer {
                 .replace("‒", "-").replace("―", "-")   // figure dash / horizontal bar
                 .replace("‘", "'").replace("’", "'")   // curly single quotes / apostrophe
                 .replace("‚", "'").replace("‛", "'")
-                .replace("“", "\"").replace("”", "\"") // curly double quotes
-                .replace("„", "\"")
-                .replace("…", "...")                          // ellipsis
-                .replace(" ", " ")                            // non-breaking space
-                .replace("•", "*").replace("·", ".")    // bullet / middle dot
-                // The gateway rejects "!" outright with 400 "Invalid message" —
-                // proved live 2026-07-29 by bisection: a 160-char message passes,
-                // a 24-char one containing a single "!" is refused, and the same
-                // text with "." instead is accepted. It is valid GSM-7, so this
-                // is a quirk of THIS API, which is exactly what this class exists
-                // to absorb. Every voucher-ready, points-unlocked and expiry
-                // message carried one, so they were all silently failing over to
-                // another channel.
-                .replace("!", ".");
+                // Curly DOUBLE quotes collapse to an apostrophe, not '"' — the
+                // gateway rejects the double-quote character outright.
+                .replace("“", "'").replace("”", "'")
+                .replace("„", "'")
+                .replace("…", "...")                        // ellipsis
+                .replace(" ", " ")                          // non-breaking space
+                // Bullet becomes '-', not '*' — '*' is rejected too.
+                .replace("•", "-").replace("·", ".");
         // Strip diacritics (accented -> base letter) so accented copy degrades to
         // GSM-safe ASCII rather than being replaced wholesale by the net below.
         s = Normalizer.normalize(s, Normalizer.Form.NFKD).replaceAll("\\p{M}+", "");
-        // Final safety net: anything still outside printable ASCII (keep the
-        // whitespace GSM-7 allows: tab / newline / carriage return) becomes '?'.
-        // Iterate by CODE POINT, not char, so a supplementary character (e.g. an
-        // emoji, which is a UTF-16 surrogate pair) collapses to a single '?'
-        // rather than one '?' per surrogate half.
+        // Characters the API refuses with 400 "Invalid message", established by
+        // probing it one character at a time against the live gateway on
+        // 2026-07-29:   !  :  /  ?  "  *  ;
+        // while ( ) - % @ & # ' + . , and alphanumerics are all accepted. They
+        // are ordinary GSM-7 characters, so this is a rule of THIS API. Sentence
+        // enders become '.', the rest a space so words never run together.
+        s = s.replace('!', '.').replace('?', '.').replace(';', '.')
+             .replace(':', ' ').replace('/', ' ').replace('*', ' ').replace('"', '\'');
+        // Final net: anything outside the proven-accepted set becomes a SPACE.
+        // It used to become '?' — which is itself rejected, so the sanitizer
+        // could turn a merely-odd message into a guaranteed 400. Iterate by CODE
+        // POINT so a supplementary character (an emoji, a UTF-16 surrogate pair)
+        // collapses to one space rather than one per surrogate half.
         StringBuilder out = new StringBuilder(s.length());
         for (int i = 0; i < s.length(); ) {
             int cp = s.codePointAt(i);
-            out.append((cp == '\n' || cp == '\r' || cp == '\t' || (cp >= 0x20 && cp <= 0x7E))
-                    ? (char) cp : '?');
+            out.append(accepted(cp) ? (char) cp : ' ');
             i += Character.charCount(cp);
         }
-        return out.toString();
+        // Collapse the runs of spaces the substitutions above can leave behind.
+        return out.toString().replaceAll(" {2,}", " ");
+    }
+
+    /**
+     * The character set this gateway has been observed to accept. Deliberately a
+     * WHITELIST: the rejected set is not documented anywhere, so allowing only
+     * what is proven safe is the only way a character we have never tried can't
+     * fail a send in production.
+     */
+    private static boolean accepted(int cp) {
+        if (cp == '\n' || cp == '\r' || cp == '\t') {
+            return true;
+        }
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9')) {
+            return true;
+        }
+        return " .,()-%@&#'+".indexOf(cp) >= 0;
     }
 }

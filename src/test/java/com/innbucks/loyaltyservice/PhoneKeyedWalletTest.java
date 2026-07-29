@@ -162,7 +162,7 @@ class PhoneKeyedWalletTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("AuthzCafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));

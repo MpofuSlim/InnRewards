@@ -75,7 +75,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V29**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V30**; never edit an applied
 migration — add the next version.
 
 ## Rules are the tenant STANDARD — earning floor + voucher fees (V29)
@@ -111,6 +111,22 @@ query) rather than re-querying per merchant.
 All V29 columns are nullable — null means "not configured at this level,
 inherit" — so existing rows keep their pre-V29 behaviour. `Dtos.RuleRequest`
 keeps a back-compat 8-arg constructor for callers built against the old shape.
+
+**No free merchants (V30).** `POST /loyalty/merchants` REFUSES creation when the
+effective **voucher-issue** fee resolves to zero — nothing on the merchant, none
+on its rule, and no tenant standard — with `MERCHANT_ZERO_ISSUE_FEE`. Issuing is
+the event we bill for, so a zero there means the platform runs that merchant for
+free forever and nothing else ever surfaces it. The **redeem** side may be zero
+freely: billing only issuance is a normal commercial arrangement, so it is
+reported by the audit and never refused. An operator can still onboard an
+unbilled merchant with `waiveFees: true` + a mandatory `waiveFeesReason`, which
+persists to `merchants.fee_waived` / `fee_waived_reason` — that is what makes
+"free on purpose" distinguishable from "free by accident".
+`GET /loyalty/merchants/fee-audit` lists every merchant issuing for free with
+that distinction, resolving all merchants from ONE rule query via
+`EffectiveFees.applicable` rather than an N+1. Pre-V30 rows default to
+`fee_waived = false`, so every merchant already onboarded free shows up as
+unwaived — deliberately, since that backlog is the point.
 
 **Onboarding shortcut:** `POST /loyalty/merchants` takes an optional
 `loyaltyOverride` block (earn rate, floor, both fee schedules) and creates the

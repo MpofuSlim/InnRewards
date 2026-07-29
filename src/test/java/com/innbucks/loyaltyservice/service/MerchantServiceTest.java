@@ -123,9 +123,15 @@ class MerchantServiceTest {
         return new MerchantService(repo, mock(UserServiceClient.class), mock(LoyaltyRuleRepository.class));
     }
 
+    private static final Dtos.FeeModel PRICED =
+            new Dtos.FeeModel(Merchant.FeeType.FIXED, new java.math.BigDecimal("0.25"), java.math.BigDecimal.ZERO);
+
     private static Dtos.MerchantRequest req(Dtos.FeeModel issued, Dtos.FeeModel redeemed) {
+        // Default to a priced issue side: creation is refused outright when the
+        // effective issue fee is zero, so a fee-less request is no longer a
+        // neutral fixture.
         return new Dtos.MerchantRequest("Cafe A", "F&B", "USD",
-                Merchant.BillingCycle.MONTHLY, issued, redeemed);
+                Merchant.BillingCycle.MONTHLY, issued == null ? PRICED : issued, redeemed);
     }
 
     @Test
@@ -156,8 +162,10 @@ class MerchantServiceTest {
         Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules)
                 .create(UUID.randomUUID(), req(null, null));
 
-        // No override -> the merchant simply inherits every global rule.
-        verifyNoInteractions(rules);
+        // No override -> no rule is written. The repository IS read, because the
+        // zero-fee guard has to resolve what this merchant would actually be
+        // billed, so assert on the write rather than on no interaction at all.
+        verify(rules, never()).save(any());
         assertThat(resp.loyaltyRuleId()).isNull();
     }
 
@@ -299,7 +307,11 @@ class MerchantServiceTest {
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
         MerchantService svc = newService(repo);
 
-        Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), req(null, null));
+        // Waived, because an unpriced merchant is now refused outright — the
+        // entity defaults this pins are unaffected by that guard.
+        Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Cafe A", "F&B", "USD", Merchant.BillingCycle.MONTHLY,
+                        null, null, null, true, "Free by arrangement"));
 
         // Entity defaults: type=FIXED, fixed=0, percentage=0 (no billing impact).
         assertThat(resp.feeIssued().type()).isEqualTo(Merchant.FeeType.FIXED);
@@ -316,7 +328,7 @@ class MerchantServiceTest {
         ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
 
         Dtos.MerchantRequest noCurrency = new Dtos.MerchantRequest(
-                "Nairobi Cafe", "F&B", null, Merchant.BillingCycle.MONTHLY, null, null);
+                "Nairobi Cafe", "F&B", null, Merchant.BillingCycle.MONTHLY, PRICED, null);
         Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), noCurrency);
 
         assertThat(resp.currency()).isEqualTo("KES");
@@ -330,7 +342,7 @@ class MerchantServiceTest {
         ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
 
         Dtos.MerchantRequest usd = new Dtos.MerchantRequest(
-                "USD Merchant", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
+                "USD Merchant", "F&B", "USD", Merchant.BillingCycle.MONTHLY, PRICED, null);
         Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), usd);
 
         assertThat(resp.currency()).isEqualTo("USD");
@@ -362,7 +374,7 @@ class MerchantServiceTest {
         MerchantService svc = newService(repo);
 
         Dtos.MerchantRequest sameNameLowerCase = new Dtos.MerchantRequest(
-                "cafe a", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
+                "cafe a", "F&B", "USD", Merchant.BillingCycle.MONTHLY, PRICED, null);
 
         assertThatThrownBy(() -> svc.create(tenantId, sameNameLowerCase))
                 .isInstanceOf(LoyaltyException.class)
@@ -383,11 +395,155 @@ class MerchantServiceTest {
         MerchantService svc = newService(repo);
 
         Dtos.MerchantRequest padded = new Dtos.MerchantRequest(
-                "  Cafe A  ", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
+                "  Cafe A  ", "F&B", "USD", Merchant.BillingCycle.MONTHLY, PRICED, null);
         Dtos.MerchantResponse resp = svc.create(tenantId, padded);
 
         // Existence is checked against the trimmed name, and the trimmed name is persisted.
         verify(repo).existsByTenantIdAndNameIgnoreCase(tenantId, "Cafe A");
         assertThat(resp.name()).isEqualTo("Cafe A");
+    }
+
+    // --- No free merchants: the issue fee must be priced or explicitly waived ---
+
+    @Test
+    void create_withNoIssueFeeAnywhere_isRefused() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // No record fee, no override, no global rule -> the platform would run
+        // this merchant for free forever.
+        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null)))
+                .hasMessageContaining("billed nothing for issuing");
+    }
+
+    @Test
+    void create_withZeroIssueFee_isRefused() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        Dtos.FeeModel freeIssue = new Dtos.FeeModel(Merchant.FeeType.FIXED,
+                java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
+
+        // An explicit FIXED 0 is still zero — spelling it out is not a waiver.
+        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, freeIssue, null)))
+                .hasMessageContaining("billed nothing for issuing");
+    }
+
+    @Test
+    void create_withZeroRedeemFee_isAllowed() {
+        // Billing only the issue side is a normal arrangement — never refused.
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        Dtos.FeeModel freeRedeem = new Dtos.FeeModel(Merchant.FeeType.FIXED,
+                java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
+
+        Dtos.MerchantResponse resp = newService(repo).create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Cafe A", null, null, null, PRICED, freeRedeem));
+
+        assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0.25");
+        assertThat(resp.feeRedeemed().fixed()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void create_pricedByTheTenantStandard_isAllowed() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> {
+            Merchant saved = inv.getArgument(0);
+            saved.setId(UUID.randomUUID());
+            return saved;
+        });
+        LoyaltyRule global = new LoyaltyRule();
+        global.setTransactionType(TransactionType.PURCHASE);
+        global.setFeeIssuedType(Merchant.FeeType.PERCENTAGE);
+        global.setFeeIssuedFixed(java.math.BigDecimal.ZERO);
+        global.setFeeIssuedPercentage(new java.math.BigDecimal("2.5"));
+        when(rules.findApplicable(any(), any(), eq(TransactionType.PURCHASE))).thenReturn(List.of(global));
+
+        // Nothing on the merchant itself, but the tenant standard prices it.
+        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null));
+
+        assertThat(resp.id()).isNotNull();
+        assertThat(resp.feeWaived()).isFalse();
+    }
+
+    @Test
+    void create_pricedByTheOverride_isAllowed_evenBeforeTheRuleIsFlushed() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> {
+            Merchant saved = inv.getArgument(0);
+            saved.setId(UUID.randomUUID());
+            return saved;
+        });
+        when(rules.save(any(LoyaltyRule.class))).thenAnswer(inv -> inv.getArgument(0));
+        // findApplicable deliberately returns nothing: the guard must see the
+        // rule it just created without depending on a flush.
+        Dtos.MerchantRuleOverride override = new Dtos.MerchantRuleOverride(
+                null, null, null, null, null, null,
+                new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE, java.math.BigDecimal.ZERO, new java.math.BigDecimal("1")),
+                null);
+
+        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .create(UUID.randomUUID(),
+                        new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, override));
+
+        assertThat(resp.id()).isNotNull();
+    }
+
+    @Test
+    void create_unpricedButWaived_isAllowedAndRecorded() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Dtos.MerchantResponse resp = newService(repo).create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Pilot Partner", null, null, null, null, null, null,
+                        true, "Pilot partner - free for the first quarter"));
+
+        assertThat(resp.feeWaived()).isTrue();
+        assertThat(resp.feeWaivedReason()).isEqualTo("Pilot partner - free for the first quarter");
+    }
+
+    @Test
+    void create_waiverWithoutAReason_isRefused() {
+        // A waiver with no reason is indistinguishable from an oversight the
+        // moment anyone reads the audit.
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        assertThatThrownBy(() -> newService(repo).create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Pilot Partner", null, null, null, null, null, null, true, "   ")))
+                .hasMessageContaining("waiveFeesReason is required");
+    }
+
+    @Test
+    void audit_separatesTheForgottenFromTheDeliberate() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        UUID tenantId = UUID.randomUUID();
+
+        Merchant priced = merchant(UUID.randomUUID(), tenantId, "Priced");
+        priced.setFeeIssuedType(Merchant.FeeType.FIXED);
+        priced.setFeeIssuedFixed(new java.math.BigDecimal("0.25"));
+        Merchant forgotten = merchant(UUID.randomUUID(), tenantId, "Forgotten");
+        Merchant deliberate = merchant(UUID.randomUUID(), tenantId, "Pilot");
+        deliberate.setFeeWaived(true);
+        deliberate.setFeeWaivedReason("Free pilot");
+        when(repo.findByTenantId(tenantId)).thenReturn(List.of(priced, forgotten, deliberate));
+        when(rules.findByTenantId(tenantId)).thenReturn(List.of());
+
+        Dtos.ZeroFeeAudit audit = new MerchantService(repo, mock(UserServiceClient.class), rules)
+                .auditZeroFeeMerchants(tenantId);
+
+        assertThat(audit.merchantsExamined()).isEqualTo(3);
+        assertThat(audit.issuingForFree()).isEqualTo(2);
+        assertThat(audit.waived()).isEqualTo(1);
+        assertThat(audit.unwaived()).isEqualTo(1);   // the one to go and price
+        assertThat(audit.merchants()).extracting(Dtos.ZeroFeeMerchant::name)
+                .containsExactlyInAnyOrder("Forgotten", "Pilot");
     }
 }

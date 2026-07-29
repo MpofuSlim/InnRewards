@@ -72,7 +72,15 @@ public class MerchantController {
                           "`/loyalty/rules`. Every field inside it is optional and inherits the global rule " +
                           "when omitted, so you can override just the floor, just a fee, or the whole set. " +
                           "The created rule's id comes back as `loyaltyRuleId`; change the terms later with " +
-                          "`POST /loyalty/rules` (and deactivate the old rule).")
+                          "`POST /loyalty/rules` (and deactivate the old rule).\n\n" +
+                          "**A merchant must be priced for ISSUING.** Creation is refused with " +
+                          "`MERCHANT_ZERO_ISSUE_FEE` when the effective voucher-issue fee resolves to zero — no " +
+                          "fee on the merchant, none on its rule, and no tenant standard — because such a " +
+                          "merchant is billed nothing forever and nothing else surfaces it. Fix it by pricing " +
+                          "the merchant (`loyaltyOverride.feeIssued`), publishing a tenant standard on a global " +
+                          "rule, or passing `waiveFees: true` with a `waiveFeesReason` to onboard it free on " +
+                          "purpose. The **redeem** side may be zero freely — billing only issuance is a normal " +
+                          "arrangement. Waived merchants are listed by `GET /loyalty/merchants/fee-audit`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -94,7 +102,9 @@ public class MerchantController {
                                         "status": "ACTIVE",
                                         "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
                                         "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
-                                        "loyaltyRuleId": "d6e2f4a5-4567-8901-bcde-f01234567890"
+                                        "loyaltyRuleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                        "feeWaived": false,
+                                        "feeWaivedReason": null
                                       }
                                     }
                                     """)
@@ -106,13 +116,28 @@ public class MerchantController {
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "name: must not be blank",
                                       "data": null
                                     }
-                                    """)
+                                    """),
+                                    @ExampleObject(name = "Nobody priced this merchant", value = """
+                                    {
+                                      "code": "MERCHANT_ZERO_ISSUE_FEE",
+                                      "message": "This merchant would be billed nothing for issuing vouchers. Set a voucher-issue fee (loyaltyOverride.feeIssued), publish a tenant standard on a global rule, or pass waiveFees=true with waiveFeesReason to onboard it free on purpose.",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Waiver with no reason", value = """
+                                    {
+                                      "code": "WAIVER_REASON_REQUIRED",
+                                      "message": "waiveFeesReason is required when waiving fees",
+                                      "data": null
+                                    }
+                                    """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -137,13 +162,26 @@ public class MerchantController {
                     required = true,
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Inherit the tenant standard",
-                                    description = "No fees, no override — the merchant follows every global rule.",
+                                    description = "No fees, no override — the merchant follows every global rule. "
+                                            + "Only valid when a global rule actually prices the issue side; "
+                                            + "otherwise this is refused with MERCHANT_ZERO_ISSUE_FEE.",
                                     value = """
                                     {
                                       "name": "Innbucks Westgate",
                                       "category": "Coffee",
                                       "currency": "USD",
                                       "billingCycle": "MONTHLY"
+                                    }
+                                    """),
+                            @ExampleObject(name = "Free on purpose",
+                                    description = "Deliberately unbilled. The reason is mandatory and is what the "
+                                            + "zero-fee audit shows months later.",
+                                    value = """
+                                    {
+                                      "name": "Pilot Partner Cafe",
+                                      "category": "Coffee",
+                                      "waiveFees": true,
+                                      "waiveFeesReason": "Pilot partner - free for the first quarter, revisit 2026-10"
                                     }
                                     """),
                             @ExampleObject(name = "Override the tenant standard",
@@ -191,6 +229,58 @@ public class MerchantController {
         Dtos.MerchantResponse data = merchants.create(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Merchant created successfully", data));
+    }
+
+    @GetMapping("/fee-audit")
+    @Operation(summary = "Zero-fee audit — merchants we issue vouchers for free",
+            description = "Every merchant in the tenant whose EFFECTIVE voucher-issue fee resolves to zero, "
+                    + "with whether that was a deliberate waiver or an oversight. Resolution is the same "
+                    + "merchant-rule -> merchant-record -> global-rule precedence the invoice uses, so this is "
+                    + "what will actually be billed, not what someone typed.\n\n"
+                    + "`unwaived` is the number that matters: merchants onboarded and never priced. Redemption "
+                    + "being free is reported but never counted as a problem — only issuing is guarded.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Audit complete",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Two merchants never priced", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Zero-fee audit complete",
+                                      "data": {
+                                        "merchantsExamined": 12,
+                                        "issuingForFree": 3,
+                                        "waived": 1,
+                                        "unwaived": 2,
+                                        "merchants": [
+                                          {
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "name": "Innbucks Westgate",
+                                            "status": "ACTIVE",
+                                            "waived": false,
+                                            "waivedReason": null,
+                                            "redeemsForFree": true
+                                          },
+                                          {
+                                            "merchantId": "c5d1e3f4-3456-7890-bcde-f01234567890",
+                                            "name": "Pilot Partner Cafe",
+                                            "status": "ACTIVE",
+                                            "waived": true,
+                                            "waivedReason": "Pilot partner - free for the first quarter",
+                                            "redeemsForFree": true
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller may not audit this tenant")
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.ZeroFeeAudit>> feeAudit() {
+        return ResponseEntity.ok(ApiResult.ok("Zero-fee audit complete",
+                merchants.auditZeroFeeMerchants(tenantContext.requireTenantId())));
     }
 
     @GetMapping

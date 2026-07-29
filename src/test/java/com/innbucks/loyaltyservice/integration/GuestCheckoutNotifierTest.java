@@ -106,7 +106,10 @@ class GuestCheckoutNotifierTest {
         org.assertj.core.api.Assertions.assertThat(message)
                 .contains("Pizza Inn Avondale")
                 .contains("loyalty points")
-                .contains("Register/Sign in on the InnBucks App")
+                // Reads as written, not as the sanitizer would rewrite it: "/"
+                // is rejected by the gateway and would arrive as a space.
+                .contains("Register or sign in on the InnBucks App")
+                .doesNotContain("/")
                 // points formatted with trailing zeros stripped: 10.5000 -> 10.5, 25.0000 -> 25
                 .contains("10.5")
                 .contains("25");

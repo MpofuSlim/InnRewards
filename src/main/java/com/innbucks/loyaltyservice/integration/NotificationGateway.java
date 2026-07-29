@@ -89,7 +89,7 @@ public class NotificationGateway {
         String message = "Reminder: your InnBucks voucher"
                 + (worth == null ? "" : " (" + worth + ")")
                 + " expires on " + expiresOn
-                + ". Redeem it before then so it doesn't go to waste!";
+                + ". Redeem it before then so it does not go to waste.";
         String ref = "VOUCHER-EXPIRY-" + voucher.getId();
         try {
             whatsApp.sendCustomNotification(recipientPhone, message);
@@ -114,7 +114,7 @@ public class NotificationGateway {
         String name = (voucher.getAssigneeName() != null && !voucher.getAssigneeName().isBlank())
                 ? voucher.getAssigneeName() : "there";
         StringBuilder sb = new StringBuilder("Hi ").append(name)
-                .append(", your InnBucks voucher is ready! Code: ").append(voucher.getCode());
+                .append(", your InnBucks voucher is ready. Code ").append(voucher.getCode());
         String worth = describeValue(voucher);
         if (worth != null) {
             sb.append(" (").append(worth).append(")");

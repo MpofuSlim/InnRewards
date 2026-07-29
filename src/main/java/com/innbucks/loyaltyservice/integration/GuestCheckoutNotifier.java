@@ -65,9 +65,13 @@ public class GuestCheckoutNotifier {
 
     private String buildMessage(String shopName, BigDecimal pointsEarned, BigDecimal totalPoints) {
         String shop = (shopName == null || shopName.isBlank()) ? DEFAULT_SHOP_NAME : shopName;
-        return "Thanks for shopping at " + shop + "! You earned " + fmt(pointsEarned)
-                + " loyalty points (total: " + fmt(totalPoints)
-                + "). Register/Sign in on the InnBucks App to redeem them.";
+        // Written to survive SmsTextSanitizer untouched: the gateway rejects
+        // ! : / ? " * ; so anything containing them gets rewritten on the way
+        // out — "Register/Sign in" would reach the customer as "Register Sign
+        // in". Say it properly here instead of relying on a substitution.
+        return "Thanks for shopping at " + shop + ". You earned " + fmt(pointsEarned)
+                + " loyalty points (total " + fmt(totalPoints)
+                + "). Register or sign in on the InnBucks App to redeem them.";
     }
 
     private String fmt(BigDecimal b) {

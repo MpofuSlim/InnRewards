@@ -62,9 +62,13 @@ public class RuleController {
                           "is billed. Set on a GLOBAL rule they are the tenant STANDARD every merchant inherits; " +
                           "set on a merchant rule they override the standard for that merchant only. Each side " +
                           "resolves independently in this order: **merchant rule → the merchant record's own " +
-                          "fee (only when it was set explicitly at onboarding) → global rule → no fee**. A " +
-                          "merchant that should pay nothing while a tenant standard exists gets a merchant rule " +
-                          "with `FIXED` / `fixed: 0`.")
+                          "fee (only when it was set explicitly at onboarding) → global rule → no fee**.\n\n" +
+                          "**A zero ISSUE fee is refused** (`RULE_ZERO_ISSUE_FEE`), on a global rule and a " +
+                          "merchant rule alike: on the tenant standard it would make every merchant free at " +
+                          "once, and on a merchant rule it would silently undo the check that refused that " +
+                          "merchant at creation. Omit `feeIssued` to inherit rather than to zero it. The only " +
+                          "sanctioned way to run a merchant unbilled is `waiveFees` at onboarding, which " +
+                          "records who decided it and why. The **redeem** side may be zero freely.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -123,6 +127,13 @@ public class RuleController {
                                               "data": null
                                             }
                                             """),
+                                    @ExampleObject(name = "Zero issue fee", value = """
+                                            {
+                                              "code": "RULE_ZERO_ISSUE_FEE",
+                                              "message": "A voucher-issue fee of zero would run this for free. Set a non-zero feeIssued, omit it to inherit the tenant standard, or onboard the merchant with waiveFees=true and a reason if it is deliberately unbilled.",
+                                              "data": null
+                                            }
+                                            """),
                                     @ExampleObject(name = "Inconsistent fee schedule", value = """
                                             {
                                               "code": "FEE_BOTH_REQUIRED",
@@ -166,18 +177,6 @@ public class RuleController {
                                       "pocket": "MAIN",
                                       "minTransactionAmount": 2.00,
                                       "feeIssued": { "type": "PERCENTAGE", "fixed": 0, "percentage": 1 }
-                                    }
-                                    """),
-                            @ExampleObject(name = "Merchant pays no voucher fees",
-                                    description = "The explicit opt-out: FIXED 0 on a merchant rule beats a tenant "
-                                            + "standard, where omitting the field would inherit it.",
-                                    value = """
-                                    {
-                                      "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                      "transactionType": "PURCHASE",
-                                      "pointsPerUnit": 1,
-                                      "feeIssued":   { "type": "FIXED", "fixed": 0, "percentage": 0 },
-                                      "feeRedeemed": { "type": "FIXED", "fixed": 0, "percentage": 0 }
                                     }
                                     """),
                             @ExampleObject(name = "Earn rate only",

@@ -41,7 +41,16 @@ public final class SmsTextSanitizer {
                 .replace("„", "\"")
                 .replace("…", "...")                          // ellipsis
                 .replace(" ", " ")                            // non-breaking space
-                .replace("•", "*").replace("·", ".");   // bullet / middle dot
+                .replace("•", "*").replace("·", ".")    // bullet / middle dot
+                // The gateway rejects "!" outright with 400 "Invalid message" —
+                // proved live 2026-07-29 by bisection: a 160-char message passes,
+                // a 24-char one containing a single "!" is refused, and the same
+                // text with "." instead is accepted. It is valid GSM-7, so this
+                // is a quirk of THIS API, which is exactly what this class exists
+                // to absorb. Every voucher-ready, points-unlocked and expiry
+                // message carried one, so they were all silently failing over to
+                // another channel.
+                .replace("!", ".");
         // Strip diacritics (accented -> base letter) so accented copy degrades to
         // GSM-safe ASCII rather than being replaced wholesale by the net below.
         s = Normalizer.normalize(s, Normalizer.Form.NFKD).replaceAll("\\p{M}+", "");

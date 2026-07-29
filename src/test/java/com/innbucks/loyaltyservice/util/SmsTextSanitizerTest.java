@@ -49,4 +49,17 @@ class SmsTextSanitizerTest {
         assertNull(SmsTextSanitizer.toGsmSafe(null));
         assertEquals("", SmsTextSanitizer.toGsmSafe(""));
     }
+
+    @Test
+    void exclamationMark_becomesAFullStop() {
+        // The gateway 400s "Invalid message" on any "!" — proved live by
+        // bisection on 2026-07-29 (160 chars fine; 24 chars with one "!"
+        // refused; same text with "." accepted). Every voucher-ready and
+        // points-unlocked message carried one.
+        assertEquals("Your voucher is ready. Code: ABC123",
+                SmsTextSanitizer.toGsmSafe("Your voucher is ready! Code: ABC123"));
+        assertEquals("Good news. Points active.",
+                SmsTextSanitizer.toGsmSafe("Good news! Points active."));
+        assertEquals("Wow...", SmsTextSanitizer.toGsmSafe("Wow!!!"));
+    }
 }

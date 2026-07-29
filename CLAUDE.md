@@ -97,8 +97,11 @@ merchant-specific first):
   `EffectiveFees.resolve`, and each side resolves independently:
   **merchant rule → merchant record (only when explicitly configured, i.e.
   anything other than the onboarding default FIXED 0/0) → global rule → no
-  fee**. A merchant that must pay nothing while a tenant standard exists sets a
-  merchant rule with `FIXED` / fixed 0.
+  fee**. A **zero ISSUE fee is refused on any rule** (`RULE_ZERO_ISSUE_FEE`) —
+  on a global rule it would make every merchant free at once, and on a merchant
+  rule it would silently undo the guard that refused that merchant at creation.
+  The only sanctioned way to be unbilled is `merchants.fee_waived` (V30), which
+  records who decided it and why. The REDEEM side may be zero freely.
 
 Every fee call-site goes through `EffectiveFees` (invoicing and both reporting
 estimates) so the previewed figure and the eventual bill can't drift —

@@ -111,17 +111,26 @@ public class TenantMemberNotifier {
      * same and cannot trip a stricter validator than the one we have observed.
      */
     private String buildSubject(String tenantName) {
-        return "You have been added to " + tenantLabel(tenantName) + " on InnBucks";
+        return "Your " + tenantLabel(tenantName) + " tenant account has been approved";
     }
 
+    /**
+     * Names the tenant and who approved it, rather than the vaguer "you have
+     * been added to X". The recipient has just registered a business and is
+     * waiting to hear whether it went through, so the message says exactly
+     * that. Deliberately free of the characters the SMS gateway rejects
+     * (! : / ? " * ;) so it reaches the phone as written.
+     */
     private String buildMessage(String firstName, String tenantName) {
         String tenant = tenantLabel(tenantName);
         String greeting = (firstName == null || firstName.isBlank()) ? "" : "Hi " + firstName.trim() + ", ";
         if (greeting.isEmpty()) {
             // No name → capitalised standalone sentence.
-            return "You've been added to " + tenant + " on InnBucks.";
+            return "Your " + tenant + " tenant account has been created and approved by the "
+                    + "InnBucks Foundry team.";
         }
-        return greeting + "you've been added to " + tenant + " on InnBucks.";
+        return greeting + "your " + tenant + " tenant account has been created and approved by the "
+                + "InnBucks Foundry team.";
     }
 
     private String tenantLabel(String tenantName) {

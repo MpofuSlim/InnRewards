@@ -187,6 +187,7 @@ class TenantMemberNotifierTest {
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(email).sendEmail(eq(EMAIL), anyString(), body.capture(), eq(null));
         assertThat(body.getValue()).doesNotContain("Hi ,");
-        assertThat(body.getValue()).startsWith("You've been added to Acme Coffee");
+        assertThat(body.getValue())
+                .startsWith("Your Acme Coffee tenant account has been created and approved");
     }
 }

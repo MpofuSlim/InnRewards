@@ -111,13 +111,32 @@ public class Dtos {
                     description = "Override the tenant's standard loyalty terms for this merchant at onboarding. "
                             + "Creates the merchant's own rule in the same call. Omit it entirely and the merchant "
                             + "inherits every global rule as-is.")
-            MerchantRuleOverride loyaltyOverride
+            MerchantRuleOverride loyaltyOverride,
+            @Schema(example = "false", nullable = true,
+                    description = "Deliberately onboard this merchant with NO voucher-issue fee. Creation is "
+                            + "REFUSED with MERCHANT_ZERO_ISSUE_FEE when the effective ISSUE fee works out to zero "
+                            + "and this is not true, so an unbilled merchant is always someone's decision rather "
+                            + "than a forgotten field. The REDEEM fee may be zero freely — only issuing is guarded. "
+                            + "Requires waiveFeesReason.")
+            Boolean waiveFees,
+            @Schema(example = "Pilot partner - free for the first quarter, revisit 2026-10", nullable = true,
+                    description = "Why billing was waived. Required when waiveFees is true; it is what makes the "
+                            + "zero-fee audit readable months later.")
+            @Size(max = 200) String waiveFeesReason
     ) {
         /** Back-compat constructor for the pre-override shape. */
         public MerchantRequest(String name, String category, String currency,
                                Merchant.BillingCycle billingCycle,
                                FeeModel feeIssued, FeeModel feeRedeemed) {
-            this(name, category, currency, billingCycle, feeIssued, feeRedeemed, null);
+            this(name, category, currency, billingCycle, feeIssued, feeRedeemed, null, null, null);
+        }
+
+        /** Back-compat constructor for the pre-waiver shape. */
+        public MerchantRequest(String name, String category, String currency,
+                               Merchant.BillingCycle billingCycle,
+                               FeeModel feeIssued, FeeModel feeRedeemed,
+                               MerchantRuleOverride loyaltyOverride) {
+            this(name, category, currency, billingCycle, feeIssued, feeRedeemed, loyaltyOverride, null, null);
         }
     }
 
@@ -130,7 +149,33 @@ public class Dtos {
                                                    + "at onboarding. Null when the merchant was onboarded without an "
                                                    + "override; not populated on list/get — read GET /loyalty/rules for "
                                                    + "the merchant's current rules.")
-                                   UUID loyaltyRuleId) {}
+                                   UUID loyaltyRuleId,
+                                   @Schema(example = "false",
+                                           description = "True when this merchant was deliberately onboarded with no "
+                                                   + "billing. See the zero-fee audit at GET /loyalty/merchants/fee-audit.")
+                                   boolean feeWaived,
+                                   @Schema(nullable = true, description = "Why billing was waived, when it was.")
+                                   String feeWaivedReason) {}
+
+    /** One row of the zero-fee audit: a merchant we issue vouchers for free today. */
+    public record ZeroFeeMerchant(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789") UUID merchantId,
+            @Schema(example = "Innbucks Westgate") String name,
+            @Schema(example = "ACTIVE") String status,
+            @Schema(example = "false",
+                    description = "False means nobody chose this — it is a merchant we onboarded and forgot to price.")
+            boolean waived,
+            @Schema(nullable = true, example = "Pilot partner - free for the first quarter") String waivedReason,
+            @Schema(example = "true", description = "Whether redemption is also free. Reported, never refused.")
+            boolean redeemsForFree) {}
+
+    /** The zero-fee audit: every merchant issuing for free, and how many were deliberate. */
+    public record ZeroFeeAudit(
+            @Schema(example = "12", description = "Merchants examined.") int merchantsExamined,
+            @Schema(example = "3", description = "Issuing vouchers for free today.") int issuingForFree,
+            @Schema(example = "1", description = "Of those, deliberately waived.") int waived,
+            @Schema(example = "2", description = "Of those, unexplained — the ones to price.") int unwaived,
+            List<ZeroFeeMerchant> merchants) {}
 
     // A Shop is a physical outlet under a Merchant. e.g. "Pizza Inn Avondale"
     // and "Pizza Inn Westgate" are two shops under the "Pizza Inn" merchant.

@@ -137,6 +137,40 @@ public final class EffectiveFees {
         return !(s.type() == Merchant.FeeType.FIXED && zeroFixed && zeroPct);
     }
 
+    /**
+     * True when issuing a voucher at this merchant bills nothing.
+     *
+     * <p>This is the one that must never happen by accident: issuing is the
+     * event we actually charge for, so a merchant with a zero issue fee is a
+     * merchant we are running for free. Redemption is allowed to be zero —
+     * plenty of commercial arrangements only bill the issue side — so it has a
+     * separate accessor and no guard.
+     *
+     * <p>A zero is a zero however it is expressed: an unconfigured side,
+     * FIXED 0, or PERCENTAGE 0 all mean the same thing to the invoice.
+     */
+    public boolean issuesForFree() {
+        return isZero(issued);
+    }
+
+    /** True when redeeming bills nothing. Reported by the audit, never refused. */
+    public boolean redeemsForFree() {
+        return isZero(redeemed);
+    }
+
+    private static boolean isZero(Side s) {
+        if (s.type() == null) {
+            return true;
+        }
+        boolean zeroFixed = s.fixed() == null || s.fixed().signum() == 0;
+        boolean zeroPct = s.percentage() == null || s.percentage().signum() == 0;
+        return switch (s.type()) {
+            case FIXED -> zeroFixed;
+            case PERCENTAGE -> zeroPct;
+            case FIXED_PLUS_PERCENTAGE -> zeroFixed && zeroPct;
+        };
+    }
+
     public BigDecimal feeForIssued(Voucher v) {
         return MerchantFeeCalculator.compute(issued.type(), issued.fixed(), issued.percentage(), faceValue(v));
     }

@@ -93,5 +93,18 @@ public class Merchant extends Auditable {
      *   <li>{@code FIXED_PLUS_PERCENTAGE} — sum of both legs above.</li>
      * </ul>
      */
+    /**
+     * TRUE when someone deliberately onboarded this merchant with no billing
+     * (V30). Creation is refused when the effective fees are zero and this is
+     * not set, so an unbilled merchant is always a decision someone made rather
+     * than a field nobody filled in.
+     */
+    @Column(name = "fee_waived", nullable = false)
+    private boolean feeWaived = false;
+
+    /** Why billing was waived. Required when {@link #feeWaived} is true. */
+    @Column(name = "fee_waived_reason", length = 200)
+    private String feeWaivedReason;
+
     public enum FeeType { FIXED, PERCENTAGE, FIXED_PLUS_PERCENTAGE }
 }

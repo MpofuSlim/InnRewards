@@ -105,8 +105,13 @@ public class TenantMemberNotifier {
         }
     }
 
+    /**
+     * No apostrophe: the notification API charset-validates subjects and the
+     * sanitizer can only rescue NON-ASCII characters. "You have been" reads the
+     * same and cannot trip a stricter validator than the one we have observed.
+     */
     private String buildSubject(String tenantName) {
-        return "You've been added to " + tenantLabel(tenantName) + " on InnBucks";
+        return "You have been added to " + tenantLabel(tenantName) + " on InnBucks";
     }
 
     private String buildMessage(String firstName, String tenantName) {

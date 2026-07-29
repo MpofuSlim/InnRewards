@@ -85,6 +85,39 @@ class EmailNotificationClientContractTest {
     }
 
     @Test
+    @DisplayName("subject is transliterated to ASCII — the API 400s 'Invalid subject' otherwise")
+    void sendEmail_sanitizesTheSubject() {
+        // Regression: 2026-07-29 a tenant-attach email died on
+        // 400 {"errors":["Invalid subject"]} and fell back to WhatsApp. Subjects
+        // interpolate operator-typed names, so a name pasted from a document
+        // (curly apostrophe, accented letter, em-dash) must not reach the wire.
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port()).sendEmail("merchant@example.com",
+                "You have been added to Caf\u00e9 Nando\u2019s \u2014 Harare on InnBucks",
+                "Welcome aboard.", "REF-1");
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.subject",
+                        equalTo("You have been added to Cafe Nando's - Harare on InnBucks"))));
+    }
+
+    @Test
+    @DisplayName("body keeps its Unicode — only the subject is charset-restricted")
+    void sendEmail_doesNotSanitizeTheBody() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port()).sendEmail("merchant@example.com",
+                "Invoice INV-9", "Total \u2014 USD 12.50 for Caf\u00e9 Nando\u2019s", "REF-2");
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.message",
+                        containing("Total \u2014 USD 12.50 for Caf\u00e9 Nando\u2019s"))));
+    }
+
+    @Test
     @DisplayName("happy path: logs in then posts {subject,message,reference,destinationEmail} with X-Api-Key + Bearer")
     void sendEmail_postsDocumentedShape() {
         wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));

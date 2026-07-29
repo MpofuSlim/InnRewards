@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.loyaltyservice.config.InnbucksNotifyProperties;
+import com.innbucks.loyaltyservice.util.SmsTextSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -68,7 +69,18 @@ public class EmailNotificationClient {
                 : "TKT-EMAIL-" + UUID.randomUUID();
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("subject", subject);
+        // The notification API charset-validates the SUBJECT and answers
+        // 400 {"errors":["Invalid subject"]} for anything outside plain ASCII —
+        // observed live on 2026-07-29, where a tenant-attach email died on it
+        // and the notification silently fell back to WhatsApp. Subjects here
+        // interpolate operator-typed names (tenant, merchant, shop), so a curly
+        // apostrophe or accented letter pasted from a document is enough to
+        // knock email out of the running. Transliterate defensively, exactly as
+        // ticketing's booking-service already does.
+        //
+        // The BODY is deliberately NOT sanitized: the endpoint accepts Unicode
+        // there, so the branded template keeps its typography.
+        payload.put("subject", SmsTextSanitizer.toGsmSafe(subject));
         // Branded HTML (default — the gateway renders the message field as HTML)
         // or, as a rollback, plain text closed with the standard footer.
         payload.put("message", properties.isHtmlEnabled()

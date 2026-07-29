@@ -37,25 +37,25 @@ public class MemberActivityNotifier {
     @Async("notificationExecutor")
     public void notifyPointsEarned(String phone, BigDecimal earned, BigDecimal balance) {
         if (isBlank(phone) || isNonPositive(earned)) return;
-        dispatch(phone, "You earned " + fmt(earned) + " InnBucks loyalty points. Balance: " + fmt(balance) + ".");
+        dispatch(phone, "You earned " + fmt(earned) + " InnBucks loyalty points. New balance " + fmt(balance) + ".");
     }
 
     @Async("notificationExecutor")
     public void notifyPointsRedeemed(String phone, BigDecimal redeemed, BigDecimal balance) {
         if (isBlank(phone) || isNonPositive(redeemed)) return;
-        dispatch(phone, "You redeemed " + fmt(redeemed) + " InnBucks loyalty points. Balance: " + fmt(balance) + ".");
+        dispatch(phone, "You redeemed " + fmt(redeemed) + " InnBucks loyalty points. New balance " + fmt(balance) + ".");
     }
 
     @Async("notificationExecutor")
     public void notifyTransferSent(String phone, BigDecimal amount, BigDecimal balance) {
         if (isBlank(phone) || isNonPositive(amount)) return;
-        dispatch(phone, "You sent " + fmt(amount) + " InnBucks loyalty points. Balance: " + fmt(balance) + ".");
+        dispatch(phone, "You sent " + fmt(amount) + " InnBucks loyalty points. New balance " + fmt(balance) + ".");
     }
 
     @Async("notificationExecutor")
     public void notifyTransferReceived(String phone, BigDecimal amount, BigDecimal balance) {
         if (isBlank(phone) || isNonPositive(amount)) return;
-        dispatch(phone, "You received " + fmt(amount) + " InnBucks loyalty points. Balance: " + fmt(balance) + ".");
+        dispatch(phone, "You received " + fmt(amount) + " InnBucks loyalty points. New balance " + fmt(balance) + ".");
     }
 
     @Async("notificationExecutor")
@@ -64,7 +64,7 @@ public class MemberActivityNotifier {
         String body = delta.signum() > 0
                 ? "Your InnBucks loyalty balance was credited " + fmt(delta) + " points."
                 : "Your InnBucks loyalty balance was reduced by " + fmt(delta.abs()) + " points.";
-        dispatch(phone, body + " Balance: " + fmt(balance) + ".");
+        dispatch(phone, body + " New balance " + fmt(balance) + ".");
     }
 
     /**
@@ -76,13 +76,13 @@ public class MemberActivityNotifier {
     public void notifyPointsExpiring(String phone, BigDecimal amount, LocalDate expiresOn) {
         if (isBlank(phone) || isNonPositive(amount) || expiresOn == null) return;
         dispatch(phone, fmt(amount) + " of your InnBucks loyalty points expire on " + expiresOn
-                + ". Redeem them before then so they don't go to waste!");
+                + ". Redeem them before then so they do not go to waste.");
     }
 
     @Async("notificationExecutor")
     public void notifyPointsUnlocked(String phone) {
         if (isBlank(phone)) return;
-        dispatch(phone, "Good news! Your InnBucks loyalty points are now active and ready to spend.");
+        dispatch(phone, "Good news. Your InnBucks loyalty points are now active and ready to spend.");
     }
 
     /** SMS-primary, WhatsApp-fallback; best-effort — never throws. */

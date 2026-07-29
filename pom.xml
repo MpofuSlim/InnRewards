@@ -223,6 +223,10 @@
     </dependencyManagement>
 
     <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
 
         <!-- ===== Shared dependencies inherited from the reactor root ===== -->
         <dependency>

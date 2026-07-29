@@ -204,3 +204,46 @@ springdoc:
     enabled: true
   swagger-ui:
     enabled: false
+
+---
+# -- Email transport (Amazon SES over SMTP) -----------------------------------
+# The InnBucks notification API composes the From header itself, so mail sent
+# through it arrives as "Online Banking" whatever product it belongs to.
+# Sending our own SMTP message is the only way loyalty mail can say "Foundry".
+#
+# Its own YAML document (no on-profile) so it applies to every profile without
+# colliding with the top-level spring:/app: keys above — a duplicate key in one
+# document is a parse error.
+#
+# Inactive by default twice over: Spring only auto-configures a JavaMailSender
+# when spring.mail.host is set, and SmtpEmailSender also requires
+# app.mail.enabled=true. With both unset, delivery is unchanged.
+spring:
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+# Mail must NEVER gate readiness. The probe hits the AGGREGATE /actuator/health,
+# and Boot's MailHealthIndicator opens a real connection to spring.mail.host —
+# empty on a cell without SES, so the component reports DOWN, the aggregate 503s
+# and the pod never becomes ready (this took user-service out on 2026-07-29).
+# Email is best-effort with a notification-API fallback, so an unreachable SMTP
+# host must not pull the service out of rotation.
+management:
+  health:
+    mail:
+      enabled: false
+app:
+  mail:
+    enabled: ${MAIL_ENABLED:false}
+    # Must be an SES-verified identity for the region or SES rejects the send.
+    from: ${MAIL_FROM:banking@innbucks.co.zw}
+    sender-name: ${MAIL_SENDER_NAME:Foundry}

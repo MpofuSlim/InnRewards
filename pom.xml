@@ -76,7 +76,7 @@
              (OWASP A03 / stored-XSS defense). Standalone jar, no transitive
              deps, JDK 21 compatible. Used on write paths to neutralize markup
              before persistence. -->
-        <jsoup.version>1.22.2</jsoup.version>
+        <jsoup.version>1.23.1</jsoup.version>
     </properties>
 
     <dependencyManagement>

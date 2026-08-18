@@ -47,7 +47,7 @@
              4.2.15.Final fixes all four. The netty-bom imported below pins every
              netty-* artifact to ${netty.version}, so this single property bump
              cascades cleanly. -->
-        <netty.version>4.2.16.Final</netty.version>
+        <netty.version>4.2.17.Final</netty.version>
         <!-- spring-kafka 4.0.5 (pinned by Boot 4.0.6's BOM) has CVE-2026-41731
              (HIGH): overly broad trusted-package matching in JsonSerializer /
              DefaultKafkaHeaderMapper / messaging header mappers. 4.0.6 (4.x line)

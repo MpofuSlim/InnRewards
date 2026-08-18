@@ -369,7 +369,8 @@ public class Dtos {
             @Schema(example = "+263771234567", nullable = true,
                     description = "Phone number of the recipient. If no LoyaltyUser exists yet, one is auto-created in PENDING status so points accrue against the phone until the customer registers.")
             String assigneePhone,
-            @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "CARD_PAYMENT", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
+            @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "BILL_PAYMENT", "QR_PAY", "WALLET_TOPUP", "POINTS_PURCHASE",
+                    "PROMO", "REFUND", "TRANSFER", "REDEMPTION", "ADJUSTMENT", "CARD_PAYMENT"})
             @NotNull TransactionType type,
             @Schema(example = "100.00", nullable = true,
                     description = "Transaction amount in the merchant's currency. Must be zero or positive " +
@@ -434,9 +435,10 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "$5 Off Your Next Coffee")
             @NotBlank @Size(max = 200) String name,
-            @Schema(example = "SINGLE_USE", allowableValues = {"SINGLE_USE", "MULTI_USE", "FREE_ITEM"})
+            @Schema(example = "SINGLE_USE",
+                    allowableValues = {"SINGLE_USE", "MULTI_USE", "CAMPAIGN", "REFERRAL", "CORPORATE"})
             @NotNull VoucherTemplate.VoucherType type,
-            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENTAGE", "FREE_ITEM"},
+            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENT", "FREE_ITEM", "COMBO"},
                     description = "Shape of the discount the template represents. The numeric value " +
                                   "(e.g. $5, 10%) is supplied per issuance in IssueVoucherRequest.value.")
             @NotNull VoucherTemplate.ValueType valueType,
@@ -477,7 +479,7 @@ public class Dtos {
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
                     description = "Loyalty user ID of the recipient. Takes priority over assigneePhone.")
             UUID assignedUserId,
-            @Schema(example = "SMS", nullable = true, allowableValues = {"SMS", "EMAIL", "PUSH", "NONE"})
+            @Schema(example = "SMS", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
             Voucher.DeliveryChannel deliveryChannel,
             @Schema(example = "WINTER_PROMO_2026", nullable = true, description = "Campaign tag for reporting.")
             String campaignSource,
@@ -501,7 +503,7 @@ public class Dtos {
             @Min(1) int quantity,
             @Schema(example = "WINTER_PROMO_2026", nullable = true)
             String campaign,
-            @Schema(example = "NONE", nullable = true, allowableValues = {"SMS", "EMAIL", "PUSH", "NONE"})
+            @Schema(example = "NONE", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
             Voucher.DeliveryChannel deliveryChannel
     ) {}
 
@@ -783,7 +785,9 @@ public class Dtos {
             @Schema(example = "2026-06-14T09:31:00Z", description = "When the transaction posted (UTC).")
             java.time.Instant createdAt,
             @Schema(example = "PURCHASE",
-                    description = "TransactionType: PURCHASE, REDEMPTION, ADJUSTMENT, TRANSFER_IN/OUT, REVERSAL, etc.")
+                    description = "TransactionType: PURCHASE, BILL_PAYMENT, QR_PAY, WALLET_TOPUP, "
+                            + "POINTS_PURCHASE, PROMO, REFUND, TRANSFER, REDEMPTION, ADJUSTMENT, CARD_PAYMENT. "
+                            + "A reversal posts as ADJUSTMENT and flips the original's status to REVERSED.")
             String type,
             @Schema(example = "POSTED", description = "POSTED or REVERSED.")
             String status,

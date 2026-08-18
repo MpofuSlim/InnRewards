@@ -402,9 +402,6 @@ public class VoucherController {
                                         "voucherId": "c1b7e9f0-9012-3456-0123-456789012345",
                                         "status": "REDEEMED",
                                         "usesRemaining": 0,
-                                        "valueType": "AMOUNT",
-                                        "value": 5.0000,
-                                        "currency": "USD",
                                         "value": 5.0000,
                                         "valueType": "AMOUNT",
                                         "redeemedAt": "2026-05-04T14:00:00Z"
@@ -437,22 +434,56 @@ public class VoucherController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Voucher not found",
+                                      "message": "voucher not found",
                                       "data": null
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Anti-fraud rejection (signature mismatch, expired, wrong merchant, blocked, velocity)",
+                    responseCode = "403",
+                    description = "Rejected: BAD_SIGNATURE (tampered code), WRONG_MERCHANT (not valid at this "
+                            + "merchant), USER_BLOCKED (account suspended) or USER_PENDING (recipient has not "
+                            + "registered yet). Branch on `code`; `message` is customer-safe prose.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Velocity blocked", value = """
+                            examples = @ExampleObject(name = "Wrong merchant", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "VELOCITY_BLOCKED",
+                                      "code": "WRONG_MERCHANT",
+                                      "message": "This voucher can't be redeemed at this shop.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "ALREADY_REDEEMED (fully used — also the answer when a multi-use voucher is "
+                            + "exhausted) or REVOKED.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Already redeemed", value = """
+                                    {
+                                      "code": "ALREADY_REDEEMED",
+                                      "message": "This voucher has already been fully redeemed.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "EXPIRED — past the voucher's expiresAt. The voucher is marked EXPIRED as a "
+                            + "side effect of the attempt.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Expired", value = """
+                                    {
+                                      "code": "EXPIRED",
+                                      "message": "This voucher has expired.",
                                       "data": null
                                     }
                                     """)
@@ -496,22 +527,25 @@ public class VoucherController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Voucher not found",
+                                      "message": "voucher not found",
                                       "data": null
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Voucher already redeemed and cannot be revoked",
+                    responseCode = "403",
+                    description = "The voucher belongs to another merchant (WRONG_MERCHANT) or another tenant "
+                            + "(CROSS_TENANT). A merchant-scoped caller may only revoke its own merchant's "
+                            + "vouchers. Note revoke does NOT reject an already-redeemed voucher — it simply "
+                            + "sets the status to REVOKED.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Already redeemed", value = """
+                            examples = @ExampleObject(name = "Wrong merchant", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "ALREADY_REDEEMED",
+                                      "code": "WRONG_MERCHANT",
+                                      "message": "This voucher belongs to a different merchant.",
                                       "data": null
                                     }
                                     """)
@@ -554,7 +588,7 @@ public class VoucherController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Voucher not found",
+                                      "message": "voucher not found",
                                       "data": null
                                     }
                                     """)

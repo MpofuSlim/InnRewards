@@ -112,6 +112,7 @@ public class QrController {
                                         "balanceAfter": 5300.0000,
                                         "ruleId": "e7f3a5b6-5678-9012-cdef-012345678901",
                                         "campaignId": null,
+                                        "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                         "reference": "QR:qr_2026_e8f7c4d2a1b3",
                                         "createdAt": "2026-05-04T11:02:00Z"
                                       }
@@ -121,29 +122,60 @@ public class QrController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Validation error, or QR_EXPIRED when the token is past its TTL.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = @ExampleObject(name = "Expired token", value = """
                                     {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "token: must not be blank",
+                                      "code": "QR_EXPIRED",
+                                      "message": "This QR code has expired.",
                                       "data": null
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Token expired, already consumed, or signature mismatch",
+                    responseCode = "409",
+                    description = "QR_REUSED — the token has already been consumed. Single-use, even inside "
+                            + "its TTL.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Already consumed", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "QR_TOKEN_ALREADY_CONSUMED",
+                                      "code": "QR_REUSED",
+                                      "message": "This QR code has already been used.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "BAD_SIGNATURE (the token failed HMAC verification) or CROSS_TENANT.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Bad signature", value = """
+                                    {
+                                      "code": "BAD_SIGNATURE",
+                                      "message": "This QR code couldn't be verified.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "The token is unknown.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Unknown token", value = """
+                                    {
+                                      "code": "NOT_FOUND",
+                                      "message": "This QR code is invalid or has expired.",
                                       "data": null
                                     }
                                     """)

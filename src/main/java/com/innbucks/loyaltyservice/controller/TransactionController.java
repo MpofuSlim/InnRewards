@@ -82,6 +82,7 @@ public class TransactionController {
                                         "balanceAfter": 5100.0000,
                                         "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                         "campaignId": "f8a4b6c7-6789-0123-def0-123456789012",
+                                        "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                         "reference": "POS-20260504-0001",
                                         "createdAt": "2026-05-04T11:00:00Z"
                                       }
@@ -105,15 +106,17 @@ public class TransactionController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Business rule violation (DUPLICATE_REFERENCE, USER_BLOCKED, MERCHANT_INACTIVE)",
+                    responseCode = "409",
+                    description = "DUPLICATE_REFERENCE — this (merchantId, reference) was already posted. "
+                            + "Treat as success: the earn landed on the first attempt. Separately, USER_BLOCKED "
+                            + "returns 403 and MERCHANT_INACTIVE / RECIPIENT_REQUIRED / INVALID_AMOUNT return 400.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Duplicate reference", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "DUPLICATE_REFERENCE",
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "A transaction with that reference already exists.",
                                       "data": null
                                     }
                                     """)
@@ -152,6 +155,7 @@ public class TransactionController {
                                         "balanceAfter": 5000.0000,
                                         "ruleId": null,
                                         "campaignId": null,
+                                        "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                         "reference": "REVERSE:POS-20260504-0001",
                                         "createdAt": "2026-05-04T12:30:00Z"
                                       }
@@ -175,15 +179,16 @@ public class TransactionController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Already reversed or otherwise non-reversible",
+                    responseCode = "409",
+                    description = "ALREADY_REVERSED — a compensating entry already exists. Treat as success; "
+                            + "the original sale IS reversed. A cross-merchant or cross-tenant attempt returns 403.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Already reversed", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "ALREADY_REVERSED",
+                                      "code": "ALREADY_REVERSED",
+                                      "message": "This transaction has already been reversed.",
                                       "data": null
                                     }
                                     """)
@@ -223,6 +228,7 @@ public class TransactionController {
                                         "balanceAfter": 5250.0000,
                                         "ruleId": null,
                                         "campaignId": null,
+                                        "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                         "reference": "Goodwill credit",
                                         "createdAt": "2026-05-04T13:15:00Z"
                                       }
@@ -299,6 +305,7 @@ public class TransactionController {
                                             "balanceAfter": 5100.0000,
                                             "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                             "campaignId": null,
+                                            "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                             "reference": "POS-20260504-0001",
                                             "createdAt": "2026-05-04T11:00:00Z"
                                           },
@@ -310,6 +317,7 @@ public class TransactionController {
                                             "balanceAfter": 4600.0000,
                                             "ruleId": null,
                                             "campaignId": null,
+                                            "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                             "reference": "VOUCHER:VCH-AB12CD",
                                             "createdAt": "2026-05-04T12:00:00Z"
                                           }
@@ -487,15 +495,17 @@ public class TransactionController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Insufficient balance or sender/recipient cross-tenant",
+                    responseCode = "400",
+                    description = "INSUFFICIENT_FUNDS (the sender's wallet cannot cover it), BAD_AMOUNT, "
+                            + "SELF_TRANSFER, RECIPIENT_REQUIRED or NO_MERCHANT_CONTEXT. A cross-tenant "
+                            + "sender or recipient returns 403.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Insufficient balance", value = """
+                            examples = @ExampleObject(name = "Insufficient funds", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "INSUFFICIENT_BALANCE",
+                                      "code": "INSUFFICIENT_FUNDS",
+                                      "message": "You don't have enough loyalty points for this.",
                                       "data": null
                                     }
                                     """)
@@ -527,6 +537,7 @@ public class TransactionController {
                                       "message": "Points redeemed successfully",
                                       "data": {
                                         "status": "OK",
+                                        "transactionId": "44444444-5555-6666-7777-888888888888",
                                         "newBalance": 4500.0000
                                       }
                                     }
@@ -535,29 +546,31 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Validation error, BAD_AMOUNT (points not greater than zero), WALLET_LOCKED, "
+                            + "or INSUFFICIENT_FUNDS when the wallet cannot cover the debit.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = @ExampleObject(name = "Insufficient funds", value = """
                                     {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "points: must be positive",
+                                      "code": "INSUFFICIENT_FUNDS",
+                                      "message": "You don't have enough loyalty points for this.",
                                       "data": null
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Insufficient balance",
+                    responseCode = "409",
+                    description = "DUPLICATE_REFERENCE — this (merchant, reference) was already redeemed. An "
+                            + "idempotent replay of the original; treat as success rather than retrying.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Insufficient balance", value = """
+                            examples = @ExampleObject(name = "Duplicate reference", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "INSUFFICIENT_BALANCE",
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "A redemption with that reference already exists.",
                                       "data": null
                                     }
                                     """)

@@ -283,15 +283,17 @@ public class InvoiceController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "422",
-                    description = "Invoice already paid or cancelled",
+                    responseCode = "403",
+                    description = "The invoice belongs to another tenant (CROSS_TENANT), or the caller does not "
+                            + "administer the invoice's merchant. Paying an invoice that is ALREADY PAID is not "
+                            + "an error — the call is idempotent and returns 200 with the unchanged invoice.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Already paid", value = """
+                            examples = @ExampleObject(name = "Wrong tenant", value = """
                                     {
-                                      "code": "422 UNPROCESSABLE_ENTITY",
-                                      "message": "INVOICE_ALREADY_PAID",
+                                      "code": "CROSS_TENANT",
+                                      "message": "wrong tenant",
                                       "data": null
                                     }
                                     """)

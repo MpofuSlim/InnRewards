@@ -113,6 +113,8 @@ public class QrController {
                                         "ruleId": "e7f3a5b6-5678-9012-cdef-012345678901",
                                         "campaignId": null,
                                         "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                        "postedBy": "11111111-2222-3333-4444-555555555555",
+                                        "channel": "QR_PRESENCE",
                                         "reference": "QR:qr_2026_e8f7c4d2a1b3",
                                         "createdAt": "2026-05-04T11:02:00Z"
                                       }

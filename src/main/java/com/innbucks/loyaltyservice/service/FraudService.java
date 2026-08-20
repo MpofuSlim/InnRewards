@@ -33,7 +33,16 @@ public class FraudService {
         this.metrics = metrics;
     }
 
-    @Transactional
+    // REQUIRES_NEW is load-bearing, not an optimisation. Every caller follows
+    // the pattern "record the attempt, then THROW the rejection" from inside a
+    // @Transactional service — and a plain joined transaction meant the fraud
+    // row (and even the velocity auto-block below) ROLLED BACK with the
+    // rejection it was recording. The controller docs promise "failed attempts
+    // are recorded in fraud_attempts"; without this, none of them were. A
+    // separate transaction commits the evidence regardless of the caller's
+    // outcome, at the standard REQUIRES_NEW cost of a second pooled connection
+    // for its duration.
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public FraudAttempt record(UUID tenantId, UUID userId, UUID merchantId, String voucherCode,
                                FraudAttempt.Reason reason, String detail,
                                String deviceFingerprint, String ipAddress) {

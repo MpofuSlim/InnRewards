@@ -108,7 +108,8 @@ public class TicketingLoyaltyService {
         Dtos.TransactionRequest req = new Dtos.TransactionRequest(
                 m.getId(), null, phoneNumber, TransactionType.PURCHASE,
                 cashAmount, m.getCurrency(), ref);
-        Dtos.TransactionResponse resp = transactionService.post(TICKETING_TENANT_ID, m.getId(), req);
+        Dtos.TransactionResponse resp = transactionService.post(TICKETING_TENANT_ID, m.getId(), req,
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
         return new EarnResult(resp.id(), m.getId(),
                 resp.pointsDelta() == null ? BigDecimal.ZERO : resp.pointsDelta(),
                 resp.balanceAfter(), false);

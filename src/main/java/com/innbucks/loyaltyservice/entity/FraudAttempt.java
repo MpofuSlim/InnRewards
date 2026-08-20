@@ -62,6 +62,9 @@ public class FraudAttempt {
         BLOCKED_USER,
         QR_REUSED,
         QR_EXPIRED,
-        QR_BAD_SIGNATURE
+        QR_BAD_SIGNATURE,
+        /** Earn-integrity: staff attempted to credit their own phone via a
+         *  typed-phone earn. The attempt is refused AND logged. */
+        SELF_EARN
     }
 }

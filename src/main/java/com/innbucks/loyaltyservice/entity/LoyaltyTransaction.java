@@ -15,7 +15,8 @@ import java.util.UUID;
         @Index(name = "idx_txn_user", columnList = "user_id"),
         @Index(name = "idx_txn_reference", columnList = "reference"),
         @Index(name = "idx_txn_created_at", columnList = "created_at"),
-        @Index(name = "idx_txn_tenant_shop_created", columnList = "tenant_id,shop_id,created_at")
+        @Index(name = "idx_txn_tenant_shop_created", columnList = "tenant_id,shop_id,created_at"),
+        @Index(name = "idx_txn_posted_by", columnList = "posted_by")
 })
 @Getter
 @Setter
@@ -71,6 +72,22 @@ public class LoyaltyTransaction {
 
     @Column(name = "reverses_id")
     private UUID reversesId;
+
+    // Earn-integrity attribution (V32). WHO created this row: the caller's
+    // user-service UUID from the JWT (CallerDetails.currentUserId()). NULL for
+    // server-to-server flows and for rows predating V32 — "unattributed
+    // legacy", never an error. Every fraud control (concentration reporting,
+    // pair detection, discipline) keys off this column; it cannot be
+    // backfilled, which is why it ships ahead of the controls it enables.
+    @Column(name = "posted_by")
+    private UUID postedBy;
+
+    // How an EARN arrived (TYPED_PHONE / QR_PRESENCE / CHECKOUT_S2S). NULL for
+    // non-earn rows and legacy rows. The SELF_EARN and REFERENCE_REQUIRED
+    // guards fire only on TYPED_PHONE — see EarnChannel's javadoc.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "channel", length = 20)
+    private EarnChannel channel;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();

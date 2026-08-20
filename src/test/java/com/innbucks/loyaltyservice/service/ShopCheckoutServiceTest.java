@@ -69,8 +69,10 @@ class ShopCheckoutServiceTest {
 
         Dtos.TransactionResponse earnResp = new Dtos.TransactionResponse(
                 UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("5"),
-                new BigDecimal("5"), new BigDecimal("20"), null, null, shopId, "ref", null);
-        when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId)))
+                new BigDecimal("5"), new BigDecimal("20"), null, null, shopId,
+                null, com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S, "ref", null);
+        when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId),
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S)))
                 .thenReturn(earnResp);
 
         ShopCheckoutService.Result result =
@@ -80,7 +82,8 @@ class ShopCheckoutServiceTest {
         // JWT-derived overload with no JWT, so the transaction had a null shop
         // and the per-shop points report showed 0).
         verify(transactionService).post(eq(tenantId), eq(merchantId),
-                any(Dtos.TransactionRequest.class), eq(shopId));
+                any(Dtos.TransactionRequest.class), eq(shopId),
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S));
         assertThat(result.shopId()).isEqualTo(shopId);
         assertThat(result.pointsEarned()).isEqualByComparingTo("5");
     }

@@ -111,7 +111,8 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
         // Seed 1000 points so there's plenty to (attempt to) redeem.
         transactionService.post(tenantId, merchantId,
                 new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,
-                        new BigDecimal("1000"), "USD", "SEED-EARN-" + System.nanoTime()));
+                        new BigDecimal("1000"), "USD", "SEED-EARN-" + System.nanoTime()),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
         assertThat(walletService.mainWallet(phone).getBalance()).isEqualByComparingTo("1000");
     }
 

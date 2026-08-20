@@ -79,10 +79,12 @@ class GlobalWalletIT extends PostgresIntegrationTestBase {
         // Earn 100 at tenant A and 50 at tenant B.
         transactionService.post(tenantA, merchantA,
                 new Dtos.TransactionRequest(null, userA.getId(), null, TransactionType.PURCHASE,
-                        new BigDecimal("100"), "USD", "earn-A"));
+                        new BigDecimal("100"), "USD", "earn-A"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
         transactionService.post(tenantB, merchantB,
                 new Dtos.TransactionRequest(null, userB.getId(), null, TransactionType.PURCHASE,
-                        new BigDecimal("50"), "USD", "earn-B"));
+                        new BigDecimal("50"), "USD", "earn-B"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
 
         // ONE balance holds points earned across both tenants.
         assertThat(walletService.mainWallet(PHONE).getBalance())

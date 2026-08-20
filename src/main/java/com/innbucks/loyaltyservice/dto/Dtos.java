@@ -380,13 +380,23 @@ public class Dtos {
             BigDecimal amount,
             @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
             String currency,
-            @Schema(example = "POS-20260504-0001", nullable = true, description = "External reference — must be unique per merchant to prevent duplicates.")
+            @Schema(example = "POS-20260504-0001", nullable = true,
+                    description = "The till's receipt reference. REQUIRED for staff-posted PURCHASE / "
+                                  + "CARD_PAYMENT earns (400 REFERENCE_REQUIRED without it) so every sale "
+                                  + "earn reconciles against a receipt; optional for other types and for "
+                                  + "the QR flow. Unique per merchant — a duplicate replays as 409 "
+                                  + "DUPLICATE_REFERENCE rather than double-earning.")
             String reference
     ) {}
 
     public record TransactionResponse(UUID id, TransactionType type, BigDecimal amount,
                                       BigDecimal pointsDelta, BigDecimal balanceAfter,
                                       UUID ruleId, UUID campaignId, UUID shopId,
+                                      // Attribution (additive, V32): which staff/customer account
+                                      // created the row (null = server-side or legacy), and which
+                                      // channel an EARN arrived through (TYPED_PHONE / QR_PRESENCE /
+                                      // CHECKOUT_S2S; null for non-earn and legacy rows).
+                                      UUID postedBy, com.innbucks.loyaltyservice.entity.EarnChannel channel,
                                       String reference, Instant createdAt) {}
 
     // Sender (fromUserId) MUST be a registered LoyaltyUser — you can't spend a

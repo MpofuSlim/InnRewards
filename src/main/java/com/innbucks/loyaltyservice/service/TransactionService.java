@@ -1,6 +1,8 @@
 package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.entity.EarnChannel;
+import com.innbucks.loyaltyservice.entity.FraudAttempt;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
@@ -30,6 +32,8 @@ public class TransactionService {
     private final RulesEngine rulesEngine;
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
+    private final com.innbucks.loyaltyservice.config.LoyaltyProperties props;
+    private final FraudService fraud;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               UserService users,
@@ -37,7 +41,9 @@ public class TransactionService {
                               WalletService walletService,
                               RulesEngine rulesEngine,
                               com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
-                              com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier) {
+                              com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
+                              com.innbucks.loyaltyservice.config.LoyaltyProperties props,
+                              FraudService fraud) {
         this.transactions = transactions;
         this.users = users;
         this.merchants = merchants;
@@ -45,14 +51,17 @@ public class TransactionService {
         this.rulesEngine = rulesEngine;
         this.metrics = metrics;
         this.memberNotifier = memberNotifier;
+        this.props = props;
+        this.fraud = fraud;
     }
 
-    public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req) {
+    public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req,
+                                          EarnChannel channel) {
         // JWT-gated callers (SHOP_USER / SHOP_ADMIN): attribute the transaction to
         // the shop on the caller's token. Server-side callers that resolved the
         // shop from a trusted path param use the overload below.
         Dtos.TransactionResponse resp = post(tenantId, merchantId, req,
-                com.innbucks.loyaltyservice.security.CallerDetails.currentShopId());
+                com.innbucks.loyaltyservice.security.CallerDetails.currentShopId(), channel);
         // Earn alert for the registered customer. Fires only on this (3-arg)
         // entry — the public /loyalty/transactions endpoint plus the QR and
         // ticketing accrual flows — NOT the 4-arg overload the guest /
@@ -74,7 +83,8 @@ public class TransactionService {
      * their transactions land with a null shop and never show up in the per-shop
      * points report.
      */
-    public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req, UUID shopId) {
+    public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req, UUID shopId,
+                                          EarnChannel channel) {
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         if (m.getStatus() != Merchant.Status.ACTIVE) {
             throw LoyaltyException.badRequest("MERCHANT_INACTIVE", "This merchant isn't accepting points right now.");
@@ -87,6 +97,19 @@ public class TransactionService {
             throw LoyaltyException.badRequest("RECIPIENT_REQUIRED",
                     "supply exactly one of userId or assigneePhone");
         }
+        // --- Earn-integrity guards: TYPED_PHONE only. That channel is the one
+        // where a staff member chooses the recipient; QR_PRESENCE credits the
+        // authenticated scanner by design (caller == recipient is the point,
+        // not the fraud) and CHECKOUT_S2S resolves the recipient server-side.
+        if (channel == EarnChannel.TYPED_PHONE && props.earn().requireReference()
+                && (req.type() == TransactionType.PURCHASE || req.type() == TransactionType.CARD_PAYMENT)
+                && (req.reference() == null || req.reference().isBlank())) {
+            // Without a receipt reference the earn can never be reconciled
+            // against the till's sales — the property that makes phantom
+            // earns findable. Checked BEFORE any row exists.
+            throw LoyaltyException.badRequest("REFERENCE_REQUIRED",
+                    "A receipt reference is required for sale earns.");
+        }
         LoyaltyUser u = hasUserId
                 ? users.require(tenantId, req.userId())
                 : users.findOrCreatePending(tenantId, req.assigneePhone(), merchantId);
@@ -94,6 +117,25 @@ public class TransactionService {
         // BLOCKED still rejects so fraud holds stick.
         if (u.getStatus() == LoyaltyUser.Status.BLOCKED) {
             throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
+        }
+        if (channel == EarnChannel.TYPED_PHONE && props.earn().selfBlock()) {
+            // SELF_EARN: the recipient's phone matches the authenticated
+            // caller's own phone claim — a cashier crediting themselves.
+            // Refused AND fraud-logged (record() runs REQUIRES_NEW, so the
+            // evidence row survives this throw; the throw itself rolls back
+            // any PENDING enrolment findOrCreatePending just made, leaving
+            // zero state). Fails open when the caller's token carries no
+            // phone claim — identity we don't have can't be compared; the
+            // staff-recipient set (phase 2) closes that from the other side.
+            String callerPhone = normalizePhone(
+                    com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber());
+            if (callerPhone != null && callerPhone.equals(normalizePhone(u.getPhoneNumber()))) {
+                fraud.record(tenantId, hasUserId ? u.getId() : null, merchantId, null,
+                        FraudAttempt.Reason.SELF_EARN, "staff-typed earn to the caller's own phone",
+                        null, null);
+                throw LoyaltyException.forbidden("SELF_EARN",
+                        "You can't award points to your own account.");
+            }
         }
 
         if (req.reference() != null) {
@@ -134,6 +176,10 @@ public class TransactionService {
         t.setRuleId(eval.ruleId());
         t.setCampaignId(eval.campaignId());
         t.setReference(req.reference());
+        // Attribution (V32): WHO created the row and through WHICH door. Null
+        // postedBy = server-to-server (no JWT) — never an error.
+        t.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+        t.setChannel(channel);
         // saveAndFlush so a unique-constraint violation on (merchant_id, reference)
         // surfaces here as DataIntegrityViolationException rather than at txn
         // commit (where it would bubble up as a 500). The Java pre-check above
@@ -210,6 +256,9 @@ public class TransactionService {
         BigDecimal appliedByOriginal = walletService.appliedForTransaction(orig.getId());
         rev.setPointsDelta(appliedByOriginal.negate());
         rev.setReversesId(orig.getId());
+        // Attribution: the operator who posted the reversal (channel stays
+        // null — reversals aren't earns).
+        rev.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
         rev.setReference(orig.getReference() == null ? null : "REV-" + orig.getReference());
         // saveAndFlush so the uq_txn_reverses_id unique index (V20) surfaces a
         // second reversal as a clean ALREADY_REVERSED here — and crucially
@@ -248,6 +297,8 @@ public class TransactionService {
         t.setUserId(u.getId());
         t.setType(TransactionType.ADJUSTMENT);
         t.setPointsDelta(points);
+        // Attribution: the operator who keyed the adjustment.
+        t.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
         // Adjustments inherit the merchant's currency (previously left at the
         // entity "USD" default — the audit's mislabelled-ledger finding).
         t.setCurrency(m.getCurrency());
@@ -295,6 +346,21 @@ public class TransactionService {
     private static Dtos.TransactionResponse toResponse(LoyaltyTransaction t, BigDecimal balance) {
         return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
                 t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
-                t.getShopId(), t.getReference(), t.getCreatedAt());
+                t.getShopId(), t.getPostedBy(), t.getChannel(),
+                t.getReference(), t.getCreatedAt());
+    }
+
+    /**
+     * Whitespace-insensitive phone comparison key. Deliberately NOT a full
+     * MSISDN canonicalisation: both sides come from the same platform
+     * (user-service mints the JWT claim, loyalty stores what registration
+     * sent), so formats agree in practice, and an aggressive rewrite here
+     * risks a false SELF_EARN against a legitimate customer. A residual
+     * false NEGATIVE (0771… vs +263771…) is closed by the phase-2
+     * staff-recipient set, which matches canonically.
+     */
+    private static String normalizePhone(String phone) {
+        if (phone == null || phone.isBlank()) return null;
+        return phone.replaceAll("\\s+", "");
     }
 }

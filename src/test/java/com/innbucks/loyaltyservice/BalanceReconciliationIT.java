@@ -159,7 +159,8 @@ class BalanceReconciliationIT extends PostgresIntegrationTestBase {
     private void earn(int amount, String ref) {
         transactionService.post(tenantId, merchantId,
                 new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,
-                        new BigDecimal(amount), "USD", ref));
+                        new BigDecimal(amount), "USD", ref),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
     }
 
     private void corruptBalance(UUID walletId, BigDecimal bogus) {

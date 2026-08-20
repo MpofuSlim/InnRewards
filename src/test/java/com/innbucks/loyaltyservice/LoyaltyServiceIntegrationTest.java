@@ -84,7 +84,8 @@ class LoyaltyServiceIntegrationTest {
 
         var txn = transactionService.post(t.getId(), mr.id(),
                 new Dtos.TransactionRequest(null, u.getId(), null, TransactionType.PURCHASE,
-                        new BigDecimal("100"), "USD", "ref-1"));
+                        new BigDecimal("100"), "USD", "ref-1"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
 
@@ -130,7 +131,8 @@ class LoyaltyServiceIntegrationTest {
 
         transactionService.post(t.getId(), mr.id(),
                 new Dtos.TransactionRequest(null, alice.getId(), null, TransactionType.PURCHASE,
-                        new BigDecimal("50"), "USD", "ref-trans-1"));
+                        new BigDecimal("50"), "USD", "ref-trans-1"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
 
         // TransferService verifies the caller owns the sender wallet (Phase 5
         // P2P authz fix). When invoked directly from this test there is no
@@ -206,7 +208,8 @@ class LoyaltyServiceIntegrationTest {
 
         transactionService.post(t.getId(), mr.id(),
                 new Dtos.TransactionRequest(null, u.getId(), null, TransactionType.PURCHASE,
-                        new BigDecimal("100"), "USD", "ref-inv-1"));
+                        new BigDecimal("100"), "USD", "ref-inv-1"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
 
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());
         var inv = invoicingService.generate(merchant,

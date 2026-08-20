@@ -138,14 +138,17 @@ public class QrService {
             return transactionService.post(tenantId, q.getSourceId(), new Dtos.TransactionRequest(
                     null, req.userId(), null, q.getTransactionType(),
                     q.getAmount() == null ? BigDecimal.ZERO : q.getAmount(),
-                    q.getCurrency(), req.reference()));
+                    q.getCurrency(), req.reference()),
+                    com.innbucks.loyaltyservice.entity.EarnChannel.QR_PRESENCE);
         } else {
             // User-issued QR initiates a P2P transfer; sourceId is the sender.
             BigDecimal points = q.getAmount() == null ? BigDecimal.ZERO : q.getAmount();
             transferService.transfer(tenantId, new Dtos.TransferRequest(
                     q.getSourceId(), req.userId(), null, points, "qr-transfer"));
             return new Dtos.TransactionResponse(null, TransactionType.TRANSFER, points,
-                    points, null, null, null, null, req.reference(), Instant.now());
+                    points, null, null, null, null,
+                    com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(), null,
+                    req.reference(), Instant.now());
         }
     }
 }

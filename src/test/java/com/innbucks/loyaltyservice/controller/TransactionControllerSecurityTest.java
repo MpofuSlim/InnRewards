@@ -222,14 +222,17 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
         UUID shop = UUID.randomUUID();
 
         when(transactionService.post(any(UUID.class), any(UUID.class),
-                any(com.innbucks.loyaltyservice.dto.Dtos.TransactionRequest.class)))
+                any(com.innbucks.loyaltyservice.dto.Dtos.TransactionRequest.class),
+                any(com.innbucks.loyaltyservice.entity.EarnChannel.class)))
                 .thenReturn(new com.innbucks.loyaltyservice.dto.Dtos.TransactionResponse(
                         UUID.randomUUID(),
                         com.innbucks.loyaltyservice.entity.TransactionType.PURCHASE,
                         new java.math.BigDecimal("100.00"),
                         new java.math.BigDecimal("100.0000"),
                         new java.math.BigDecimal("5100.0000"),
-                        null, null, null, "SHOP-test", java.time.Instant.now()));
+                        null, null, null, null,
+                        com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE,
+                        "SHOP-test", java.time.Instant.now()));
 
         String token = TestJwtFactory.shopUser("till-user@test.local", merchant, shop, jwtSecret);
         mockMvc.perform(post("/loyalty/transactions")

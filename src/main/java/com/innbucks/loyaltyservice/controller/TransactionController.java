@@ -83,6 +83,8 @@ public class TransactionController {
                                         "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                         "campaignId": "f8a4b6c7-6789-0123-def0-123456789012",
                                         "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                        "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
+                                        "channel": "TYPED_PHONE",
                                         "reference": "POS-20260504-0001",
                                         "createdAt": "2026-05-04T11:00:00Z"
                                       }
@@ -92,7 +94,9 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Validation error, or REFERENCE_REQUIRED — staff-typed PURCHASE / "
+                            + "CARD_PAYMENT earns must name the till's receipt reference so every sale "
+                            + "earn reconciles against a receipt.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -108,8 +112,10 @@ public class TransactionController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
                     description = "DUPLICATE_REFERENCE — this (merchantId, reference) was already posted. "
-                            + "Treat as success: the earn landed on the first attempt. Separately, USER_BLOCKED "
-                            + "returns 403 and MERCHANT_INACTIVE / RECIPIENT_REQUIRED / INVALID_AMOUNT return 400.",
+                            + "Treat as success: the earn landed on the first attempt. Separately, 403 covers "
+                            + "USER_BLOCKED and SELF_EARN (a staff member may not credit their own phone; the "
+                            + "attempt is refused and fraud-logged), while MERCHANT_INACTIVE / "
+                            + "RECIPIENT_REQUIRED / INVALID_AMOUNT return 400.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -126,7 +132,8 @@ public class TransactionController {
     @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
         Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(),
-                CallerDetails.resolveMerchantId(req.merchantId()), req);
+                CallerDetails.resolveMerchantId(req.merchantId()), req,
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Transaction posted successfully", data));
     }
@@ -149,14 +156,16 @@ public class TransactionController {
                                       "message": "Transaction reversed successfully",
                                       "data": {
                                         "id": "22222222-3333-4444-5555-666666666666",
-                                        "type": "REFUND",
+                                        "type": "ADJUSTMENT",
                                         "amount": 100.00,
                                         "pointsDelta": -100.0000,
                                         "balanceAfter": 5000.0000,
                                         "ruleId": null,
                                         "campaignId": null,
                                         "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
-                                        "reference": "REVERSE:POS-20260504-0001",
+                                        "postedBy": "f4a8c2d6-1e39-4b77-8c05-2a9d6e4b8f12",
+                                        "channel": null,
+                                        "reference": "REV-POS-20260504-0001",
                                         "createdAt": "2026-05-04T12:30:00Z"
                                       }
                                     }
@@ -229,6 +238,8 @@ public class TransactionController {
                                         "ruleId": null,
                                         "campaignId": null,
                                         "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                        "postedBy": "f4a8c2d6-1e39-4b77-8c05-2a9d6e4b8f12",
+                                        "channel": null,
                                         "reference": "Goodwill credit",
                                         "createdAt": "2026-05-04T13:15:00Z"
                                       }
@@ -306,6 +317,8 @@ public class TransactionController {
                                             "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                             "campaignId": null,
                                             "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                            "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
+                                            "channel": "TYPED_PHONE",
                                             "reference": "POS-20260504-0001",
                                             "createdAt": "2026-05-04T11:00:00Z"
                                           },
@@ -318,6 +331,8 @@ public class TransactionController {
                                             "ruleId": null,
                                             "campaignId": null,
                                             "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                            "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
+                                            "channel": "TYPED_PHONE",
                                             "reference": "VOUCHER:VCH-AB12CD",
                                             "createdAt": "2026-05-04T12:00:00Z"
                                           }
@@ -382,6 +397,8 @@ public class TransactionController {
                                             "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                             "campaignId": null,
                                             "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                            "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
+                                            "channel": "TYPED_PHONE",
                                             "reference": "POS-20260504-0001",
                                             "createdAt": "2026-05-04T11:00:00Z"
                                           },
@@ -394,6 +411,8 @@ public class TransactionController {
                                             "ruleId": null,
                                             "campaignId": null,
                                             "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                            "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
+                                            "channel": "TYPED_PHONE",
                                             "reference": "VOUCHER:VCH-AB12CD",
                                             "createdAt": "2026-05-04T12:00:00Z"
                                           }

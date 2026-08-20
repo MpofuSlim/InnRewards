@@ -97,6 +97,9 @@ public class RedemptionService {
         }
 
         LoyaltyTransaction t = new LoyaltyTransaction();
+        // Attribution (V32): the caller who keyed the redemption (cashier or
+        // customer). Channel stays null — a redemption isn't an earn.
+        t.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
         t.setTenantId(tenantId);
         t.setMerchantId(m.getId());
         t.setUserId(u.getId());

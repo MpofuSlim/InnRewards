@@ -83,6 +83,8 @@ public class TransferService {
         String reason = HtmlSanitizer.stripAll(req.reason());
 
         LoyaltyTransaction debit = new LoyaltyTransaction();
+        // Attribution (V32): both legs carry the initiating caller.
+        debit.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
         debit.setTenantId(tenantId);
         debit.setMerchantId(merchantContext);
         debit.setUserId(sender.getId());
@@ -92,6 +94,7 @@ public class TransferService {
         transactions.save(debit);
 
         LoyaltyTransaction credit = new LoyaltyTransaction();
+        credit.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
         credit.setTenantId(tenantId);
         credit.setMerchantId(merchantContext);
         credit.setUserId(recipient.getId());

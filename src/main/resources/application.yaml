@@ -89,6 +89,15 @@ loyalty:
     # Default points per currency unit awarded on ticket purchases, applied when
     # auto-provisioning an organizer's merchant. Overridable via the rule API.
     default-earn-rate: ${LOYALTY_TICKETING_DEFAULT_EARN_RATE:1}
+  earn:
+    # Earn-integrity guards on staff-typed earns (channel TYPED_PHONE only —
+    # QR consume is exempt by design, the scanner IS the recipient). Both
+    # default ON; the env flags are an operational escape hatch.
+    # self-block: refuse SELF_EARN — a cashier crediting their own phone.
+    self-block: ${EARN_SELF_BLOCK:true}
+    # require-reference: staff-typed PURCHASE / CARD_PAYMENT earns must name a
+    # receipt reference, so every earn reconciles against a till sale.
+    require-reference: ${EARN_REQUIRE_REFERENCE:true}
   reconciliation:
     # Daily integrity check: wallet.balance must equal sum(points_ledger.delta).
     # auto-fix=false is detection-only (ERROR log + loyalty.reconciliation.drift

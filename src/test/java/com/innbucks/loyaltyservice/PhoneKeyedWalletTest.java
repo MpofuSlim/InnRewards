@@ -93,7 +93,8 @@ class PhoneKeyedWalletTest {
         // 1) Sender posts a $100 PURCHASE to a phone that's never been seen.
         var txn = transactionService.post(t.getId(), mr.id(),
                 new Dtos.TransactionRequest(null, null, phone, TransactionType.PURCHASE,
-                        new BigDecimal("100"), "USD", "pkw-ref-1"));
+                        new BigDecimal("100"), "USD", "pkw-ref-1"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
 
@@ -172,7 +173,8 @@ class PhoneKeyedWalletTest {
         // Seed Alice with some balance so the would-be transfer has something to steal.
         transactionService.post(t.getId(), mr.id(),
                 new Dtos.TransactionRequest(null, alice.getId(), null, TransactionType.PURCHASE,
-                        new BigDecimal("100"), "USD", "pkw-authz-seed"));
+                        new BigDecimal("100"), "USD", "pkw-authz-seed"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
 
         // Bob (CUSTOMER) tries to transfer FROM Alice's wallet. Must be rejected.
         assertThatThrownBy(() ->

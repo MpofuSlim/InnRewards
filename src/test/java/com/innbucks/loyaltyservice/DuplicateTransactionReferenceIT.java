@@ -99,7 +99,8 @@ class DuplicateTransactionReferenceIT extends PostgresIntegrationTestBase {
                     start.await();
                     transactionService.post(tenantId, merchantId,
                             new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,
-                                    new BigDecimal("100"), "USD", REFERENCE));
+                                    new BigDecimal("100"), "USD", REFERENCE),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
                     successes.incrementAndGet();
                 } catch (LoyaltyException ex) {
                     if ("DUPLICATE_REFERENCE".equals(ex.getCode())) {

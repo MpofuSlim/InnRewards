@@ -100,7 +100,8 @@ class ConcurrentReversalIT extends PostgresIntegrationTestBase {
         // Seed a balance: PURCHASE of 300 at 1 pt/unit -> +300 points.
         transactionService.post(tenantId, merchantId,
                 new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,
-                        new BigDecimal("300"), "USD", "SEED-EARN-" + System.nanoTime()));
+                        new BigDecimal("300"), "USD", "SEED-EARN-" + System.nanoTime()),
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
 
         // Redeem 100 -> a REDEMPTION row (delta -100), balance now 200. This is
         // the transaction we'll hammer with concurrent reversals.

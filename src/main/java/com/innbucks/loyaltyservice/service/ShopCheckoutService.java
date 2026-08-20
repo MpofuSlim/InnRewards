@@ -112,7 +112,8 @@ public class ShopCheckoutService {
             // for TransactionService to read the shop from, so pass the shopId we
             // already resolved — otherwise the transaction lands with a null shop
             // and the per-shop points report shows nothing.
-            Dtos.TransactionResponse earnResp = transactionService.post(tenantId, merchantId, earn, shopId);
+            Dtos.TransactionResponse earnResp = transactionService.post(tenantId, merchantId, earn, shopId,
+                    com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
             pointsEarned = earnResp.pointsDelta() == null ? BigDecimal.ZERO : earnResp.pointsDelta();
             purchaseTxnId = earnResp.id();
             balance = earnResp.balanceAfter() == null ? balance : earnResp.balanceAfter();

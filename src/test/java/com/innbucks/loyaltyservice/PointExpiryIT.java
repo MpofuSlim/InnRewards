@@ -163,6 +163,62 @@ class PointExpiryIT extends PostgresIntegrationTestBase {
         assertThat(walletService.mainWallet(phone).getBalance()).isEqualByComparingTo("40");
     }
 
+    @Test
+    void byDefaultPointsNeverExpire_soTheSweepReleasesNothing() {
+        earn(100, "earn-4");
+        UUID walletId = walletService.mainWallet(phone).getId();
+
+        // The shipped default (loyalty.points.expiry-days=0) opens a lot with no
+        // expiry at all. The other tests in this class set expires_at by hand,
+        // so this is the only one asserting what a real earn actually produces.
+        List<PointLot> lots = pointLots.findByWalletId(walletId);
+        assertThat(lots).hasSize(1);
+        assertThat(lots.get(0).getExpiresAt()).as("points do not expire").isNull();
+
+        // Run the release path the hourly sweeper uses. Against real Postgres
+        // this proves the NULL genuinely drops out of findDueForExpiry rather
+        // than being coerced into a comparison that matches.
+        walletService.expireDueLots(walletId);
+
+        assertThat(walletService.mainWallet(phone).getBalance())
+                .as("nothing released as breakage").isEqualByComparingTo("100");
+        assertThat(pointLots.findByWalletId(walletId).get(0).getRemainingAmount())
+                .isEqualByComparingTo("100");
+
+        // ...and they remain spendable, which requires findLiveForConsumption to
+        // return NULL-expiry lots. If it didn't, this redeem would fail with
+        // INSUFFICIENT_FUNDS despite a positive balance.
+        redeem(30, "redeem-4");
+        assertThat(walletService.mainWallet(phone).getBalance()).isEqualByComparingTo("70");
+    }
+
+    @Test
+    void expiringLotsBurnBeforeNonExpiringOnes() {
+        earn(50, "earn-5a");
+        earn(50, "earn-5b");
+        UUID walletId = walletService.mainWallet(phone).getId();
+
+        List<PointLot> lots = pointLots.findByWalletId(walletId);
+        assertThat(lots).hasSize(2);
+        lots.sort((a, b) -> a.getEarnedAt().compareTo(b.getEarnedAt()));
+        PointLot neverExpires = lots.get(0);   // earned FIRST, but no deadline
+        PointLot expiring = lots.get(1);       // earned second, expires in 5 days
+        neverExpires.setExpiresAt(null);
+        expiring.setExpiresAt(Instant.now().plus(5, ChronoUnit.DAYS));
+        pointLots.save(neverExpires);
+        pointLots.save(expiring);
+
+        redeem(60, "redeem-5");
+
+        // Deliberately NOT earned-order FIFO: the lot with a deadline goes
+        // first so the customer keeps the points that never lapse. The
+        // never-expiring lot is older, so plain FIFO would have burned it first.
+        assertThat(pointLots.findById(expiring.getId()).orElseThrow().getRemainingAmount())
+                .as("the lot with a deadline is spent first").isEqualByComparingTo("0");
+        assertThat(pointLots.findById(neverExpires.getId()).orElseThrow().getRemainingAmount())
+                .as("the never-expiring lot covers only the remainder").isEqualByComparingTo("40");
+    }
+
     private void earn(int amount, String ref) {
         transactionService.post(tenantId, merchantId,
                 new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,

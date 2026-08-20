@@ -30,13 +30,19 @@ import java.util.UUID;
  * not per tenant: a customer has one MAIN wallet across the whole super-app, so
  * points earned at any tenant are spendable at any tenant.
  *
- * <p>Points carry a per-lot expiry. Every credit ({@link #apply} with a positive
- * delta) opens a {@link PointLot} that expires {@code expiryDays} after it is
- * earned; every debit burns lots FIFO (soonest-to-expire first). The wallet's
- * cached {@code balance} equals the sum of {@code remaining} across the
- * customer's LIVE lots — an invariant maintained here (lazy release of expired
- * lots on every touch) and by the daily {@code PointExpirySweeper} (backstop for
- * idle wallets). Expired remainders are released to the ledger as "breakage".
+ * <p>Every credit ({@link #apply} with a positive delta) opens a
+ * {@link PointLot}; every debit burns lots FIFO (soonest-to-expire first,
+ * never-expiring last). The wallet's cached {@code balance} equals the sum of
+ * {@code remaining} across the customer's LIVE lots — an invariant maintained
+ * here (lazy release of expired lots on every touch) and by the daily
+ * {@code PointExpirySweeper} (backstop for idle wallets). Expired remainders are
+ * released to the ledger as "breakage".
+ *
+ * <p><b>Points do not expire by default</b> (V31). {@code expiryDays} defaults
+ * to 0, and a non-positive value opens lots with a NULL expiry, which no expiry
+ * query matches — so nothing is ever released as breakage. The machinery is
+ * retained, not deleted: setting {@code LOYALTY_POINTS_EXPIRY_DAYS} to a
+ * positive number re-enables per-lot expiry for newly earned points.
  */
 @Service
 @Transactional
@@ -58,7 +64,7 @@ public class WalletService {
 
     public WalletService(WalletRepository wallets, PointsLedgerRepository ledger,
                          PointLotRepository lots, LoyaltyMetrics metrics,
-                         @Value("${loyalty.points.expiry-days:30}") int expiryDays) {
+                         @Value("${loyalty.points.expiry-days:0}") int expiryDays) {
         this.wallets = wallets;
         this.ledger = ledger;
         this.lots = lots;
@@ -160,7 +166,10 @@ public class WalletService {
             lot.setOriginalAmount(delta);
             lot.setRemainingAmount(delta);
             lot.setEarnedAt(now);
-            lot.setExpiresAt(now.plus(expiryDays, ChronoUnit.DAYS));
+            // expiryDays <= 0 means points never expire (the default since
+            // V31) — a NULL expires_at, which every expiry query skips. Any
+            // positive value restores per-lot expiry for this cell.
+            lot.setExpiresAt(expiryDays > 0 ? now.plus(expiryDays, ChronoUnit.DAYS) : null);
             lots.save(lot);
         } else if (delta.signum() < 0) {
             consumeFifo(walletId, delta.negate(), now);

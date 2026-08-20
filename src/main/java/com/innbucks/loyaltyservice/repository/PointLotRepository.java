@@ -15,15 +15,35 @@ public interface PointLotRepository extends JpaRepository<PointLot, UUID> {
     /** All lots for a wallet (used by reconciliation and tests). */
     List<PointLot> findByWalletId(UUID walletId);
 
-    /** Live lots for a wallet, soonest-to-expire first — the FIFO burn order. */
+    /**
+     * Live lots for a wallet in FIFO burn order: soonest-to-expire first, then
+     * never-expiring lots (expiresAt IS NULL) last.
+     *
+     * <p>A NULL expiry means the lot never expires, so it must be included here
+     * — an explicit {@code IS NULL} branch is required because {@code NULL >
+     * :now} is UNKNOWN and would silently drop every non-expiring lot, making
+     * the customer's whole balance unspendable.
+     *
+     * <p>The leading CASE puts expiring lots ahead of non-expiring ones so a
+     * redemption spends the points with a deadline first, leaving the ones that
+     * keep forever — the outcome that loses the customer the least. It is
+     * written out rather than relying on the database's default NULL ordering
+     * (Postgres happens to sort NULLs last in ASC, but that is a dialect
+     * detail, not something to hang correct burn order on).
+     */
     @Query("""
         SELECT l FROM PointLot l
-        WHERE l.walletId = :walletId AND l.remainingAmount > 0 AND l.expiresAt > :now
-        ORDER BY l.expiresAt ASC, l.earnedAt ASC, l.id ASC
+        WHERE l.walletId = :walletId AND l.remainingAmount > 0
+          AND (l.expiresAt IS NULL OR l.expiresAt > :now)
+        ORDER BY CASE WHEN l.expiresAt IS NULL THEN 1 ELSE 0 END ASC,
+                 l.expiresAt ASC, l.earnedAt ASC, l.id ASC
         """)
     List<PointLot> findLiveForConsumption(@Param("walletId") UUID walletId, @Param("now") Instant now);
 
-    /** A wallet's lots that have expired but still hold points (to be released). */
+    /** A wallet's lots that have expired but still hold points (to be released).
+     *  Never-expiring lots (expiresAt IS NULL) are excluded for free: {@code NULL
+     *  <= :now} is UNKNOWN, never true. That is deliberate, not an oversight —
+     *  do not "fix" it by coalescing the NULL to a date. */
     @Query("""
         SELECT l FROM PointLot l
         WHERE l.walletId = :walletId AND l.remainingAmount > 0 AND l.expiresAt <= :now
@@ -39,7 +59,9 @@ public interface PointLotRepository extends JpaRepository<PointLot, UUID> {
 
     /** Distinct wallets holding live lots that enter the warning window
      *  (expiring after {@code now} but by {@code cutoff}) and were never
-     *  warned — drives the daily ExpiryWarningSweeper. */
+     *  warned — drives the daily ExpiryWarningSweeper. Never-expiring lots are
+     *  excluded by the same NULL semantics as above, so no customer is ever
+     *  nudged about points that have no deadline. */
     @Query("""
         SELECT DISTINCT l.walletId FROM PointLot l
         WHERE l.remainingAmount > 0 AND l.expiryWarnedAt IS NULL

@@ -75,8 +75,42 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V30**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V31**; never edit an applied
 migration — add the next version.
+
+## Points do NOT expire (V31)
+
+Points carried a 30-day per-lot expiry and released the unspent remainder to the
+ledger as breakage. **They no longer expire at all.**
+
+- "Never expires" is `point_lot.expires_at IS NULL`, not a far-future sentinel.
+  NULL is the honest representation, and it makes every expiry query skip the row
+  **for free** via SQL three-valued logic (`NULL <= now()` is UNKNOWN, never
+  true). `findDueForExpiry`, `findWalletsWithDueLots`, `findWalletsWithLotsToWarn`
+  and `findWarnableLots` therefore needed no change — **do not "fix" them by
+  coalescing the NULL to a date**, that would resurrect expiry.
+- **`findLiveForConsumption` DID need an explicit `IS NULL` branch.** `NULL >
+  :now` is UNKNOWN, so without it every non-expiring lot silently drops out of the
+  burn list and the customer's whole balance becomes unspendable (`INSUFFICIENT_FUNDS`
+  on a positive balance). Its `ORDER BY` also leads with a `CASE` putting expiring
+  lots first and never-expiring last — written out rather than relying on Postgres
+  sorting NULLs last in ASC, which is a dialect detail. Consequence: burn order is
+  *not* plain earned-order FIFO — a newer lot with a deadline is spent before an
+  older one without, so the customer keeps the points that never lapse.
+- **The mechanism is off, not deleted.** `loyalty.points.expiry-days`
+  (`LOYALTY_POINTS_EXPIRY_DAYS`) defaults to **0**, and `WalletService` treats any
+  non-positive value as "never expires". A positive value re-enables per-lot expiry
+  for newly earned points; existing NULL lots stay non-expiring.
+- **V31 also cleared the expiry on every lot with `remaining_amount > 0`** — not
+  just future-dated ones, since a lot whose timestamp has passed but which the
+  hourly sweep hasn't released is still counted in the wallet balance. Lots at
+  `remaining_amount = 0` are left alone: they're history (spent, or already
+  released as breakage with a matching ledger entry), and reversing past breakage
+  means crediting balances back, which needs its own ledger entries rather than a
+  silent UPDATE.
+- **Vouchers are unaffected** — `loyalty.voucher.default-validity-days` is still
+  365 and the voucher expiry sweep/warning still runs. Only *points* stopped
+  expiring.
 
 ## Rules are the tenant STANDARD — earning floor + voucher fees (V29)
 

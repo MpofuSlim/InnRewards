@@ -65,6 +65,10 @@ public class FraudAttempt {
         QR_BAD_SIGNATURE,
         /** Earn-integrity: staff attempted to credit their own phone via a
          *  typed-phone earn. The attempt is refused AND logged. */
-        SELF_EARN
+        SELF_EARN,
+        /** Earn-integrity: staff attempted a typed-phone earn to a phone
+         *  belonging to a staff member of the SAME merchant (colleague
+         *  crediting). Refused AND logged. */
+        STAFF_RECIPIENT
     }
 }

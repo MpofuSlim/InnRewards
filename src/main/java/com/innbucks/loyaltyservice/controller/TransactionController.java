@@ -113,8 +113,9 @@ public class TransactionController {
                     responseCode = "409",
                     description = "DUPLICATE_REFERENCE — this (merchantId, reference) was already posted. "
                             + "Treat as success: the earn landed on the first attempt. Separately, 403 covers "
-                            + "USER_BLOCKED and SELF_EARN (a staff member may not credit their own phone; the "
-                            + "attempt is refused and fraud-logged), while MERCHANT_INACTIVE / "
+                            + "USER_BLOCKED, SELF_EARN (a staff member may not credit their own phone) and "
+                            + "STAFF_RECIPIENT (nor any colleague's phone at the same merchant) — both "
+                            + "refused AND fraud-logged — while MERCHANT_INACTIVE / "
                             + "RECIPIENT_REQUIRED / INVALID_AMOUNT return 400.",
                     content = @Content(
                             mediaType = "application/json",

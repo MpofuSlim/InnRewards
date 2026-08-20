@@ -141,6 +141,65 @@ public class UserServiceClient {
     }
 
     /**
+     * Returns the phone numbers of every staff member linked to the given
+     * merchant, via user-service's
+     * {@code GET /users/internal/shop-staff/by-merchant/{merchantId}/contacts}
+     * (shared {@code X-Internal-Token}, mirroring {@link #assignedMerchantIds()}).
+     * Consumed by {@link com.innbucks.loyaltyservice.service.StaffRegistry}
+     * for the earn-integrity {@code STAFF_RECIPIENT} guard.
+     *
+     * <p>The Optional carries the AUTHORITATIVE/UNKNOWN distinction the
+     * fail-open guard depends on:
+     * <ul>
+     *   <li>{@code Optional.of(set)} — user-service answered; an EMPTY set is
+     *       the authoritative "this merchant has no staff with phones".</li>
+     *   <li>{@code Optional.empty()} — token unconfigured, transport failure,
+     *       non-2xx, or an unparseable body: the answer is UNKNOWN and the
+     *       registry degrades to guard-off rather than guessing.</li>
+     * </ul>
+     * Never throws — this sits under the earn path. Phoneless staff rows
+     * (deliberately included by user-service so the userUuid survives for
+     * pair reporting) are filtered here; whitespace is stripped so the set
+     * matches {@code StaffRegistry.compareKey} form.
+     */
+    public Optional<Set<String>> merchantStaffPhones(UUID merchantId) {
+        if (merchantId == null) {
+            return Optional.empty();
+        }
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("innbucks.internal-api-token not configured; staff lookup for merchant {} "
+                    + "is UNKNOWN (STAFF_RECIPIENT guard degraded)", merchantId);
+            return Optional.empty();
+        }
+        try {
+            String body = restClient.get()
+                    .uri("/users/internal/shop-staff/by-merchant/" + merchantId + "/contacts")
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .body(String.class);
+            if (body == null) {
+                return Optional.empty();
+            }
+            UserServiceApiResult<List<com.innbucks.loyaltyservice.dto.StaffContact>> envelope =
+                    objectMapper.readValue(body,
+                            new TypeReference<UserServiceApiResult<List<com.innbucks.loyaltyservice.dto.StaffContact>>>() {});
+            if (envelope == null || envelope.data() == null) {
+                return Optional.empty();
+            }
+            Set<String> phones = new LinkedHashSet<>();
+            for (com.innbucks.loyaltyservice.dto.StaffContact c : envelope.data()) {
+                if (c != null && c.phoneNumber() != null && !c.phoneNumber().isBlank()) {
+                    phones.add(c.phoneNumber().replaceAll("\\s+", ""));
+                }
+            }
+            return Optional.of(phones);
+        } catch (Exception e) {
+            log.warn("user-service staff lookup failed merchantId={} cause={}", merchantId, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Resolves a user's contact details (phone / email / first name) by their
      * stable {@code user_uuid} via user-service's
      * {@code GET /users/internal/{userUuid}/contact}. Authenticated with the

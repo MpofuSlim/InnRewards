@@ -10,14 +10,18 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A batch ("lot") of points earned in one credit, carrying its own expiry.
- * Points expire per-lot: a lot expires {@code expires_at} after it was earned,
- * and redemptions burn lots FIFO (soonest-to-expire first). The wallet's cached
- * balance equals the sum of {@code remaining_amount} across the customer's
- * still-live lots; {@link com.innbucks.loyaltyservice.service.WalletService}
- * maintains that invariant and the daily
+ * A batch ("lot") of points earned in one credit, optionally carrying its own
+ * expiry. Redemptions burn lots FIFO (soonest-to-expire first, never-expiring
+ * last). The wallet's cached balance equals the sum of {@code remaining_amount}
+ * across the customer's still-live lots;
+ * {@link com.innbucks.loyaltyservice.service.WalletService} maintains that
+ * invariant and the daily
  * {@link com.innbucks.loyaltyservice.scheduler.PointExpirySweeper} releases
  * expired remainders (breakage) to the ledger.
+ *
+ * <p><b>Points do not expire by default</b> (V31): {@code loyalty.points.expiry-days}
+ * defaults to 0, which opens lots with a NULL {@code expires_at}. Expiry is not
+ * removed, just off — set a positive value per cell to bring it back.
  */
 @Entity
 @Table(name = "point_lot", indexes = {
@@ -56,7 +60,11 @@ public class PointLot {
     @Column(name = "earned_at", nullable = false)
     private Instant earnedAt;
 
-    @Column(name = "expires_at", nullable = false)
+    /** When this lot's remaining points expire, or NULL for a lot that never
+     *  expires (the default since V31). Every expiry query is written so a NULL
+     *  simply never matches, so a non-expiring lot is invisible to both the
+     *  release sweep and the "expires soon" warning sweep. */
+    @Column(name = "expires_at")
     private Instant expiresAt;
 
     /** When the pre-expiry warning for this lot was sent (or consumed) by the

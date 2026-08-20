@@ -75,7 +75,14 @@ innbucks-notify:
 
 loyalty:
   points:
-    expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:30}
+    # 0 (the default) = points NEVER expire: every credit opens a lot with a
+    # NULL expires_at, which no expiry query matches, so nothing is released as
+    # breakage and no "expires soon" nudge is ever sent. Was 30 days until V31.
+    # Set a positive number to re-enable per-lot expiry for this cell — the
+    # machinery is intact, just switched off. Only affects NEWLY earned points;
+    # lots already carrying an expiry keep it (V31 cleared them for points
+    # customers still held).
+    expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:0}
     # Points per currency unit when redeeming. Platform-wide (points are global).
     redeem-rate: ${LOYALTY_POINTS_REDEEM_RATE:100}
   ticketing:

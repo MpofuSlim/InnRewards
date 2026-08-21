@@ -9,6 +9,8 @@ import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
+import com.innbucks.loyaltyservice.entity.Voucher;
+import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
@@ -17,6 +19,8 @@ import com.innbucks.loyaltyservice.service.MerchantService;
 import com.innbucks.loyaltyservice.service.RuleAdminService;
 import com.innbucks.loyaltyservice.service.TransactionService;
 import com.innbucks.loyaltyservice.service.UserService;
+import com.innbucks.loyaltyservice.service.VoucherService;
+import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +62,8 @@ class InvoiceTransactionLinkIT extends PostgresIntegrationTestBase {
     @Autowired TransactionService transactionService;
     @Autowired InvoicingService invoicingService;
     @Autowired LoyaltyTransactionRepository transactions;
+    @Autowired VoucherService voucherService;
+    @Autowired VoucherTemplateService voucherTemplateService;
 
     @MockitoBean UserServiceClient userServiceClient;
 
@@ -103,8 +109,32 @@ class InvoiceTransactionLinkIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void pointsAloneRaiseNoInvoice_soTheirRowsStayUnlinked() {
+        // Invoice totals come from VOUCHER fees, not points, and
+        // InvoicingService skips a zero-total invoice entirely. So a merchant
+        // can issue points all period and still be billed nothing — in which
+        // case there is no invoice for those rows to reference, and NULL is the
+        // correct answer rather than a gap. Pinning it because it is genuinely
+        // surprising: "points issued but invoiceId is null" looks like a bug
+        // until you know invoices are voucher-priced.
+        earn(100, "earn-no-vouchers");
+        Merchant m = merchantRepository.findById(merchantId).orElseThrow();
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+
+        assertThat(invoicingService.generate(m, today.minusDays(1), today))
+                .as("no billable voucher activity -> no invoice at all")
+                .isEmpty();
+
+        assertThat(transactions.findAll().stream()
+                .filter(t -> merchantId.equals(t.getMerchantId()))
+                .map(LoyaltyTransaction::getInvoiceId))
+                .containsOnlyNulls();
+    }
+
+    @Test
     void generatingAnInvoiceStampsExactlyTheRowsItBilled() {
         earn(100, "earn-in-period");
+        issueVoucher();   // gives the invoice a non-zero total so it is raised
         Merchant m = merchantRepository.findById(merchantId).orElseThrow();
 
         // Bill a window that certainly contains the earn we just made.
@@ -134,6 +164,7 @@ class InvoiceTransactionLinkIT extends PostgresIntegrationTestBase {
     @Test
     void aLaterInvoiceNeverStealsRowsAnEarlierOneAlreadyBilled() {
         earn(100, "earn-claim-once");
+        issueVoucher();   // both invoices need a non-zero total to be raised
         Merchant m = merchantRepository.findById(merchantId).orElseThrow();
 
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
@@ -150,6 +181,24 @@ class InvoiceTransactionLinkIT extends PostgresIntegrationTestBase {
                 .map(LoyaltyTransaction::getInvoiceId))
                 .as("rows stay attributed to the invoice that billed them first")
                 .containsOnly(first.getId());
+    }
+
+    /**
+     * Issue one voucher so the period has a non-zero fee total and an invoice is
+     * actually raised. Invoices are priced off voucher activity, not points, so
+     * a points-only period yields no invoice at all — see
+     * {@link #pointsAloneRaiseNoInvoice_soTheirRowsStayUnlinked}.
+     */
+    private void issueVoucher() {
+        VoucherTemplate tpl = voucherTemplateService.create(tenantId, merchantId,
+                new Dtos.VoucherTemplateRequest(null, "Invoice link tpl",
+                        VoucherTemplate.VoucherType.SINGLE_USE,
+                        VoucherTemplate.ValueType.PERCENT,
+                        "USD", null, 1, 30, null));
+        voucherService.issue(tenantId,
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                        null, null, userId,
+                        Voucher.DeliveryChannel.NONE, null, null, null));
     }
 
     private void earn(int amount, String ref) {

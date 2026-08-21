@@ -232,7 +232,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                         new java.math.BigDecimal("5100.0000"),
                         null, null, null, null,
                         com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE,
-                        "SHOP-test", java.time.Instant.now()));
+                        "SHOP-test", java.time.Instant.now(), null));
 
         String token = TestJwtFactory.shopUser("till-user@test.local", merchant, shop, jwtSecret);
         mockMvc.perform(post("/loyalty/transactions")

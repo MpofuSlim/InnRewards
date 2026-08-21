@@ -33,6 +33,9 @@ import java.util.concurrent.ThreadLocalRandom;
 @Transactional
 public class InvoicingService {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(InvoicingService.class);
+
     private final InvoiceRepository invoices;
     private final MerchantRepository merchants;
     private final LoyaltyTransactionRepository transactions;
@@ -123,6 +126,20 @@ public class InvoicingService {
         inv.setCurrency(m.getCurrency());
         inv.setInvoiceNumber(nextInvoiceNumber());
         Invoice saved = invoices.save(inv);
+
+        // IN-9: stamp the rows this invoice just billed, so a points report can
+        // name the invoice a transaction was billed on instead of reconstructing
+        // it from date ranges. Reuses the SAME from/to bounds the sums above
+        // used, so the stamped set is exactly the summed set.
+        //
+        // Runs only on the non-zero-total path, which is deliberate: a period
+        // with no billable voucher activity produces no invoice at all, so its
+        // transactions keep invoice_id = NULL and the report correctly says
+        // "not invoiced" rather than pointing at someone else's bill.
+        int stamped = transactions.stampInvoice(saved.getId(), m.getId(), from, to);
+        log.debug("Invoice {} stamped {} transaction(s) for merchant {} over [{}, {})",
+                saved.getInvoiceNumber(), stamped, m.getId(), periodStart, periodEnd);
+
         // Email the merchant its invoice AFTER the tx commits (best-effort, async
         // — see InvoiceEmailNotifier). A value snapshot rides the event so the
         // post-commit listener needs no entity reload.

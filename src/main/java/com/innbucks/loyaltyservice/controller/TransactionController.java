@@ -86,7 +86,8 @@ public class TransactionController {
                                         "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                         "channel": "TYPED_PHONE",
                                         "reference": "POS-20260504-0001",
-                                        "createdAt": "2026-05-04T11:00:00Z"
+                                        "createdAt": "2026-05-04T11:00:00Z",
+                                        "invoiceId": null
                                       }
                                     }
                                     """)
@@ -166,7 +167,8 @@ public class TransactionController {
                                         "postedBy": "f4a8c2d6-1e39-4b77-8c05-2a9d6e4b8f12",
                                         "channel": null,
                                         "reference": "REV-POS-20260504-0001",
-                                        "createdAt": "2026-05-04T12:30:00Z"
+                                        "createdAt": "2026-05-04T12:30:00Z",
+                                        "invoiceId": null
                                       }
                                     }
                                     """)
@@ -241,7 +243,8 @@ public class TransactionController {
                                         "postedBy": "f4a8c2d6-1e39-4b77-8c05-2a9d6e4b8f12",
                                         "channel": null,
                                         "reference": "Goodwill credit",
-                                        "createdAt": "2026-05-04T13:15:00Z"
+                                        "createdAt": "2026-05-04T13:15:00Z",
+                                        "invoiceId": null
                                       }
                                     }
                                     """)
@@ -320,7 +323,8 @@ public class TransactionController {
                                             "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                             "channel": "TYPED_PHONE",
                                             "reference": "POS-20260504-0001",
-                                            "createdAt": "2026-05-04T11:00:00Z"
+                                            "createdAt": "2026-05-04T11:00:00Z",
+                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53"
                                           },
                                           {
                                             "id": "22222222-3333-4444-5555-666666666666",
@@ -334,7 +338,8 @@ public class TransactionController {
                                             "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                             "channel": "TYPED_PHONE",
                                             "reference": "VOUCHER:VCH-AB12CD",
-                                            "createdAt": "2026-05-04T12:00:00Z"
+                                            "createdAt": "2026-05-04T12:00:00Z",
+                                            "invoiceId": null
                                           }
                                         ],
                                         "page": 0,
@@ -400,7 +405,8 @@ public class TransactionController {
                                             "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                             "channel": "TYPED_PHONE",
                                             "reference": "POS-20260504-0001",
-                                            "createdAt": "2026-05-04T11:00:00Z"
+                                            "createdAt": "2026-05-04T11:00:00Z",
+                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53"
                                           },
                                           {
                                             "id": "22222222-3333-4444-5555-666666666666",
@@ -414,7 +420,8 @@ public class TransactionController {
                                             "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                             "channel": "TYPED_PHONE",
                                             "reference": "VOUCHER:VCH-AB12CD",
-                                            "createdAt": "2026-05-04T12:00:00Z"
+                                            "createdAt": "2026-05-04T12:00:00Z",
+                                            "invoiceId": null
                                           }
                                         ],
                                         "page": 0,

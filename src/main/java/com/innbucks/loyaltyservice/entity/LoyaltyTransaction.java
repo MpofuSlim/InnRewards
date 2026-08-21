@@ -89,6 +89,23 @@ public class LoyaltyTransaction {
     @Column(name = "channel", length = 20)
     private EarnChannel channel;
 
+    /**
+     * The invoice whose billing period covered this transaction (IN-9, V33).
+     * Stamped by {@code InvoicingService.generate} when the period is invoiced,
+     * so a points report can name the invoice a row was billed on.
+     *
+     * <p>A back-reference, not a funding link: points are what an invoice is
+     * computed FROM, never the other way round.
+     *
+     * <p>Null means "not billed on any invoice" — either the period hasn't been
+     * invoiced yet, or the merchant had no billable voucher activity that
+     * period and {@code InvoicingService} skipped the zero-total invoice
+     * entirely. Points can legitimately exist with no invoice, so null is a
+     * real answer rather than missing data.
+     */
+    @Column(name = "invoice_id")
+    private UUID invoiceId;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 

@@ -347,7 +347,7 @@ public class TransactionService {
         return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
                 t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
                 t.getShopId(), t.getPostedBy(), t.getChannel(),
-                t.getReference(), t.getCreatedAt());
+                t.getReference(), t.getCreatedAt(), t.getInvoiceId());
     }
 
     /**

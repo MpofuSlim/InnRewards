@@ -397,7 +397,12 @@ public class Dtos {
                                       // channel an EARN arrived through (TYPED_PHONE / QR_PRESENCE /
                                       // CHECKOUT_S2S; null for non-earn and legacy rows).
                                       UUID postedBy, com.innbucks.loyaltyservice.entity.EarnChannel channel,
-                                      String reference, Instant createdAt) {}
+                                      String reference, Instant createdAt,
+                                      // Billing back-reference (additive, V33 / IN-9): the invoice
+                                      // whose period covered this row. Null = not billed — either the
+                                      // period isn't invoiced yet, or the merchant had no billable
+                                      // voucher activity so no invoice was raised at all.
+                                      UUID invoiceId) {}
 
     // Sender (fromUserId) MUST be a registered LoyaltyUser — you can't spend a
     // pending balance. Recipient may be either a registered user (toUserId) or

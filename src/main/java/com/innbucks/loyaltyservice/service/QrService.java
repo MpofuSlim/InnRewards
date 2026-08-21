@@ -148,7 +148,9 @@ public class QrService {
             return new Dtos.TransactionResponse(null, TransactionType.TRANSFER, points,
                     points, null, null, null, null,
                     com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(), null,
-                    req.reference(), Instant.now());
+                    // invoiceId is null: this response is built in-flight, before
+                    // any billing period containing it has been invoiced.
+                    req.reference(), Instant.now(), null);
         }
     }
 }

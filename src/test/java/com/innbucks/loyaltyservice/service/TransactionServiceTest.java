@@ -47,10 +47,13 @@ class TransactionServiceTest {
     private final com.innbucks.loyaltyservice.config.LoyaltyProperties props =
             new com.innbucks.loyaltyservice.config.LoyaltyProperties(null, null, null, null, null);
     private final FraudService fraudService = mock(FraudService.class);
+    // Mockito default (false) = "recipient is not staff", so every pre-existing
+    // case runs exactly as before the guard existed.
+    private final StaffRegistry staffRegistry = mock(StaffRegistry.class);
 
     private final TransactionService service = new TransactionService(
             transactions, users, merchants, walletService, rulesEngine, metrics, memberNotifier,
-            props, fraudService);
+            props, fraudService, staffRegistry);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();
@@ -303,5 +306,51 @@ class TransactionServiceTest {
         assertThat(captor.getValue().getPostedBy()).isNull();
         assertThat(captor.getValue().getChannel())
                 .isEqualTo(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
+        // Server-side channels never consult the staff registry — the guard is
+        // typed-phone-only, and a registry miss here would be a wasted lookup
+        // on every checkout.
+        verify(staffRegistry, never()).isStaffPhone(any(), any());
+    }
+
+    @Test
+    void typedPhone_toAColleaguesPhone_isRefusedAndFraudLogged() {
+        // The shape SELF_EARN cannot see: cashier A credits cashier B. The
+        // registry answers from user-service's authoritative staff set.
+        authenticateAsCashier();
+        activeMerchant();
+        var colleague = userWithPhone("+263779999999");
+        when(users.findOrCreatePending(TENANT, "+263779999999", MERCHANT_A)).thenReturn(colleague);
+        when(staffRegistry.isStaffPhone(MERCHANT_A, "+263779999999")).thenReturn(true);
+
+        assertThatThrownBy(() -> service.post(TENANT, MERCHANT_A,
+                phoneEarn("+263779999999", "RCT-003"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("STAFF_RECIPIENT"));
+
+        verify(fraudService).record(org.mockito.ArgumentMatchers.eq(TENANT), any(),
+                org.mockito.ArgumentMatchers.eq(MERCHANT_A), any(),
+                org.mockito.ArgumentMatchers.eq(com.innbucks.loyaltyservice.entity.FraudAttempt.Reason.STAFF_RECIPIENT),
+                any(), any(), any());
+        verify(transactions, never()).saveAndFlush(any());
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void typedPhone_nonStaffRecipient_passesTheStaffGuard() {
+        authenticateAsCashier();
+        activeMerchant();
+        var recipient = userWithPhone("+263772000000");
+        when(users.findOrCreatePending(TENANT, "+263772000000", MERCHANT_A)).thenReturn(recipient);
+        when(transactions.findFirstByMerchantIdAndReference(any(), any())).thenReturn(Optional.empty());
+        when(rulesEngine.evaluate(any(), any(), any(), any()))
+                .thenReturn(new RulesEngine.Evaluation(BigDecimal.ZERO, null, null, null));
+        when(staffRegistry.isStaffPhone(MERCHANT_A, "+263772000000")).thenReturn(false);
+
+        var resp = service.post(TENANT, MERCHANT_A, phoneEarn("+263772000000", "RCT-004"),
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
+
+        assertThat(resp).isNotNull();
+        verify(fraudService, never()).record(any(), any(), any(), any(), any(), any(), any(), any());
     }
 }

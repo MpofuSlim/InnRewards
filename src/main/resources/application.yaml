@@ -98,6 +98,15 @@ loyalty:
     # require-reference: staff-typed PURCHASE / CARD_PAYMENT earns must name a
     # receipt reference, so every earn reconciles against a till sale.
     require-reference: ${EARN_REQUIRE_REFERENCE:true}
+    # staff-recipient-block: refuse staff-typed earns to ANY staff phone of the
+    # same merchant (colleague-crediting). Staff set comes from user-service's
+    # internal shop-staff endpoint; unreachable = guard degrades open (SELF_EARN
+    # still covers the caller's own phone, no network needed).
+    staff-recipient-block: ${EARN_STAFF_RECIPIENT_BLOCK:true}
+    # TTL of the per-merchant staff-phone cache: one lookup per merchant per
+    # window; also the propagation delay for staff-list changes and the
+    # degraded window after a failed lookup.
+    staff-cache-seconds: ${EARN_STAFF_CACHE_SECONDS:300}
   reconciliation:
     # Daily integrity check: wallet.balance must equal sum(points_ledger.delta).
     # auto-fix=false is detection-only (ERROR log + loyalty.reconciliation.drift

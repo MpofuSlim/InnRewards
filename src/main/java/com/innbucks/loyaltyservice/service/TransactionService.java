@@ -34,6 +34,7 @@ public class TransactionService {
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final com.innbucks.loyaltyservice.config.LoyaltyProperties props;
     private final FraudService fraud;
+    private final StaffRegistry staffRegistry;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               UserService users,
@@ -43,7 +44,8 @@ public class TransactionService {
                               com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
                               com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                               com.innbucks.loyaltyservice.config.LoyaltyProperties props,
-                              FraudService fraud) {
+                              FraudService fraud,
+                              StaffRegistry staffRegistry) {
         this.transactions = transactions;
         this.users = users;
         this.merchants = merchants;
@@ -53,6 +55,7 @@ public class TransactionService {
         this.memberNotifier = memberNotifier;
         this.props = props;
         this.fraud = fraud;
+        this.staffRegistry = staffRegistry;
     }
 
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req,
@@ -127,15 +130,28 @@ public class TransactionService {
             // zero state). Fails open when the caller's token carries no
             // phone claim — identity we don't have can't be compared; the
             // staff-recipient set (phase 2) closes that from the other side.
-            String callerPhone = normalizePhone(
+            String callerPhone = StaffRegistry.compareKey(
                     com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber());
-            if (callerPhone != null && callerPhone.equals(normalizePhone(u.getPhoneNumber()))) {
+            if (callerPhone != null && callerPhone.equals(StaffRegistry.compareKey(u.getPhoneNumber()))) {
                 fraud.record(tenantId, hasUserId ? u.getId() : null, merchantId, null,
                         FraudAttempt.Reason.SELF_EARN, "staff-typed earn to the caller's own phone",
                         null, null);
                 throw LoyaltyException.forbidden("SELF_EARN",
                         "You can't award points to your own account.");
             }
+        }
+        if (channel == EarnChannel.TYPED_PHONE && props.earn().staffRecipientBlock()
+                && staffRegistry.isStaffPhone(merchantId, u.getPhoneNumber())) {
+            // STAFF_RECIPIENT: the recipient's phone belongs to ANY staff
+            // member of this merchant — colleague crediting, the shape the
+            // caller-only SELF_EARN check is blind to (T2/T4 in the design).
+            // The registry fails OPEN on user-service trouble, so this can
+            // refuse only on an authoritative staff snapshot.
+            fraud.record(tenantId, hasUserId ? u.getId() : null, merchantId, null,
+                    FraudAttempt.Reason.STAFF_RECIPIENT,
+                    "staff-typed earn to a staff member's phone", null, null);
+            throw LoyaltyException.forbidden("STAFF_RECIPIENT",
+                    "Points can't be awarded to a staff account of this merchant.");
         }
 
         if (req.reference() != null) {
@@ -350,17 +366,4 @@ public class TransactionService {
                 t.getReference(), t.getCreatedAt());
     }
 
-    /**
-     * Whitespace-insensitive phone comparison key. Deliberately NOT a full
-     * MSISDN canonicalisation: both sides come from the same platform
-     * (user-service mints the JWT claim, loyalty stores what registration
-     * sent), so formats agree in practice, and an aggressive rewrite here
-     * risks a false SELF_EARN against a legitimate customer. A residual
-     * false NEGATIVE (0771… vs +263771…) is closed by the phase-2
-     * staff-recipient set, which matches canonically.
-     */
-    private static String normalizePhone(String phone) {
-        if (phone == null || phone.isBlank()) return null;
-        return phone.replaceAll("\\s+", "");
-    }
 }

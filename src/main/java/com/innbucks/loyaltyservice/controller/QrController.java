@@ -116,7 +116,8 @@ public class QrController {
                                         "postedBy": "11111111-2222-3333-4444-555555555555",
                                         "channel": "QR_PRESENCE",
                                         "reference": "QR:qr_2026_e8f7c4d2a1b3",
-                                        "createdAt": "2026-05-04T11:02:00Z"
+                                        "createdAt": "2026-05-04T11:02:00Z",
+                                        "invoiceId": null
                                       }
                                     }
                                     """)

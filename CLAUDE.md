@@ -75,8 +75,38 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V31**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V33**; never edit an applied
 migration — add the next version.
+
+## Transactions carry the invoice that billed them (V33, IN-9)
+
+`loyalty_transactions.invoice_id` back-references the invoice whose billing
+period covered the row, so a points report can name the bill a row was counted
+on instead of reconstructing it from date ranges.
+
+- **Direction matters.** An invoice does NOT generate points — points generate
+  the invoice. `InvoicingService` sums `loyalty_transactions` over the billing
+  window to produce `invoices.points_issued` / `points_redeemed`. This column is
+  traceability, not a funding link. (The ticket's phrasing, "the invoice used to
+  generate the points", reads the causality backwards.)
+- **The stamping predicate MUST stay character-identical to `sumPointsIssued` /
+  `sumPointsRedeemed`** (merchant + `createdAt` in `[from, to)` + status POSTED).
+  The rows stamped have to be exactly the rows summed, or a report would cite an
+  invoice whose printed `pointsIssued` doesn't account for the row — worse than
+  no link, because it looks authoritative. `stampInvoice` and both sums live
+  next to each other in `LoyaltyTransactionRepository` for that reason.
+- **Claim-once**: `stampInvoice` only touches rows where `invoice_id IS NULL`, so
+  a later invoice never re-attributes rows an earlier one billed. This matters
+  when periods overlap (a merchant switching DAILY → MONTHLY can have a day
+  covered twice). First invoice to bill a row owns it.
+- **NULL is a real answer, not missing data.** Invoice totals come from *voucher*
+  fees, not points, and `InvoicingService` skips zero-total invoices entirely —
+  so a period with points but no billable voucher activity produces no invoice at
+  all, and its rows keep `invoice_id = NULL`. Reports must render that as "not
+  invoiced" rather than implying a gap.
+- Surfaced as `invoiceId` on `Dtos.TransactionResponse` and as an
+  `invoiceNumber` column on `GET /loyalty/reports/transactions/export` (the CSV
+  resolves ids → numbers in one batched lookup per page, cached across pages).
 
 ## Points do NOT expire (V31)
 

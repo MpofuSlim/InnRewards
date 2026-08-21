@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -64,6 +65,37 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     BigDecimal sumPointsRedeemed(@Param("merchantId") UUID merchantId,
                                  @Param("from") Instant from,
                                  @Param("to") Instant to);
+
+    /**
+     * Stamp every transaction an invoice billed with that invoice's id (IN-9).
+     *
+     * <p>The merchant / window / status predicate is character-for-character the
+     * one {@link #sumPointsIssued} and {@link #sumPointsRedeemed} use. That is
+     * the whole contract: the rows stamped MUST be exactly the rows summed, or
+     * the invoice reference on a report would point at a bill whose printed
+     * {@code pointsIssued} doesn't account for that row.
+     *
+     * <p>{@code invoiceId IS NULL} makes this claim-once. A row already
+     * attributed to an earlier invoice is never re-attributed to a later one —
+     * which matters when billing periods overlap (a merchant switching
+     * DAILY -> MONTHLY can have a day covered twice). First invoice to bill a
+     * row owns it; re-stamping would silently rewrite billing history.
+     *
+     * @return how many rows were stamped
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        UPDATE LoyaltyTransaction t
+           SET t.invoiceId = :invoiceId
+         WHERE t.merchantId = :merchantId
+           AND t.createdAt >= :from AND t.createdAt < :to
+           AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+           AND t.invoiceId IS NULL
+        """)
+    int stampInvoice(@Param("invoiceId") UUID invoiceId,
+                     @Param("merchantId") UUID merchantId,
+                     @Param("from") Instant from,
+                     @Param("to") Instant to);
 
     @Query("""
         SELECT COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0)

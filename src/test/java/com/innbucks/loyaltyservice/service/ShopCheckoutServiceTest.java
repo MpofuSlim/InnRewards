@@ -70,7 +70,8 @@ class ShopCheckoutServiceTest {
         Dtos.TransactionResponse earnResp = new Dtos.TransactionResponse(
                 UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("5"),
                 new BigDecimal("5"), new BigDecimal("20"), null, null, shopId,
-                null, com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S, "ref", null);
+                null, com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S, "ref", null,
+                null);
         when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId),
                 eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S)))
                 .thenReturn(earnResp);

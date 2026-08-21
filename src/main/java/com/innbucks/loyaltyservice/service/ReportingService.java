@@ -604,7 +604,15 @@ public class ReportingService {
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
 
         StringBuilder sb = new StringBuilder(
-                "id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference\n");
+                "id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber\n");
+
+        // IN-9: resolve invoice_id -> the human-readable invoice number, which is
+        // what someone reconciling points against a bill actually quotes. Cached
+        // across pages and fetched in one batch per page, so a month of rows
+        // sharing a handful of invoices costs a handful of lookups, not one per
+        // row. Blank means the row isn't on any invoice — see LoyaltyTransaction
+        // #invoiceId for when that legitimately happens.
+        java.util.Map<UUID, String> invoiceNumbers = new java.util.HashMap<>();
 
         int pageSize = 500;
         int pageNum = 0;
@@ -614,6 +622,17 @@ public class ReportingService {
                             tenantId, fromInstant, toInstant, PageRequest.of(pageNum, pageSize))
                     : transactions.findByTenantIdAndMerchantIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
                             tenantId, merchantId, fromInstant, toInstant, PageRequest.of(pageNum, pageSize));
+            List<UUID> unresolved = page.getContent().stream()
+                    .map(LoyaltyTransaction::getInvoiceId)
+                    .filter(java.util.Objects::nonNull)
+                    .filter(id -> !invoiceNumbers.containsKey(id))
+                    .distinct()
+                    .toList();
+            if (!unresolved.isEmpty()) {
+                invoices.findAllById(unresolved)
+                        .forEach(i -> invoiceNumbers.put(i.getId(), i.getInvoiceNumber()));
+            }
+
             for (LoyaltyTransaction t : page.getContent()) {
                 sb.append(t.getId()).append(',')
                         .append(t.getCreatedAt()).append(',')
@@ -623,7 +642,9 @@ public class ReportingService {
                         .append(t.getMerchantId() == null ? "" : t.getMerchantId()).append(',')
                         .append(t.getShopId() == null ? "" : t.getShopId()).append(',')
                         .append(t.getUserId()).append(',')
-                        .append(csvField(t.getReference()))
+                        .append(csvField(t.getReference())).append(',')
+                        .append(csvField(t.getInvoiceId() == null
+                                ? null : invoiceNumbers.get(t.getInvoiceId())))
                         .append('\n');
             }
             if (page.isLast()) break;

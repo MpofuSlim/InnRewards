@@ -449,7 +449,8 @@ public class ReportingController {
                                             "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                             "campaignId": null,
                                             "reference": "POS-20260504-0001",
-                                            "createdAt": "2026-05-04T11:00:00Z"
+                                            "createdAt": "2026-05-04T11:00:00Z",
+                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53"
                                           }
                                         ]
                                       }
@@ -540,7 +541,8 @@ public class ReportingController {
                                             "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                             "campaignId": null,
                                             "reference": "POS-20260504-0001",
-                                            "createdAt": "2026-05-04T11:00:00Z"
+                                            "createdAt": "2026-05-04T11:00:00Z",
+                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53"
                                           }
                                         ]
                                       }
@@ -1082,7 +1084,13 @@ public class ReportingController {
                           "merchant. Returns `Content-Disposition: attachment; filename=transactions.csv` so " +
                           "browsers download rather than render. Sorted ascending by `createdAt` for " +
                           "deterministic output. `balanceAfter` is intentionally absent — it's computed " +
-                          "at write time and not stored, so an after-the-fact export can't reconstruct it.")
+                          "at write time and not stored, so an after-the-fact export can't reconstruct it.\n\n" +
+                          "`invoiceNumber` names the invoice whose billing period covered the row, so points " +
+                          "can be reconciled against the bill they were counted on. It is **blank** when the " +
+                          "row isn't on any invoice — either its period hasn't been invoiced yet, or the " +
+                          "merchant had no billable voucher activity that period and no invoice was raised " +
+                          "(invoice totals come from voucher fees, not points, and zero-total invoices are " +
+                          "skipped). A blank is a real answer, not missing data.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1091,10 +1099,10 @@ public class ReportingController {
                             mediaType = "text/csv",
                             schema = @Schema(type = "string", format = "binary"),
                             examples = @ExampleObject(name = "CSV", value = """
-                                    id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference
-                                    11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001
-                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:VCH-AB12CD
-                                    33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit
+                                    id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber
+                                    11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001,INV-1746355200000-4821
+                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:VCH-AB12CD,INV-1746355200000-4821
+                                    33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit,
                                     """)
                     )
             ),

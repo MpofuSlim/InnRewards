@@ -31,6 +31,19 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
     @Query("SELECT v FROM Voucher v WHERE v.code = :code")
     Optional<Voucher> lockByCode(@Param("code") String code);
 
+    /**
+     * Pessimistic-write lock on one voucher by id. Used by
+     * {@code VoucherService.transfer} so two concurrent transfers of the same
+     * voucher serialize: the first holds the lock, stamps {@code transferredAt}
+     * and commits; the second blocks, then re-reads a non-null
+     * {@code transferredAt} and is refused as a second hop. Without the lock
+     * both readers could see {@code transferredAt == null} and the @Version
+     * check would be the only thing between them and a double-transfer.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT v FROM Voucher v WHERE v.id = :id")
+    Optional<Voucher> lockById(@Param("id") UUID id);
+
     List<Voucher> findByAssignedUserIdAndStatusIn(UUID userId, List<Voucher.Status> statuses);
 
     Page<Voucher> findByAssignedUserIdAndStatusIn(UUID userId, List<Voucher.Status> statuses, Pageable pageable);

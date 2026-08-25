@@ -17,6 +17,8 @@ import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
+import com.innbucks.loyaltyservice.util.MsisdnMasking;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -31,6 +33,7 @@ import java.util.UUID;
 
 @Service
 @Transactional
+@Slf4j
 public class VoucherService {
 
     private final VoucherRepository vouchers;
@@ -392,6 +395,105 @@ public class VoucherService {
             throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher belongs to a different merchant.");
         }
         v.setStatus(Voucher.Status.REVOKED);
+    }
+
+    /**
+     * Hand a voucher to another customer. <b>Single hop</b>: the lifecycle is
+     * issued → transferred → redeemed, and the recipient of a transfer cannot
+     * pass it on again.
+     *
+     * <p>Why single hop, since it is the whole point of this method: a voucher
+     * carries a merchant's liability at a value frozen at issuance. A freely
+     * circulating voucher becomes a bearer instrument — it can be sold on, and
+     * the merchant loses any link between who was given the incentive and who
+     * eventually redeems it, which is exactly what the issue-side fee is priced
+     * against. One hop covers the real use case (I can't use this, take it)
+     * without turning the voucher into currency.
+     *
+     * <p>The rule is enforced by {@code transferredAt != null}, under a
+     * pessimistic lock. The lock is not optional: without it two concurrent
+     * transfers of the same voucher could both read a null
+     * {@code transferredAt}, and only the {@code @Version} check would stand
+     * between them and a voucher delivered to two different people.
+     */
+    public Dtos.VoucherResponse transfer(UUID tenantId, UUID voucherId, Dtos.VoucherTransferRequest req) {
+        boolean hasToUserId = req.toUserId() != null;
+        boolean hasToPhone = req.toPhone() != null && !req.toPhone().isBlank();
+        if (hasToUserId == hasToPhone) {
+            throw LoyaltyException.badRequest("RECIPIENT_REQUIRED",
+                    "supply exactly one of toUserId or toPhone");
+        }
+
+        Voucher v = vouchers.lockById(voucherId)
+                .orElseThrow(() -> LoyaltyException.notFound("voucher"));
+        if (!v.getTenantId().equals(tenantId)) {
+            throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
+        }
+        // Only the current holder may pass it on. Staff roles are allowed
+        // through the same helper the view/delivery lifecycle uses, so an
+        // operator can move a voucher on a customer's behalf for support.
+        requireCallerMayViewVoucher(v);
+
+        // THE single-hop rule.
+        if (v.getTransferredAt() != null) {
+            throw LoyaltyException.badRequest("VOUCHER_ALREADY_TRANSFERRED",
+                    "This voucher has already been transferred once and can't be passed on again.");
+        }
+
+        // Only a live, wholly-unused voucher can move. PARTIALLY_USED is
+        // deliberately refused alongside the terminal states: the original
+        // holder has already consumed part of the value, so handing over the
+        // remainder splits one voucher's benefit across two people and makes
+        // the redemption trail ambiguous about who received what.
+        if (v.getStatus() != Voucher.Status.ISSUED
+                && v.getStatus() != Voucher.Status.DELIVERED
+                && v.getStatus() != Voucher.Status.VIEWED) {
+            throw LoyaltyException.badRequest("VOUCHER_NOT_TRANSFERABLE",
+                    "Only an unused voucher can be transferred (this one is " + v.getStatus() + ").");
+        }
+        if (v.getExpiresAt() != null && v.getExpiresAt().isBefore(Instant.now())) {
+            throw LoyaltyException.badRequest("VOUCHER_EXPIRED",
+                    "This voucher has expired and can't be transferred.");
+        }
+
+        var recipient = hasToUserId
+                ? userService.require(tenantId, req.toUserId())
+                : userService.findOrCreatePending(tenantId, req.toPhone(), v.getMerchantId());
+
+        // Compare on phone, not user id: a customer can hold one LoyaltyUser
+        // projection per tenant, so id-equality alone would let someone
+        // "transfer" a voucher to themselves via a sibling projection.
+        if (recipient.getPhoneNumber().equals(v.getAssigneePhone())
+                || (v.getAssignedUserId() != null && v.getAssignedUserId().equals(recipient.getId()))) {
+            throw LoyaltyException.badRequest("SELF_TRANSFER",
+                    "You can't transfer a voucher to yourself.");
+        }
+
+        UUID fromUserId = v.getAssignedUserId();
+        String fromPhone = v.getAssigneePhone();
+
+        v.setTransferredAt(Instant.now());
+        v.setTransferredFromUserId(fromUserId);
+        v.setTransferredFromPhone(fromPhone);
+
+        v.setAssignedUserId(recipient.getId());
+        v.setAssigneePhone(recipient.getPhoneNumber());
+        // The note is the sender's, not the recipient's name — don't let it
+        // overwrite assigneeName with something that isn't a name.
+        v.setAssigneeName(null);
+
+        // Clear the pre-expiry warning stamp. It records that the PREVIOUS
+        // holder was warned; leaving it set would make ExpiryWarningSweeper skip
+        // the new holder entirely, so they'd never hear the voucher was about to
+        // lapse. The lifecycle timestamps (delivered/viewed) are left alone —
+        // they are history, and history is not the new holder's to reset.
+        v.setExpiryWarnedAt(null);
+
+        log.info("Voucher transferred voucherId={} from={} to={} tenantId={}",
+                v.getId(), MsisdnMasking.mask(fromPhone),
+                MsisdnMasking.mask(recipient.getPhoneNumber()), tenantId);
+
+        return toResponse(v);
     }
 
     @Transactional(readOnly = true)

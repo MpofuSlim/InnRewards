@@ -107,6 +107,26 @@ loyalty:
     # window; also the propagation delay for staff-list changes and the
     # degraded window after a failed lookup.
     staff-cache-seconds: ${EARN_STAFF_CACHE_SECONDS:300}
+  adjustment:
+    # Ceilings on manual point adjustments (POST /loyalty/transactions/adjust).
+    # Adjustment is the ONLY path that mints points from nothing — earning is
+    # bounded by a real transaction amount and a rule's earn rate, redemption by
+    # the balance — so without these a single SHOP_ADMIN can credit any figure
+    # to any account in their tenant, including one they control, and redeem it
+    # immediately. Every other control on this path (postedBy attribution, the
+    # customer notification, the reports) only tells you afterwards.
+    #
+    # SUPER_ADMIN is exempt from both: the aim is to make large corrections
+    # require someone accountable, not to make them impossible.
+    #
+    # Both compare the ABSOLUTE movement — a large debit is as much a red flag
+    # as a large credit — and the daily figure sums absolute values, so posting
+    # +N then -N cannot present as a day of zero activity.
+    #
+    # Set either to 0 to disable that half. Tune to the largest correction a
+    # shop manager should be able to make unaided.
+    max-per-adjustment: ${LOYALTY_MAX_PER_ADJUSTMENT:5000}
+    max-daily-per-operator: ${LOYALTY_MAX_DAILY_ADJUSTMENT_PER_OPERATOR:20000}
   reconciliation:
     # Daily integrity check: wallet.balance must equal sum(points_ledger.delta).
     # auto-fix=false is detection-only (ERROR log + loyalty.reconciliation.drift

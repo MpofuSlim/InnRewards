@@ -18,11 +18,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
 @Service
 @Transactional
+@lombok.extern.slf4j.Slf4j
 public class TransactionService {
 
     private final LoyaltyTransactionRepository transactions;
@@ -307,6 +310,7 @@ public class TransactionService {
         reason = HtmlSanitizer.stripAll(reason);
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         LoyaltyUser u = users.require(tenantId, userId);
+        requireWithinAdjustmentCeilings(tenantId, u, merchantId, points);
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
         t.setMerchantId(merchantId);
@@ -328,6 +332,81 @@ public class TransactionService {
         // Unexpected balance changes are worth surfacing (credit or debit).
         memberNotifier.notifyPointsAdjusted(u.getPhoneNumber(), points, balance);
         return toResponse(t, balance);
+    }
+
+    /**
+     * Ceilings on manual adjustment. Adjustment is the only path that mints
+     * points from nothing — earning is bounded by a real transaction amount and
+     * a rule's earn rate, redemption by the balance — so without a ceiling a
+     * single SHOP_ADMIN can credit any figure to any account in their tenant,
+     * including one they control, and redeem it immediately. Everything else on
+     * this path (postedBy attribution, the customer notification, the reports)
+     * only tells you afterwards.
+     *
+     * <p>SUPER_ADMIN is exempt. The aim is not to make large corrections
+     * impossible; it is to make them require someone accountable for them,
+     * while a shop manager can still fix a small counter mistake unaided.
+     *
+     * <p>Both ceilings compare the ABSOLUTE movement. A large debit is as much
+     * a red flag as a large credit — wiping a customer's balance is the shape a
+     * disgruntled operator uses — and the daily total sums absolute values so
+     * that posting +N then −N cannot present as a day of zero activity.
+     */
+    private void requireWithinAdjustmentCeilings(UUID tenantId, LoyaltyUser target,
+                                                 UUID merchantId, BigDecimal points) {
+        if (points == null || points.signum() == 0) {
+            return;
+        }
+        if (com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+            return;
+        }
+
+        BigDecimal magnitude = points.abs();
+        BigDecimal perCap = props.adjustment().maxPerAdjustment();
+        if (perCap != null && perCap.signum() > 0 && magnitude.compareTo(perCap) > 0) {
+            rejectAdjustment(tenantId, target, merchantId,
+                    "single adjustment " + magnitude.toPlainString() + " exceeds cap " + perCap.toPlainString(),
+                    "ADJUSTMENT_LIMIT_EXCEEDED",
+                    "That adjustment is larger than you're allowed to post. "
+                            + "Ask a super admin to make it.");
+        }
+
+        BigDecimal dailyCap = props.adjustment().maxDailyPerOperator();
+        UUID operator = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
+        // A null operator means the token carries no userId claim (legacy or
+        // server-side). The daily sum is keyed on postedBy, so it cannot be
+        // attributed — the per-adjustment cap above still applies, which is the
+        // half that bounds a single movement.
+        if (dailyCap != null && dailyCap.signum() > 0 && operator != null) {
+            BigDecimal already = transactions.sumAbsAdjustmentsByOperatorSince(
+                    operator, Instant.now().minus(24, ChronoUnit.HOURS));
+            if (already == null) already = BigDecimal.ZERO;
+            BigDecimal projected = already.add(magnitude);
+            if (projected.compareTo(dailyCap) > 0) {
+                rejectAdjustment(tenantId, target, merchantId,
+                        "operator 24h adjustment total would reach " + projected.toPlainString()
+                                + ", cap " + dailyCap.toPlainString(),
+                        "ADJUSTMENT_DAILY_LIMIT_EXCEEDED",
+                        "You've reached your daily adjustment limit. "
+                                + "Ask a super admin to make this one.");
+            }
+        }
+    }
+
+    /**
+     * Record the refused adjustment as evidence, then throw. FraudService.record
+     * runs REQUIRES_NEW, so the row survives the rollback this throw causes —
+     * a rejected over-cap adjustment is exactly the signal an operator review
+     * needs, and it would be worthless if it vanished with the rejection.
+     */
+    private void rejectAdjustment(UUID tenantId, LoyaltyUser target, UUID merchantId,
+                                  String detail, String code, String message) {
+        log.warn("Adjustment refused operator={} targetUserId={} merchantId={} detail={}",
+                com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(),
+                target.getId(), merchantId, detail);
+        fraud.record(tenantId, target.getId(), merchantId, null,
+                FraudAttempt.Reason.ADJUSTMENT_LIMIT, detail, null, null);
+        throw LoyaltyException.forbidden(code, message);
     }
 
     @Transactional(readOnly = true)

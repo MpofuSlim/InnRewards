@@ -59,7 +59,7 @@ class QrServiceSecurityTest {
 
     private final LoyaltyProperties props =
             new LoyaltyProperties(null, new LoyaltyProperties.Qr(
-                    "unit-test-qr-secret-unit-test-qr-secret-unit-test", 300), null, null, null);
+                    "unit-test-qr-secret-unit-test-qr-secret-unit-test", 300), null, null, null, null);
 
     private final QrService qrService = new QrService(
             qrs, transactionService, transferService, fraud, userService, merchantAuthz, props);

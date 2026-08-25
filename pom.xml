@@ -75,7 +75,7 @@
         <!-- Sentry SDK 8.x supports Spring Boot 3+ / Jakarta. The logback
              appender auto-promotes ERROR-level log events to Sentry with the
              active MDC (traceId/spanId/correlationId) attached. -->
-        <sentry.version>8.52.0</sentry.version>
+        <sentry.version>8.53.0</sentry.version>
         <!-- Jsoup: allowlist HTML sanitization for user-supplied free text
              (OWASP A03 / stored-XSS defense). Standalone jar, no transitive
              deps, JDK 21 compatible. Used on write paths to neutralize markup

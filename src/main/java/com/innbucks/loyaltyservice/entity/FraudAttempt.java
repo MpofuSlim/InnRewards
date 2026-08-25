@@ -69,6 +69,12 @@ public class FraudAttempt {
         /** Earn-integrity: staff attempted a typed-phone earn to a phone
          *  belonging to a staff member of the SAME merchant (colleague
          *  crediting). Refused AND logged. */
-        STAFF_RECIPIENT
+        STAFF_RECIPIENT,
+        /** Adjustment-integrity: an operator attempted a manual point
+         *  adjustment above their per-adjustment or rolling-24h ceiling.
+         *  Refused AND logged — adjustment is the only path that mints points
+         *  from nothing, so a refused one is exactly what an operator review
+         *  wants to see. */
+        ADJUSTMENT_LIMIT
     }
 }

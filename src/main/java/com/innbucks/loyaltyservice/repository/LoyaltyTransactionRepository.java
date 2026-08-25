@@ -49,6 +49,35 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
      */
     Page<LoyaltyTransaction> findByUserIdInOrderByCreatedAtDesc(List<UUID> userIds, Pageable pageable);
 
+    /**
+     * Summed ABSOLUTE value of the ADJUSTMENT rows one operator has posted
+     * since {@code since}. Backs the per-operator daily ceiling in
+     * {@code TransactionService.adjust}.
+     *
+     * <p>Absolute, not net, and that is the whole point: summing signed deltas
+     * would let an operator post +10,000 and −10,000 and show a daily total of
+     * zero, having moved 20,000 points. It is the movement that is being
+     * bounded, not the balance.
+     *
+     * <p>Scoped to {@code postedBy} rather than to the merchant or the target
+     * user, because the thing being rate-limited is a person's authority to
+     * mint points — an operator who spreads adjustments across many customers
+     * or several merchants in one tenant is exactly the case this catches.
+     *
+     * <p>Rows with a null {@code postedBy} (server-side or pre-V32 legacy) can
+     * never match a non-null caller id, so they are excluded for free.
+     */
+    @Query("""
+        SELECT COALESCE(SUM(ABS(t.pointsDelta)), 0)
+        FROM LoyaltyTransaction t
+        WHERE t.postedBy = :postedBy
+          AND t.type = com.innbucks.loyaltyservice.entity.TransactionType.ADJUSTMENT
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+          AND t.createdAt >= :since
+        """)
+    BigDecimal sumAbsAdjustmentsByOperatorSince(@Param("postedBy") UUID postedBy,
+                                                @Param("since") Instant since);
+
     Page<LoyaltyTransaction> findByTenantIdAndShopIdOrderByCreatedAtDesc(UUID tenantId, UUID shopId, Pageable pageable);
 
     // Detailed per-shop points report: every transaction at a shop within

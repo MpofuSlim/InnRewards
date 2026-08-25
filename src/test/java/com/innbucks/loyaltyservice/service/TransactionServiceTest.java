@@ -45,7 +45,7 @@ class TransactionServiceTest {
     // Real properties record: the compact constructor fills the defaults, so
     // this is exactly the shipped configuration (both earn guards ON).
     private final com.innbucks.loyaltyservice.config.LoyaltyProperties props =
-            new com.innbucks.loyaltyservice.config.LoyaltyProperties(null, null, null, null, null);
+            new com.innbucks.loyaltyservice.config.LoyaltyProperties(null, null, null, null, null, null);
     private final FraudService fraudService = mock(FraudService.class);
     // Mockito default (false) = "recipient is not staff", so every pre-existing
     // case runs exactly as before the guard existed.

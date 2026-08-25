@@ -374,23 +374,25 @@ Tokens are single-use and expire fast. Regenerate on display, don't cache.
 
 ## 10. TEST-ONLY endpoints
 
-### `GET /loyalty/public/customers/{phoneNumber}/transactions`
+There are **seven** unauthenticated endpoints under `/loyalty/public/**` — wallet,
+statement, vouchers, send points, redeem points, transfer voucher, redeem
+voucher. They take **no JWT, no tenant header and no role**, and exist so you can
+build screens against real data before your auth flow is wired up.
 
-**No JWT. No tenant header. No role.** Exists so you can build screens against
-real data before your auth flow is wired up.
+They are documented in full, with request/response shapes and error codes, in
+**[`Loyalty-Public-Test-Integration.md`](./Loyalty-Public-Test-Integration.md)**.
 
-Returns the same paginated statement as §3, collapsed across every tenant the
-phone belongs to.
+The essentials:
 
-- **Disabled by default.** A cell that hasn't opted in returns **404**. It is
-  enabled on staging only.
-- **Never point a production build at this.** A phone number is guessable, so an
-  enabled cell leaks any customer's history to anyone who asks. It is not
-  hardened and it is not a fallback.
-- An unknown phone returns an **empty page**, not a 404.
+- **Disabled by default.** A cell that hasn't opted in returns **404** from all
+  seven. Enabled on staging only.
+- **Never point a production build at them.** A phone number is guessable, and
+  these endpoints *move value* as well as read it — an enabled cell lets anyone
+  who can guess a number spend that customer's points and vouchers.
+- Every one has an authenticated twin in this document. Each calls the same
+  service method, so the rules you see there are the rules you get here.
 
-Ship against `GET /loyalty/users/{id}/transactions` (§3). This one is
-scaffolding.
+Ship against the authenticated endpoints above. This is scaffolding.
 
 ---
 
@@ -417,4 +419,4 @@ stub. There is no airtime conversion.
 - [ ] Disable *Send* on an already-transferred voucher — one hop only
 - [ ] Idempotency `reference` generated on user intent, not per retry
 - [ ] Send `deviceFingerprint` on voucher redemption
-- [ ] Nothing in §10 or §11 is in the production build
+- [ ] Nothing in §10 or §11 is in the production build — see `Loyalty-Public-Test-Integration.md`

@@ -46,6 +46,7 @@ public class VoucherService {
     private final NotificationGateway notifications;
     private final FraudService fraud;
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
+    private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final CryptoSigner signer;
 
     public VoucherService(VoucherRepository vouchers,
@@ -58,6 +59,7 @@ public class VoucherService {
                           NotificationGateway notifications,
                           FraudService fraud,
                           com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
+                          com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                           LoyaltyProperties props) {
         this.vouchers = vouchers;
         this.batches = batches;
@@ -69,6 +71,7 @@ public class VoucherService {
         this.notifications = notifications;
         this.fraud = fraud;
         this.metrics = metrics;
+        this.memberNotifier = memberNotifier;
         this.signer = new CryptoSigner(props.voucher().secret());
     }
 
@@ -492,6 +495,24 @@ public class VoucherService {
         log.info("Voucher transferred voucherId={} from={} to={} tenantId={}",
                 v.getId(), MsisdnMasking.mask(fromPhone),
                 MsisdnMasking.mask(recipient.getPhoneNumber()), tenantId);
+
+        // Both sides are told. Without the RECEIVED message the transfer is
+        // silent: the voucher lands in a wallet the recipient has no reason to
+        // open, and vouchers still expire (365d default) even though points no
+        // longer do — so a silent transfer can simply lapse unused, which
+        // defeats the whole point of handing it over. The SENT message is the
+        // sender's only confirmation that a phone number they typed by hand
+        // resolved to the person they meant.
+        //
+        // Both are @Async and best-effort: a notification failure must never
+        // roll back a transfer that has already happened.
+        String valueType = v.getValueType() == null ? null : v.getValueType().name();
+        java.time.LocalDate expiresOn = v.getExpiresAt() == null
+                ? null
+                : v.getExpiresAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
+        memberNotifier.notifyVoucherReceived(recipient.getPhoneNumber(), valueType,
+                v.getValue(), v.getCurrency(), expiresOn);
+        memberNotifier.notifyVoucherSent(fromPhone, valueType, v.getValue(), v.getCurrency());
 
         return toResponse(v);
     }

@@ -57,6 +57,8 @@ class VoucherTransferTest {
     private static final String RECIPIENT_PHONE = "+263772222222";
 
     private final VoucherRepository vouchers = mock(VoucherRepository.class);
+    private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier =
+            mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class);
     private final UserService userService = mock(UserService.class);
     private VoucherService service;
 
@@ -76,6 +78,7 @@ class VoucherTransferTest {
                 mock(NotificationGateway.class),
                 mock(FraudService.class),
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
+                memberNotifier,
                 props);
 
         authenticateAs(HOLDER_PHONE, "ROLE_CUSTOMER");
@@ -268,6 +271,43 @@ class VoucherTransferTest {
                 new Dtos.VoucherTransferRequest(null, RECIPIENT_PHONE, null));
 
         assertThat(v.getDeliveredAt()).isEqualTo(delivered);
+    }
+
+    @Test
+    void bothSidesAreNotified() {
+        // Without the RECEIVED message the transfer is silent: the voucher
+        // lands in a wallet the recipient has no reason to open, and vouchers
+        // still expire (365d default) even though points no longer do — so a
+        // silent transfer can simply lapse unused, defeating the point of
+        // handing it over. The SENT message is the sender's only confirmation
+        // that a hand-typed phone number resolved to the person they meant.
+        Voucher v = liveVoucher();
+        stubLookup(v);
+        stubRecipient();
+
+        service.transfer(TENANT, v.getId(),
+                new Dtos.VoucherTransferRequest(null, RECIPIENT_PHONE, null));
+
+        verify(memberNotifier).notifyVoucherReceived(eq(RECIPIENT_PHONE), eq("PERCENT"),
+                eq(new BigDecimal("10.0000")), eq("USD"), any());
+        verify(memberNotifier).notifyVoucherSent(eq(HOLDER_PHONE), eq("PERCENT"),
+                eq(new BigDecimal("10.0000")), eq("USD"));
+    }
+
+    @Test
+    void aRefusedTransferNotifiesNobody() {
+        // A rejection must not text either party about a transfer that did not
+        // happen.
+        Voucher v = liveVoucher();
+        v.setTransferredAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        stubLookup(v);
+
+        assertThatThrownBy(() -> service.transfer(TENANT, v.getId(),
+                new Dtos.VoucherTransferRequest(null, RECIPIENT_PHONE, null)))
+                .isInstanceOf(LoyaltyException.class);
+
+        verify(memberNotifier, never()).notifyVoucherReceived(any(), any(), any(), any(), any());
+        verify(memberNotifier, never()).notifyVoucherSent(any(), any(), any(), any());
     }
 
     @Test

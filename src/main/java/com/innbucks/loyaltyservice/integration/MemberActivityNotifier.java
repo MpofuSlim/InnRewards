@@ -85,6 +85,59 @@ public class MemberActivityNotifier {
         dispatch(phone, "Good news. Your InnBucks loyalty points are now active and ready to spend.");
     }
 
+    /**
+     * Someone handed the recipient a voucher (single-hop p2p transfer).
+     *
+     * <p><b>The redeemable code is deliberately NOT in this message.</b> The
+     * recipient's phone number was typed by the SENDER, so a mistyped digit
+     * sends this to a stranger — and a stranger holding the code could walk
+     * into the merchant and redeem it. The voucher itself is already sitting in
+     * the recipient's wallet (see the by-phone vouchers endpoint), so the app
+     * is the safe place to reveal the code; this message only needs to make
+     * them open it.
+     *
+     * <p>Contrast with issue-time delivery through {@code NotificationGateway},
+     * which DOES carry the code — there the destination phone was chosen by the
+     * merchant issuing the voucher, not by another customer.
+     */
+    @Async("notificationExecutor")
+    public void notifyVoucherReceived(String phone, String valueType, BigDecimal value,
+                                      String currency, LocalDate expiresOn) {
+        if (isBlank(phone)) return;
+        StringBuilder body = new StringBuilder("Someone sent you ")
+                .append(describeVoucher(valueType, value, currency))
+                .append(" on InnBucks.");
+        if (expiresOn != null) {
+            body.append(" It expires on ").append(expiresOn).append('.');
+        }
+        body.append(" Open the app to view and use it.");
+        dispatch(phone, body.toString());
+    }
+
+    /** Confirms to the sender that the voucher left their wallet. */
+    @Async("notificationExecutor")
+    public void notifyVoucherSent(String phone, String valueType, BigDecimal value, String currency) {
+        if (isBlank(phone)) return;
+        dispatch(phone, "You sent " + describeVoucher(valueType, value, currency)
+                + " from your InnBucks wallet. It can't be sent on again.");
+    }
+
+    /**
+     * Human phrasing for a voucher's frozen value snapshot. FREE_ITEM and COMBO
+     * carry no numeric value at all, so they degrade to a generic noun rather
+     * than printing a bare "null" or "0" at a customer.
+     */
+    private static String describeVoucher(String valueType, BigDecimal value, String currency) {
+        if (value == null || valueType == null) {
+            return "a voucher";
+        }
+        return switch (valueType) {
+            case "PERCENT" -> fmt(value) + "% off";
+            case "AMOUNT" -> (isBlank(currency) ? "" : currency + " ") + fmt(value) + " off";
+            default -> "a voucher";
+        };
+    }
+
     /** SMS-primary, WhatsApp-fallback; best-effort — never throws. */
     private void dispatch(String phone, String message) {
         try {

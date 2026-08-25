@@ -122,6 +122,23 @@ public class Voucher {
     @Column(name = "campaign_source", length = 200)
     private String campaignSource;
 
+    // Single-hop p2p transfer (V34). A voucher may change hands exactly once:
+    // issued -> transferred -> redeemed. `transferredAt == null` IS the
+    // "may still be transferred" test — see VoucherService.transfer.
+    //
+    // The from-* pair records the assignee the voucher moved AWAY from. The
+    // current holder remains assignedUserId / assigneePhone, which the transfer
+    // overwrites, so without these two columns the previous owner would be
+    // unrecoverable the moment the transfer commits.
+    @Column(name = "transferred_at")
+    private Instant transferredAt;
+
+    @Column(name = "transferred_from_user_id")
+    private UUID transferredFromUserId;
+
+    @Column(name = "transferred_from_phone", length = 32)
+    private String transferredFromPhone;
+
     @Version
     private long version;
 

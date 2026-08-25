@@ -531,6 +531,29 @@ public class Dtos {
                                   String valueType, BigDecimal value, String currency,
                                   Instant issuedAt, Instant expiresAt) {}
 
+    /**
+     * Hand a voucher to another customer. SINGLE HOP — see
+     * {@code VoucherService.transfer}: the recipient becomes the new holder and
+     * cannot pass it on again.
+     *
+     * <p>Recipient is either a registered {@code toUserId} or a {@code toPhone}
+     * (auto-enrolled PENDING if unknown) — exactly one, same rule as the points
+     * {@link TransferRequest}. The sender is not a field: it is the voucher's
+     * current assignee, and the caller must be them.
+     */
+    public record VoucherTransferRequest(
+            @Schema(example = "66666666-7777-8888-9999-000000000000", nullable = true,
+                    description = "Recipient's loyalty user ID. Mutually exclusive with toPhone.")
+            UUID toUserId,
+            @Schema(example = "+263771234567", nullable = true,
+                    description = "Recipient's phone number. If no LoyaltyUser exists, a PENDING one is "
+                                + "created — the voucher becomes redeemable once they register.")
+            String toPhone,
+            @Schema(example = "Passing this on to my sister", nullable = true,
+                    description = "Optional note, recorded as the recipient's assignee name context.")
+            @Size(max = 200) String note
+    ) {}
+
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
     public record RedeemVoucherRequest(
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,

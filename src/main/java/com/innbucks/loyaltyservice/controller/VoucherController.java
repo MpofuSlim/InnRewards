@@ -497,6 +497,135 @@ public class VoucherController {
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 
+    @PostMapping("/{id}/transfer")
+    @Operation(summary = "Transfer a voucher to another customer (ONE hop only)",
+            description = """
+                    Hands the voucher to another customer. The recipient becomes the new assignee and \
+                    redeems it as their own.
+
+                    **A voucher can only be transferred ONCE.** The lifecycle is issued → transferred → \
+                    redeemed; a voucher that has already changed hands is refused with \
+                    `VOUCHER_ALREADY_TRANSFERRED`. This keeps a voucher from becoming a bearer instrument \
+                    that circulates and can be sold on — the merchant is billed for issuing it and needs \
+                    the link between who was given the incentive and who redeems it to survive.
+
+                    Only an **unused, live** voucher moves: `ISSUED`, `DELIVERED` or `VIEWED`. \
+                    `PARTIALLY_USED` is refused along with the terminal states — the original holder has \
+                    already consumed part of the value, and splitting the rest across two people makes the \
+                    redemption trail ambiguous. An expired voucher is refused too.
+
+                    The **caller must be the current holder** (a CUSTOMER whose JWT phone matches the \
+                    assignee). Staff roles may transfer on a customer's behalf for support.
+
+                    Send exactly one of `toUserId` or `toPhone`. An unknown `toPhone` is auto-enrolled as a \
+                    PENDING loyalty user, so you can pass a voucher to someone who hasn't signed up yet — \
+                    it becomes redeemable once they register.
+
+                    The pre-expiry warning is reset on transfer so the NEW holder gets their own warning; \
+                    the delivered/viewed timestamps are left as history.""")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Voucher transferred — the response shows the NEW assignee",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Transferred", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Voucher transferred successfully",
+                                      "data": {
+                                        "id": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
+                                        "code": "VCH-AB12CD34",
+                                        "status": "VIEWED",
+                                        "templateId": "4d3c2b1a-9876-5432-10fe-dcba98765432",
+                                        "assignedUserId": "66666666-7777-8888-9999-000000000000",
+                                        "assigneePhone": "+263771234567",
+                                        "usesRemaining": 1,
+                                        "valueType": "PERCENT",
+                                        "value": 10.0000,
+                                        "currency": "USD",
+                                        "issuedAt": "2026-08-20T09:00:00Z",
+                                        "expiresAt": "2027-08-20T09:00:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Already transferred (`VOUCHER_ALREADY_TRANSFERRED`), not in a "
+                            + "transferable state (`VOUCHER_NOT_TRANSFERABLE`), expired "
+                            + "(`VOUCHER_EXPIRED`), sending to yourself (`SELF_TRANSFER`), or neither / "
+                            + "both of toUserId and toPhone supplied (`RECIPIENT_REQUIRED`).",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Already transferred once", value = """
+                                            {
+                                              "code": "VOUCHER_ALREADY_TRANSFERRED",
+                                              "message": "This voucher has already been transferred once and can't be passed on again.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not transferable", value = """
+                                            {
+                                              "code": "VOUCHER_NOT_TRANSFERABLE",
+                                              "message": "Only an unused voucher can be transferred (this one is REDEEMED).",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Recipient missing or ambiguous", value = """
+                                            {
+                                              "code": "RECIPIENT_REQUIRED",
+                                              "message": "supply exactly one of toUserId or toPhone",
+                                              "data": null
+                                            }
+                                            """)
+                            }
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Caller is not the voucher's current holder (`NOT_VOUCHER_OWNER`) or the "
+                            + "voucher belongs to another tenant (`CROSS_TENANT`).",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not the holder", value = """
+                                    {
+                                      "code": "NOT_VOUCHER_OWNER",
+                                      "message": "you can only act on your own vouchers",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Voucher not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "voucher not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.VoucherResponse>> transfer(
+            @PathVariable UUID id,
+            @Valid @RequestBody Dtos.VoucherTransferRequest req) {
+        Dtos.VoucherResponse data = voucherService.transfer(tenantContext.requireTenantId(), id, req);
+        return ResponseEntity.ok(ApiResult.ok("Voucher transferred successfully", data));
+    }
+
     @PostMapping("/{id}/revoke")
     @Operation(summary = "Revoke an issued voucher",
             description = "Marks the voucher REVOKED so it can no longer be redeemed. Use for fraud, " +

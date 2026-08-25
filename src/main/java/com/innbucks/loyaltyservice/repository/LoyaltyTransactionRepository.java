@@ -36,6 +36,19 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
 
     Page<LoyaltyTransaction> findByUserIdOrderByCreatedAtDesc(UUID userId, Pageable pageable);
 
+    /**
+     * Every transaction belonging to ANY of the given LoyaltyUser projections,
+     * newest first. A customer's phone can map to one LoyaltyUser per tenant, so
+     * a phone-keyed statement has to span all of them — paginating each
+     * projection separately and stitching the pages in Java would produce a
+     * globally mis-ordered feed. Kept as an `IN` so the ordering and the page
+     * window are both computed by the database over the whole set.
+     *
+     * <p>Callers must pass a non-empty list: an empty {@code IN ()} is a syntax
+     * error on some dialects and a full scan on others.
+     */
+    Page<LoyaltyTransaction> findByUserIdInOrderByCreatedAtDesc(List<UUID> userIds, Pageable pageable);
+
     Page<LoyaltyTransaction> findByTenantIdAndShopIdOrderByCreatedAtDesc(UUID tenantId, UUID shopId, Pageable pageable);
 
     // Detailed per-shop points report: every transaction at a shop within

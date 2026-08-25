@@ -61,6 +61,17 @@ public class SecurityConfig {
                         // rather than the user JWT. The JwtFilter also skips this
                         // path so no Authentication is required.
                         .requestMatchers("/loyalty/internal/**").permitAll()
+                        // TEST-ONLY unauthenticated reads (PublicTestController).
+                        // Deliberately anonymous so a frontend can be built against
+                        // real data before its auth flow exists. The controller
+                        // itself is inert unless `loyalty.public-test.enabled` is
+                        // true — default false — so permitAll here exposes nothing
+                        // on a cell that hasn't opted in. GET only: the prefix is
+                        // read-only by rule, and restricting the matcher to GET
+                        // means a write endpoint accidentally added under it gets
+                        // 401'd by .anyRequest().authenticated() rather than
+                        // silently going live.
+                        .requestMatchers(HttpMethod.GET, "/loyalty/public/**").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who
                         // can call what; TenantContext enforces tenant ownership

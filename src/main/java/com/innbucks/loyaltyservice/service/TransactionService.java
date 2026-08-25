@@ -343,6 +343,26 @@ public class TransactionService {
                 .map(t -> toResponse(t, null));
     }
 
+    /**
+     * Phone-keyed statement: every transaction across every LoyaltyUser
+     * projection the phone maps to, newest first. From the customer's point of
+     * view there is one history, not a per-tenant breakdown — the same
+     * collapse {@code MeController.wallet} does for balances.
+     *
+     * <p>Returns an empty page for an unknown phone rather than throwing: to a
+     * caller holding a phone number, "no such customer" and "customer with no
+     * activity" are the same answer, and distinguishing them would turn this
+     * into a registration oracle.
+     */
+    @Transactional(readOnly = true)
+    public Page<Dtos.TransactionResponse> statementForPhone(List<UUID> userIds, Pageable pageable) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Page.empty(pageable);
+        }
+        return transactions.findByUserIdInOrderByCreatedAtDesc(userIds, pageable)
+                .map(t -> toResponse(t, null));
+    }
+
     @Transactional(readOnly = true)
     public Page<Dtos.TransactionResponse> recentForShop(UUID tenantId, UUID shopId, Pageable pageable) {
         return transactions

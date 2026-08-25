@@ -52,7 +52,13 @@ public class JwtFilter extends OncePerRequestFilter {
             "/error",
             "/h2-console",
             "/actuator",
-            "/loyalty/internal"
+            "/loyalty/internal",
+            // TEST-ONLY unauthenticated reads (PublicTestController). Skipped
+            // outright rather than merely permitted, so a stale/rotated token
+            // left in a test client's storage can't 401 an endpoint whose whole
+            // point is that it needs no credential. Safe because nothing under
+            // this prefix reads the caller's identity — see PublicTestController.
+            "/loyalty/public"
     );
 
     @Override

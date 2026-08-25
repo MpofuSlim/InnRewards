@@ -156,6 +156,9 @@ public class TransactionService {
             throw LoyaltyException.forbidden("STAFF_RECIPIENT",
                     "Points can't be awarded to a staff account of this merchant.");
         }
+        if (channel == EarnChannel.TYPED_PHONE) {
+            requireWithinEarnVelocity(tenantId, merchantId, hasUserId ? u.getId() : null);
+        }
 
         if (req.reference() != null) {
             transactions.findFirstByMerchantIdAndReference(merchantId, req.reference())
@@ -332,6 +335,64 @@ public class TransactionService {
         // Unexpected balance changes are worth surfacing (credit or debit).
         memberNotifier.notifyPointsAdjusted(u.getPhoneNumber(), points, balance);
         return toResponse(t, balance);
+    }
+
+    /**
+     * Rolling per-operator ceiling on staff-typed earns.
+     *
+     * <p>Every other earn guard is an IDENTITY check — is the recipient the
+     * caller, is the recipient staff, does the earn cite a receipt. Each of
+     * them passes on every single request in a flood: a cashier posting 400
+     * small earns to 400 different customer phones, each with a plausible
+     * reference, trips none of them. This is the only guard that sees the rate.
+     *
+     * <p>Counting POSTED earns rather than rejected attempts is what separates
+     * this from the {@link FraudService} velocity auto-block. That one counts
+     * rows in {@code fraud_attempts} and so only ever catches someone hammering
+     * inputs that fail; a stream of individually-legitimate earns produces no
+     * fraud rows at all and is completely invisible to it.
+     *
+     * <p>TYPED_PHONE only, enforced by the call site and again by the query.
+     * QR_PRESENCE credits the authenticated scanner by design, and CHECKOUT_S2S
+     * is server-side — throttling a legitimate burst of ticket sales would be
+     * an outage, not a control.
+     */
+    private void requireWithinEarnVelocity(UUID tenantId, UUID merchantId, UUID recipientId) {
+        int max = props.earn().velocityMaxPerOperator();
+        int windowSeconds = props.earn().velocityWindowSeconds();
+        if (max <= 0 || windowSeconds <= 0) {
+            return;
+        }
+        // SUPER_ADMIN is exempt, same reasoning as the adjustment ceilings: a
+        // legitimate bulk correction shouldn't be throttled, and that role is
+        // already the accountable one.
+        if (com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+            return;
+        }
+        UUID operator = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
+        // No operator id (a legacy token without the userId claim) means the
+        // count can't be attributed to anyone. Fail OPEN — the same posture the
+        // staff-recipient guard takes when user-service is unreachable. A guard
+        // that blocked every unattributable earn would take the till down on a
+        // token-shape regression, which is a worse outcome than the gap.
+        if (operator == null) {
+            return;
+        }
+
+        long already = transactions.countTypedEarnsByOperatorSince(
+                operator, Instant.now().minusSeconds(windowSeconds));
+        if (already < max) {
+            return;
+        }
+
+        String detail = "operator posted " + already + " typed earns in the last "
+                + windowSeconds + "s, ceiling " + max;
+        log.warn("Earn refused on velocity operator={} merchantId={} detail={}",
+                operator, merchantId, detail);
+        fraud.record(tenantId, recipientId, merchantId, null,
+                FraudAttempt.Reason.EARN_VELOCITY, detail, null, null);
+        throw LoyaltyException.forbidden("EARN_VELOCITY",
+                "You've posted too many point awards in a short time. Please wait before trying again.");
     }
 
     /**

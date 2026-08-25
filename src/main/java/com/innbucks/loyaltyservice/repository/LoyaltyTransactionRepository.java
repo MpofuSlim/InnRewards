@@ -78,6 +78,34 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     BigDecimal sumAbsAdjustmentsByOperatorSince(@Param("postedBy") UUID postedBy,
                                                 @Param("since") Instant since);
 
+    /**
+     * How many staff-TYPED earns one operator has POSTED since {@code since}.
+     * Backs the earn-velocity ceiling in {@code TransactionService.post}.
+     *
+     * <p>Counts SUCCESSFUL earns, not rejected attempts — which is exactly what
+     * separates this from the existing {@code FraudService} velocity check.
+     * That one counts rows in {@code fraud_attempts}, so it only ever sees
+     * someone hammering inputs that fail. A cashier posting 400 small earns to
+     * 400 different customers produces zero fraud rows: each one passes
+     * SELF_EARN, STAFF_RECIPIENT and REFERENCE_REQUIRED individually. The rate
+     * is the only thing that gives it away.
+     *
+     * <p>Restricted to {@code TYPED_PHONE} — the channel where a staff member
+     * chooses the recipient. QR_PRESENCE credits the authenticated scanner by
+     * design, and CHECKOUT_S2S is server-side, where throttling a legitimate
+     * burst of ticket sales would be an outage rather than a control.
+     */
+    @Query("""
+        SELECT COUNT(t)
+        FROM LoyaltyTransaction t
+        WHERE t.postedBy = :postedBy
+          AND t.channel = com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+          AND t.createdAt >= :since
+        """)
+    long countTypedEarnsByOperatorSince(@Param("postedBy") UUID postedBy,
+                                        @Param("since") Instant since);
+
     Page<LoyaltyTransaction> findByTenantIdAndShopIdOrderByCreatedAtDesc(UUID tenantId, UUID shopId, Pageable pageable);
 
     // Detailed per-shop points report: every transaction at a shop within

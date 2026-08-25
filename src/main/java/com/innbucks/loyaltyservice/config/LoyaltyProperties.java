@@ -16,7 +16,7 @@ public record LoyaltyProperties(
         if (qr == null) qr = new Qr("change-me-qr-secret-change-me-qr-secret-change-me", 300);
         if (integration == null) integration = new Integration(false);
         if (invoice == null) invoice = new Invoice("INV");
-        if (earn == null) earn = new Earn(true, true, true, 300);
+        if (earn == null) earn = new Earn(true, true, true, 300, 60, 3600);
         if (adjustment == null) adjustment = new Adjustment(
                 new java.math.BigDecimal("5000"), new java.math.BigDecimal("20000"));
     }
@@ -76,7 +76,17 @@ public record LoyaltyProperties(
      *                         bounds how long the guard stays degraded after a
      *                         failed lookup, and how long a staff-list change
      *                         takes to propagate.
+     * @param velocityMaxPerOperator how many staff-TYPED earns one operator may
+     *                         post inside the window before further ones are
+     *                         refused. The three guards above are all IDENTITY
+     *                         checks — who is receiving — and every one of them
+     *                         passes on every request in a flood of
+     *                         individually-legitimate earns to hundreds of
+     *                         different customers. This is the only one that
+     *                         sees the RATE. Non-positive disables it.
+     * @param velocityWindowSeconds width of that rolling window.
      */
     public record Earn(boolean selfBlock, boolean requireReference,
-                       boolean staffRecipientBlock, int staffCacheSeconds) {}
+                       boolean staffRecipientBlock, int staffCacheSeconds,
+                       int velocityMaxPerOperator, int velocityWindowSeconds) {}
 }

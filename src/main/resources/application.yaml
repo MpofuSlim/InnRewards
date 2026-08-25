@@ -107,6 +107,25 @@ loyalty:
     # window; also the propagation delay for staff-list changes and the
     # degraded window after a failed lookup.
     staff-cache-seconds: ${EARN_STAFF_CACHE_SECONDS:300}
+    # velocity: rolling per-operator ceiling on staff-TYPED earns. The three
+    # guards above are all IDENTITY checks — is the recipient the caller, is the
+    # recipient staff, does the earn cite a receipt — and every one of them
+    # passes on every request in a flood of individually-legitimate earns to
+    # hundreds of different customers. This is the only guard that sees the RATE.
+    #
+    # Distinct from loyalty.voucher.fraud-velocity-* below, which counts
+    # REJECTED attempts (someone hammering bad codes). This counts SUCCESSFUL
+    # earns, because the abuse shape here produces no rejections at all.
+    #
+    # TYPED_PHONE only: QR consume credits the authenticated scanner by design,
+    # and CHECKOUT_S2S is server-side, where throttling a legitimate burst of
+    # ticket sales would be an outage rather than a control.
+    #
+    # SUPER_ADMIN is exempt. Set either value to 0 to disable the check.
+    # 60/hour is roughly one typed earn a minute sustained — well above a busy
+    # till, well below a scripted flood. Tune to your real counter throughput.
+    velocity-max-per-operator: ${EARN_VELOCITY_MAX_PER_OPERATOR:60}
+    velocity-window-seconds: ${EARN_VELOCITY_WINDOW_SECONDS:3600}
   adjustment:
     # Ceilings on manual point adjustments (POST /loyalty/transactions/adjust).
     # Adjustment is the ONLY path that mints points from nothing — earning is

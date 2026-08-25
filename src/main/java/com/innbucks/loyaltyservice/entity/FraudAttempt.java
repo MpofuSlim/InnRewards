@@ -75,6 +75,11 @@ public class FraudAttempt {
          *  Refused AND logged — adjustment is the only path that mints points
          *  from nothing, so a refused one is exactly what an operator review
          *  wants to see. */
-        ADJUSTMENT_LIMIT
+        ADJUSTMENT_LIMIT,
+        /** Earn-integrity: an operator exceeded the rolling per-operator
+         *  ceiling on staff-typed earns. Distinct from every other earn reason
+         *  in that nothing about the individual request was wrong — it is the
+         *  RATE that is the signal, which no identity check can see. */
+        EARN_VELOCITY
     }
 }

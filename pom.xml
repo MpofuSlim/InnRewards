@@ -36,7 +36,7 @@
              leak), CVE-2026-43513 (HIGH, LockOutRealm case-sensitivity). 11.0.22
              is the fix-line. Drop this override on the next Boot upgrade if the
              BOM has caught up. -->
-        <tomcat.version>11.0.24</tomcat.version>
+        <tomcat.version>11.0.25</tomcat.version>
         <!-- See the httpcore5 dependencyManagement entries below: two HIGH DoS
              CVEs in 5.4.2, which reaches the service image transitively via
              httpclient5 and failed the Release Trivy gate before any push. -->

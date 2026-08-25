@@ -61,17 +61,24 @@ public class SecurityConfig {
                         // rather than the user JWT. The JwtFilter also skips this
                         // path so no Authentication is required.
                         .requestMatchers("/loyalty/internal/**").permitAll()
-                        // TEST-ONLY unauthenticated reads (PublicTestController).
+                        // TEST-ONLY unauthenticated endpoints (PublicTestController).
                         // Deliberately anonymous so a frontend can be built against
                         // real data before its auth flow exists. The controller
                         // itself is inert unless `loyalty.public-test.enabled` is
                         // true — default false — so permitAll here exposes nothing
-                        // on a cell that hasn't opted in. GET only: the prefix is
-                        // read-only by rule, and restricting the matcher to GET
-                        // means a write endpoint accidentally added under it gets
-                        // 401'd by .anyRequest().authenticated() rather than
-                        // silently going live.
-                        .requestMatchers(HttpMethod.GET, "/loyalty/public/**").permitAll()
+                        // on a cell that hasn't opted in.
+                        //
+                        // This was GET-only while the prefix was read-only. It now
+                        // covers writes too (points transfer/redeem, voucher
+                        // transfer/redeem), because the frontend needs to exercise
+                        // those flows before its auth flow exists. That is a real
+                        // widening: on a cell with the switch ON, anyone who can
+                        // guess a phone number can SPEND that customer's points and
+                        // vouchers, not merely read them. The switch defaulting to
+                        // false, and being set per-host in the gitignored
+                        // cell.<iso>.local.env rather than the shared ConfigMap, is
+                        // what keeps that off production.
+                        .requestMatchers("/loyalty/public/**").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who
                         // can call what; TenantContext enforces tenant ownership

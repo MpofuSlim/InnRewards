@@ -156,6 +156,26 @@ loyalty:
     expiry-warning-cron: ${LOYALTY_EXPIRY_WARNING_CRON:0 0 8 * * *}
   expiry-warning:
     days: ${LOYALTY_EXPIRY_WARNING_DAYS:7}
+  public-test:
+    # TEST-ONLY unauthenticated endpoints under /loyalty/public/** — no bearer
+    # token, no X-Tenant-Id. They exist so a frontend can be built against real
+    # data before its auth flow is wired up.
+    #
+    # FALSE by default and it must stay false in any shared/committed file: with
+    # the switch ON, anyone who can guess a phone number can READ that
+    # customer's history AND SPEND their points and vouchers. Enable it per HOST,
+    # in that host's gitignored cell.<iso>.local.env, and only on a non-production
+    # host. loyalty-service logs a boot WARN whenever it comes up enabled.
+    enabled: ${LOYALTY_PUBLIC_TEST_ENABLED:false}
+    # Optional pins for the points writes, which need one tenant (and a
+    # merchant) named up front. Leave blank and they resolve automatically when
+    # unambiguous — the phone's only projection, the tenant's only merchant —
+    # which is the usual case on a single-tenant test cell. Set them when the
+    # cell has several and the phone alone cannot say which was meant; the
+    # endpoints refuse with AMBIGUOUS_TENANT / AMBIGUOUS_MERCHANT rather than
+    # guessing, because guessing would move points in a tenant nobody chose.
+    tenant-id: ${LOYALTY_PUBLIC_TEST_TENANT_ID:}
+    merchant-id: ${LOYALTY_PUBLIC_TEST_MERCHANT_ID:}
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}

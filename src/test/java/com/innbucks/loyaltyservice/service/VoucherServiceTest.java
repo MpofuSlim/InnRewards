@@ -64,7 +64,7 @@ class VoucherServiceTest {
             vouchers, batches, redemptions, templateService, merchants, users, userService,
             notifications, fraud, metrics,
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
-            new LoyaltyProperties(null, null, null, null, null, null));
+            new LoyaltyProperties(null, null, null, null, null, null, null));
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();

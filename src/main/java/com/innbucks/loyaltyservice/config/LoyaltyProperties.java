@@ -9,7 +9,8 @@ public record LoyaltyProperties(
         Integration integration,
         Invoice invoice,
         Earn earn,
-        Adjustment adjustment
+        Adjustment adjustment,
+        EarnRate earnRate
 ) {
     public LoyaltyProperties {
         if (voucher == null) voucher = new Voucher("change-me-voucher-secret-change-me-voucher-secret", 365, 5, 60);
@@ -19,7 +20,38 @@ public record LoyaltyProperties(
         if (earn == null) earn = new Earn(true, true, true, 300);
         if (adjustment == null) adjustment = new Adjustment(
                 new java.math.BigDecimal("5000"), new java.math.BigDecimal("20000"));
+        if (earnRate == null) earnRate = new EarnRate(
+                new java.math.BigDecimal("1000"), new java.math.BigDecimal("100"));
     }
+
+    /**
+     * Platform ceilings on how RICH an earn rule may be — the backstop on the
+     * points the platform can be made liable for by a merchant-set rate.
+     *
+     * <p>A merchant sets its own {@code pointsPerUnit} and campaign multipliers,
+     * but InnBucks carries the liability for every point issued, so an
+     * unbounded rate is an unbounded liability: a merchant (or a compromised
+     * merchant-admin token) could set {@code pointsPerUnit = 1_000_000} and mint
+     * an arbitrary balance on a $1 sale. These caps are enforced at rule/campaign
+     * WRITE time — the earliest point — so a rule that would breach them is
+     * refused rather than silently minting later.
+     *
+     * <p>Deliberately generous (defaults 1000 / 100x): they exist to stop the
+     * absurd, not to second-guess a merchant's commercial rate. A legitimate
+     * "1 point per $1" rate or a "2x weekend" promo sits far below them. Raise
+     * per cell via {@code LOYALTY_EARN_RATE_MAX_POINTS_PER_UNIT} /
+     * {@code LOYALTY_EARN_RATE_MAX_MULTIPLIER} if a real arrangement needs it.
+     *
+     * <p>Non-positive disables a ceiling (same convention as {@link Adjustment}),
+     * for a cell that deliberately wants no cap.
+     *
+     * @param maxPointsPerUnit ceiling on a rule's {@code pointsPerUnit}.
+     * @param maxMultiplier    ceiling on a rule's {@code multiplier} AND a
+     *                         campaign's multiplier (both stack into the same
+     *                         liability, so they share the cap).
+     */
+    public record EarnRate(java.math.BigDecimal maxPointsPerUnit,
+                           java.math.BigDecimal maxMultiplier) {}
 
     public record Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold, int fraudWindowSeconds) {}
 

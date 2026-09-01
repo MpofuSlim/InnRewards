@@ -36,7 +36,7 @@ class RuleAdminServiceFeeGuardTest {
     void tenantStandardWithAZeroIssueFee_isRefused() {
         // A global rule (merchantId null) priced at zero makes EVERY merchant
         // under the tenant free — the widest possible version of the bug.
-        assertThatThrownBy(() -> RuleAdminService.build(UUID.randomUUID(), null, rule(fixed("0"), null)))
+        assertThatThrownBy(() -> RuleAdminService.build(UUID.randomUUID(), null, rule(fixed("0"), null), null, null))
                 .hasMessageContaining("would run this for free");
     }
 
@@ -45,14 +45,14 @@ class RuleAdminServiceFeeGuardTest {
         // Otherwise a rule written after onboarding silently undoes the guard
         // that refused the merchant at creation time.
         assertThatThrownBy(() -> RuleAdminService.build(UUID.randomUUID(), UUID.randomUUID(),
-                rule(fixed("0"), null)))
+                rule(fixed("0"), null), null, null))
                 .hasMessageContaining("would run this for free");
     }
 
     @Test
     void zeroRedeemFee_isAllowed() {
         // Billing only the issue side is a normal arrangement.
-        LoyaltyRule r = RuleAdminService.build(UUID.randomUUID(), null, rule(fixed("0.25"), fixed("0")));
+        LoyaltyRule r = RuleAdminService.build(UUID.randomUUID(), null, rule(fixed("0.25"), fixed("0")), null, null);
 
         assertThat(r.getFeeIssuedFixed()).isEqualByComparingTo("0.25");
         assertThat(r.getFeeRedeemedFixed()).isEqualByComparingTo("0");
@@ -62,7 +62,7 @@ class RuleAdminServiceFeeGuardTest {
     void omittingTheIssueFee_isAllowed_thatIsInheritance() {
         // Null means "not configured at this level", which is how a merchant
         // rule inherits the tenant standard — quite different from zero.
-        LoyaltyRule r = RuleAdminService.build(UUID.randomUUID(), UUID.randomUUID(), rule(null, null));
+        LoyaltyRule r = RuleAdminService.build(UUID.randomUUID(), UUID.randomUUID(), rule(null, null), null, null);
 
         assertThat(r.getFeeIssuedType()).isNull();
     }

@@ -65,7 +65,7 @@ class AdjustmentCapTest {
     void setUp() {
         LoyaltyProperties props = new LoyaltyProperties(
                 null, null, null, null, null,
-                new LoyaltyProperties.Adjustment(PER_CAP, DAILY_CAP));
+                new LoyaltyProperties.Adjustment(PER_CAP, DAILY_CAP), null);
 
         service = new TransactionService(
                 transactions, users, merchants, walletService,
@@ -219,7 +219,7 @@ class AdjustmentCapTest {
         // can set it to 0 rather than being forced to hand out SUPER_ADMIN.
         LoyaltyProperties off = new LoyaltyProperties(
                 null, null, null, null, null,
-                new LoyaltyProperties.Adjustment(BigDecimal.ZERO, BigDecimal.ZERO));
+                new LoyaltyProperties.Adjustment(BigDecimal.ZERO, BigDecimal.ZERO), null);
         TransactionService unlimited = new TransactionService(
                 transactions, users, merchants, walletService,
                 mock(RulesEngine.class),

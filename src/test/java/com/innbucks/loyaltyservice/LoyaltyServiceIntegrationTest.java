@@ -77,7 +77,7 @@ class LoyaltyServiceIntegrationTest {
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.05"), null),
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null)));
-        ruleAdminService.createRule(t.getId(), mr.id(),
+        createRuleAsAdmin(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000001", mr.id());
@@ -122,7 +122,7 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
-        ruleAdminService.createRule(t.getId(), mr.id(),
+        createRuleAsAdmin(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
 
@@ -155,7 +155,7 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
-        ruleAdminService.createRule(t.getId(), mr.id(),
+        createRuleAsAdmin(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000020", mr.id());
@@ -201,7 +201,7 @@ class LoyaltyServiceIntegrationTest {
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("1.00"), null),
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.50"), null)));
-        ruleAdminService.createRule(t.getId(), mr.id(),
+        createRuleAsAdmin(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000030", mr.id());
@@ -248,4 +248,26 @@ class LoyaltyServiceIntegrationTest {
             org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
         }
     }
+
+    // Seed rules as an authenticated platform operator: rule writes now run
+    // object-level authorization (RuleAdminService), which reads the security
+    // context. SUPER_ADMIN with no CallerDetails leaves attribution untouched
+    // (every current*Id stays null) and save/restores the prior context so it
+    // never disturbs the per-caller contexts the assertions install.
+    private void createRuleAsAdmin(java.util.UUID tenantId, java.util.UUID merchantId,
+                                   Dtos.RuleRequest req) {
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                "it-fixture", null, java.util.List.of(
+                        new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+        ctx.setAuthentication(auth);
+        var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
+        try {
+            ruleAdminService.createRule(tenantId, merchantId, req);
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
+    }
+
 }

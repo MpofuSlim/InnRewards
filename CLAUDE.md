@@ -75,7 +75,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V33**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V35**; never edit an applied
 migration — add the next version.
 
 ## Transactions carry the invoice that billed them (V33, IN-9)

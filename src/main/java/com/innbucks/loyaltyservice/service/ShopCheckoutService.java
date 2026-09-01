@@ -122,10 +122,25 @@ public class ShopCheckoutService {
         BigDecimal pointsRedeemed = BigDecimal.ZERO;
         UUID redemptionTxnId = null;
         if (hasPoints) {
+            // Distinct reference per leg. The earn (PURCHASE) leg above stores the
+            // raw `reference`; the burn (REDEMPTION) leg must NOT store the same
+            // value, or the two rows collide on the (merchant, reference) partial
+            // unique index (V16, which covers both types) and the whole mixed
+            // checkout dies with a DataIntegrityViolation. Suffix with ":redeem",
+            // exactly as TicketingLoyaltyService does for the same earn+burn pair.
+            //
+            // Just as important: the reference goes in the REFERENCE field (5th
+            // arg — the idempotency key), NOT the reason (4th). Passing it as the
+            // reason was the original bug: with reference=null, RedemptionService
+            // stored the reason AS the reference, reproducing the earn leg's value
+            // and both 500'ing the flow AND silently disabling burn-leg
+            // idempotency. "shop-checkout" is only a readable fallback for the
+            // reference==null case.
+            String redeemRef = reference == null ? null : reference + ":redeem";
             Dtos.RedemptionRequest burn = new Dtos.RedemptionRequest(
                     merchantId, user.getId(), pointsAmount,
-                    reference == null ? "shop-checkout" : reference,
-                    null);
+                    "shop-checkout",
+                    redeemRef);
             RedemptionService.RedemptionResult burnResp =
                     redemptionService.redeemPoints(tenantId, merchantId, burn);
             balance = burnResp.balance();

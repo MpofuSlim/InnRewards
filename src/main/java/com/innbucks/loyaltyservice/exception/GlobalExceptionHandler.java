@@ -126,6 +126,24 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.NOT_FOUND, "The requested resource was not found."));
     }
 
+    /**
+     * A DB constraint tripped at commit — almost always a unique-index race that
+     * the pre-check missed (e.g. two identical idempotency-keyed writes landing
+     * together). That is a conflict, not a server fault: map it to 409 rather
+     * than letting it fall to the catch-all as an opaque 500. The service layer
+     * catches the ones it can name (RedemptionService / TransactionService turn a
+     * duplicate reference into DUPLICATE_REFERENCE up front); this is the backstop
+     * for anything that slips past the pre-check to the commit boundary.
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResult<Void>> handle(org.springframework.dao.DataIntegrityViolationException ex) {
+        log.warn("Data integrity violation mapped to 409", ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResult.error(HttpStatus.CONFLICT,
+                        "This request conflicts with an existing record and was not applied. "
+                                + "If you are retrying, the original may already have succeeded."));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResult<Void>> handle(Exception ex) {
         // Don't swallow the cause: a 500 with an opaque body is hard enough to

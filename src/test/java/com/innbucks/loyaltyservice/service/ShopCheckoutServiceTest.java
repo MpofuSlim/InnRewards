@@ -10,6 +10,7 @@ import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -87,5 +88,65 @@ class ShopCheckoutServiceTest {
                 eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S));
         assertThat(result.shopId()).isEqualTo(shopId);
         assertThat(result.pointsEarned()).isEqualByComparingTo("5");
+    }
+
+    /**
+     * The flagship mixed CASH_AND_POINTS flow. The earn (PURCHASE) and burn
+     * (REDEMPTION) legs must carry DISTINCT references, or they collide on the
+     * (merchant, reference) partial unique index (V16) and the whole checkout
+     * 500s. Regression guard for the arg-swap: the reference must land in the
+     * REFERENCE field (not the reason) and be ":redeem"-suffixed so it differs
+     * from the earn leg's raw reference.
+     */
+    @Test
+    void checkout_mixedCashAndPoints_burnUsesDistinctRedeemReference() {
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        String phone = "+263782606983";
+        String reference = "SHOP-abc123";
+
+        Shop shop = new Shop();
+        shop.setId(shopId);
+        shop.setTenantId(tenantId);
+        shop.setMerchantId(merchantId);
+        when(shops.findById(shopId)).thenReturn(Optional.of(shop));
+
+        Merchant merchant = new Merchant();
+        merchant.setId(merchantId);
+        merchant.setTenantId(tenantId);
+        merchant.setCurrency("USD");
+        when(merchants.requireMerchant(tenantId, merchantId)).thenReturn(merchant);
+
+        LoyaltyUser user = new LoyaltyUser();
+        user.setId(UUID.randomUUID());
+        when(users.findOrCreatePending(tenantId, phone, merchantId)).thenReturn(user);
+
+        Dtos.TransactionResponse earnResp = new Dtos.TransactionResponse(
+                UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("5"),
+                new BigDecimal("5"), new BigDecimal("20"), null, null, shopId,
+                null, com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S, reference, null, null);
+        when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId),
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S)))
+                .thenReturn(earnResp);
+        when(redemptionService.redeemPoints(eq(tenantId), eq(merchantId), any(Dtos.RedemptionRequest.class)))
+                .thenReturn(new RedemptionService.RedemptionResult(UUID.randomUUID(), new BigDecimal("10")));
+
+        service.checkout(shopId, phone, new BigDecimal("5"), new BigDecimal("30"), reference);
+
+        // The earn leg carries the RAW reference...
+        ArgumentCaptor<Dtos.TransactionRequest> earnCap = ArgumentCaptor.forClass(Dtos.TransactionRequest.class);
+        verify(transactionService).post(eq(tenantId), eq(merchantId), earnCap.capture(), eq(shopId),
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S));
+        assertThat(earnCap.getValue().reference()).isEqualTo(reference);
+
+        // ...and the burn leg carries a DISTINCT ":redeem"-suffixed reference, in
+        // the REFERENCE field (not smuggled into the reason).
+        ArgumentCaptor<Dtos.RedemptionRequest> burnCap = ArgumentCaptor.forClass(Dtos.RedemptionRequest.class);
+        verify(redemptionService).redeemPoints(eq(tenantId), eq(merchantId), burnCap.capture());
+        Dtos.RedemptionRequest burn = burnCap.getValue();
+        assertThat(burn.reference()).isEqualTo(reference + ":redeem");
+        assertThat(burn.reference()).isNotEqualTo(earnCap.getValue().reference()); // no collision
+        assertThat(burn.points()).isEqualByComparingTo("30");
     }
 }

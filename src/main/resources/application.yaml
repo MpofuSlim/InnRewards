@@ -83,7 +83,12 @@ loyalty:
     # lots already carrying an expiry keep it (V31 cleared them for points
     # customers still held).
     expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:0}
-    # Points per currency unit when redeeming. Platform-wide (points are global).
+    # DEPRECATED (V35): the redemption rate now lives in the `redemption_rates`
+    # table, set by SUPER_ADMIN via POST /loyalty/redemption-rate and read by
+    # RedemptionRateService. This static key is no longer consulted by any code
+    # path — the V35 seed carries the same default (100). Left here only so an
+    # operator who still sets LOYALTY_POINTS_REDEEM_RATE sees why it has no
+    # effect; remove once no cell env references it.
     redeem-rate: ${LOYALTY_POINTS_REDEEM_RATE:100}
   ticketing:
     # Default points per currency unit awarded on ticket purchases, applied when

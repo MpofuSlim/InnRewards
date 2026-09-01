@@ -430,7 +430,12 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "11111111-2222-3333-4444-555555555555")
             @NotNull UUID userId,
-            @Schema(example = "500.0000", description = "Points to redeem.")
+            @Schema(example = "500.0000", nullable = true,
+                    description = "Points to redeem. Provide EITHER this or `amount` (the currency value " +
+                                  "to cover). When `amount` is given the server computes the points from the " +
+                                  "platform redemption rate and this field is optional; if you send both, they " +
+                                  "must agree at the current rate or the call is rejected (RATE_MISMATCH). " +
+                                  "Prefer `amount` — it lets the platform, not the caller, decide a point's value.")
             @Positive BigDecimal points,
             @Schema(example = "Counter redemption by cashier", nullable = true)
             @Size(max = 1000) String reason,
@@ -439,8 +444,57 @@ public class Dtos {
                                   "redemption (e.g. the booking id). A repeat redeem with the same " +
                                   "(merchant, reference) replays the original instead of debiting the wallet " +
                                   "again, so a retry can't double-spend. Omit for one-off redemptions.")
-            String reference
+            String reference,
+            @Schema(example = "5.0000", nullable = true,
+                    description = "Currency value to redeem (e.g. $5.00 off). When present the server converts " +
+                                  "it to a whole-points debit at the platform redemption rate — the correct " +
+                                  "direction for the model, since the platform sets what a point is worth. " +
+                                  "Provide EITHER this or `points`.")
+            @Positive BigDecimal amount
+    ) {
+        /**
+         * Back-compat constructor for callers built against the pre-rate,
+         * points-only shape. New callers should prefer the full constructor and
+         * pass {@code amount} to redeem by currency value.
+         */
+        public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
+                                 String reason, String reference) {
+            this(merchantId, userId, points, reason, reference, null);
+        }
+    }
+
+    /** Set a new platform redemption rate (SUPER_ADMIN only). Append-only + effective-dated. */
+    public record RedemptionRateRequest(
+            @Schema(example = "100.0000", description = "Points required to redeem one unit of currency. " +
+                    "100 => 100 points buys $1 of value. Must be greater than zero.")
+            @NotNull @Positive BigDecimal pointsPerUnit,
+            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency; defaults to USD.")
+            String currency,
+            @Schema(example = "2026-10-01T00:00:00Z", nullable = true,
+                    description = "When the rate takes force (UTC). Omit for immediate; a future instant " +
+                                  "schedules the change and the resolver ignores it until then.")
+            Instant effectiveFrom,
+            @Schema(example = "Launch rate", nullable = true, description = "Why this rate was set — shown in history.")
+            @Size(max = 500) String note
     ) {}
+
+    /** A single effective-dated redemption rate row. */
+    public record RedemptionRateResponse(
+            @Schema(example = "00000000-0000-0000-0000-000000000001") UUID id,
+            @Schema(example = "100.0000") BigDecimal pointsPerUnit,
+            @Schema(example = "USD") String currency,
+            @Schema(example = "2026-10-01T00:00:00Z") Instant effectiveFrom,
+            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
+                    description = "Operator who set it; null for the seeded platform default.")
+            UUID createdBy,
+            @Schema(example = "Launch rate", nullable = true) String note,
+            @Schema(example = "2026-09-01T14:30:00Z") Instant createdAt
+    ) {
+        public static RedemptionRateResponse of(com.innbucks.loyaltyservice.entity.RedemptionRate r) {
+            return new RedemptionRateResponse(r.getId(), r.getPointsPerUnit(), r.getCurrency(),
+                    r.getEffectiveFrom(), r.getCreatedBy(), r.getNote(), r.getCreatedAt());
+        }
+    }
 
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); null means tenant-wide template.
     public record VoucherTemplateRequest(

@@ -31,11 +31,12 @@ class RedemptionServiceTest {
     private final WalletService walletService = mock(WalletService.class);
     private final LoyaltyTransactionRepository transactions = mock(LoyaltyTransactionRepository.class);
     private final LoyaltyMetrics metrics = mock(LoyaltyMetrics.class);
+    private final RedemptionRateService rateService = mock(RedemptionRateService.class);
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier =
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class);
 
     private final RedemptionService service =
-            new RedemptionService(users, merchants, walletService, transactions, metrics, memberNotifier);
+            new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();

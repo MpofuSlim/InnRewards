@@ -44,18 +44,18 @@ public class TicketingLoyaltyService {
     private final RedemptionService redemptionService;
     private final WalletService walletService;
     private final LoyaltyTransactionRepository transactions;
+    private final RedemptionRateService rateService;
 
     @Value("${innbucks.currency:USD}")
     private String cellCurrency;
     @Value("${loyalty.ticketing.default-earn-rate:1}")
     private BigDecimal defaultEarnRate;
-    @Value("${loyalty.points.redeem-rate:100}")
-    private BigDecimal redeemRate;
 
     public TicketingLoyaltyService(MerchantRepository merchants, LoyaltyRuleRepository rules,
                                    UserService users, TransactionService transactionService,
                                    RedemptionService redemptionService, WalletService walletService,
-                                   LoyaltyTransactionRepository transactions) {
+                                   LoyaltyTransactionRepository transactions,
+                                   RedemptionRateService rateService) {
         this.merchants = merchants;
         this.rules = rules;
         this.users = users;
@@ -63,6 +63,7 @@ public class TicketingLoyaltyService {
         this.redemptionService = redemptionService;
         this.walletService = walletService;
         this.transactions = transactions;
+        this.rateService = rateService;
     }
 
     public record TicketingRule(UUID tenantId, UUID merchantId, BigDecimal earnRate,
@@ -79,6 +80,10 @@ public class TicketingLoyaltyService {
         Merchant m = resolveMerchant(organizerUuid);
         BigDecimal earnRate = rules.findApplicable(TICKETING_TENANT_ID, m.getId(), TransactionType.PURCHASE)
                 .stream().findFirst().map(LoyaltyRule::getPointsPerUnit).orElse(defaultEarnRate);
+        // Publish the AUTHORITATIVE platform redemption rate, not the old static
+        // env var — one source of truth, so the value the ticketing side quotes
+        // is the same one this service applies when it burns points.
+        BigDecimal redeemRate = rateService.currentRate(m.getCurrency()).getPointsPerUnit();
         return new TicketingRule(TICKETING_TENANT_ID, m.getId(), earnRate, redeemRate, m.getCurrency());
     }
 

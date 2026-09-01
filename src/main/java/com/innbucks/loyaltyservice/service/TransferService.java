@@ -35,7 +35,37 @@ public class TransferService {
         this.memberNotifier = memberNotifier;
     }
 
+    /**
+     * P2P transfer initiated directly by the wallet owner
+     * ({@code POST /loyalty/transfer}). The caller MUST own the sender wallet —
+     * see the {@code enforceCallerOwnership} overload for why there is no admin
+     * bypass here.
+     */
     public BigDecimal transfer(UUID tenantId, Dtos.TransferRequest req) {
+        return transfer(tenantId, req, true);
+    }
+
+    /**
+     * @param enforceCallerOwnership when true, the authenticated caller must BE
+     *        the sender (strict ownership, no admin bypass). Pass false ONLY from
+     *        a path that has already established the sender's authorization by
+     *        another trust boundary — today just the P2P transfer-QR consume, where
+     *        {@code QrService.issue} already required the sender to own the source
+     *        (strict) before the single-use, HMAC-signed token could be minted, so
+     *        the token itself is the sender's consent and the recipient who scans
+     *        it is legitimately not the sender.
+     *
+     *        <p><b>Why no admin bypass on the direct path.</b> This used to call
+     *        {@code requireCallerOwnsOrIsAdmin}, which let a MERCHANT_ADMIN /
+     *        SHOP_ADMIN transfer FROM any customer's wallet to an
+     *        attacker-controlled phone — a wallet-drain, and exactly the hijack
+     *        {@code UserService.requireCallerOwns} warns about (the QR transfer
+     *        path already used the strict check for this reason). Genuine ops
+     *        corrections go through a manual ADJUSTMENT, which is capped and
+     *        audited; a silent admin-initiated transfer to an arbitrary recipient
+     *        is not a sanctioned tool.
+     */
+    public BigDecimal transfer(UUID tenantId, Dtos.TransferRequest req, boolean enforceCallerOwnership) {
         if (req.points() == null || req.points().signum() <= 0) {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "Please enter an amount greater than zero.");
         }
@@ -50,10 +80,13 @@ public class TransferService {
         var sender = users.require(tenantId, req.fromUserId());
         // Senders cannot be PENDING — you must be registered to spend.
         users.requireSpendable(sender);
-        // Caller must own the sender wallet. Admins (SUPER_ADMIN, MERCHANT_ADMIN,
-        // SHOP_ADMIN) can transfer on behalf of a user — useful for ops and
-        // customer-support reversals. CUSTOMER must be the wallet owner.
-        users.requireCallerOwnsOrIsAdmin(sender);
+        // The caller must OWN the sender wallet — strictly, with no admin bypass
+        // (see the overload's javadoc). The QR consume path passes
+        // enforceCallerOwnership=false because QrService.issue already proved the
+        // sender's ownership when the token was minted.
+        if (enforceCallerOwnership) {
+            users.requireCallerOwns(sender);
+        }
 
         var recipient = hasToUserId
                 ? users.require(tenantId, req.toUserId())

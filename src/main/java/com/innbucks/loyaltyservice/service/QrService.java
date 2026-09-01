@@ -142,9 +142,13 @@ public class QrService {
                     com.innbucks.loyaltyservice.entity.EarnChannel.QR_PRESENCE);
         } else {
             // User-issued QR initiates a P2P transfer; sourceId is the sender.
+            // Skip the caller-ownership check on the transfer: the CALLER here is
+            // the recipient scanning the code, not the sender — but issue() already
+            // required the sender to own the source before this single-use signed
+            // token could exist, so the token is the sender's authorization.
             BigDecimal points = q.getAmount() == null ? BigDecimal.ZERO : q.getAmount();
             transferService.transfer(tenantId, new Dtos.TransferRequest(
-                    q.getSourceId(), req.userId(), null, points, "qr-transfer"));
+                    q.getSourceId(), req.userId(), null, points, "qr-transfer"), false);
             return new Dtos.TransactionResponse(null, TransactionType.TRANSFER, points,
                     points, null, null, null, null,
                     com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(), null,

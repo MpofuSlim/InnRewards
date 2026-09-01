@@ -185,6 +185,16 @@ class PhoneKeyedWalletTest {
                 .isInstanceOf(LoyaltyException.class)
                 .hasMessageContaining("own loyalty account");
 
+        // A MERCHANT_ADMIN tries to drain Alice's wallet to Bob. Before the fix
+        // the admin bypass let this through — now strict ownership refuses it.
+        assertThatThrownBy(() ->
+                withSecurityContext("+263770079999", "MERCHANT_ADMIN", () ->
+                        transferService.transfer(t.getId(),
+                                new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
+                                        new BigDecimal("10"), "admin-drain"))))
+                .isInstanceOf(LoyaltyException.class)
+                .hasMessageContaining("own loyalty account");
+
         // Alice herself can still transfer (control case).
         withSecurityContext(alice.getPhoneNumber(), "CUSTOMER", () ->
                 transferService.transfer(t.getId(),

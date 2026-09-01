@@ -10,8 +10,10 @@ import com.innbucks.loyaltyservice.integration.NotificationGateway;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.VoucherBatchRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
+import com.innbucks.loyaltyservice.entity.VoucherRedemption;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.CryptoSigner;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Page;
@@ -22,6 +24,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -70,6 +74,10 @@ class VoucherServiceTest {
     private static final UUID MERCHANT_A = UUID.randomUUID();
     private static final UUID MERCHANT_B = UUID.randomUUID();
     private static final String PHONE = "+263770000111";
+    // The default LoyaltyProperties voucher secret used above — the service's
+    // signer is built from it, so the test recomputes signatures with the same key.
+    private static final String VOUCHER_SECRET = "change-me-voucher-secret-change-me-voucher-secret";
+    private final CryptoSigner signer = new CryptoSigner(VOUCHER_SECRET);
 
     @AfterEach
     void clearAuth() {
@@ -80,6 +88,13 @@ class VoucherServiceTest {
         var auth = new UsernamePasswordAuthenticationToken(
                 "caller@test.local", null, List.of(new SimpleGrantedAuthority("ROLE_SHOP_ADMIN")));
         auth.setDetails(new CallerDetails(merchantId, null, null, null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private static void authenticateAsCustomer(String phone) {
+        var auth = new UsernamePasswordAuthenticationToken(
+                "customer@test.local", null, List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+        auth.setDetails(new CallerDetails(null, null, phone, UUID.randomUUID()));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
@@ -186,5 +201,120 @@ class VoucherServiceTest {
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("CROSS_TENANT"));
         assertThat(v.getStatus()).isEqualTo(Voucher.Status.ISSUED);
+    }
+
+    // --- Fix: transfer rotates the code + signature and redacts the response ----
+
+    private Voucher transferableVoucher(String assigneePhone) {
+        Voucher v = new Voucher();
+        v.setId(UUID.randomUUID());
+        v.setTenantId(TENANT);
+        v.setMerchantId(MERCHANT_A);
+        v.setTemplateId(UUID.randomUUID());
+        v.setAssignedUserId(UUID.randomUUID());
+        v.setAssigneePhone(assigneePhone);
+        v.setStatus(Voucher.Status.ISSUED);
+        v.setUsesRemaining(1);
+        String code = "VCH-OLDCODE1";
+        v.setCode(code);
+        v.setSignature(signer.sign(TENANT + ":" + v.getTemplateId() + ":" + code));
+        return v;
+    }
+
+    @Test
+    void transfer_rotatesCodeAndSignature_deliversToRecipient_andRedactsResponseCode() {
+        String senderPhone = "+263770000111";
+        String recipientPhone = "+263771112222";
+        Voucher v = transferableVoucher(senderPhone);
+        String oldCode = v.getCode();
+        String oldSig = v.getSignature();
+        when(vouchers.lockById(v.getId())).thenReturn(Optional.of(v));
+        // uniqueCode() probes findByCode until it finds a free one — none taken.
+        when(vouchers.findByCode(anyString())).thenReturn(Optional.empty());
+
+        LoyaltyUser recipient = new LoyaltyUser();
+        recipient.setId(UUID.randomUUID());
+        recipient.setTenantId(TENANT);
+        recipient.setPhoneNumber(recipientPhone);
+        when(userService.findOrCreatePending(TENANT, recipientPhone, MERCHANT_A)).thenReturn(recipient);
+
+        // Staff moving the voucher on the holder's behalf passes requireCallerMayViewVoucher.
+        authenticateAsMerchant(MERCHANT_A);
+
+        Dtos.VoucherResponse resp = service.transfer(TENANT, v.getId(),
+                new Dtos.VoucherTransferRequest(null, recipientPhone, "for my sister"));
+
+        // Code rotated — the sender's old code is dead.
+        assertThat(v.getCode()).isNotEqualTo(oldCode);
+        assertThat(v.getSignature()).isNotEqualTo(oldSig);
+        // The new signature is a valid HMAC over the NEW code (not the old one).
+        assertThat(signer.verify(TENANT + ":" + v.getTemplateId() + ":" + v.getCode(), v.getSignature()))
+                .isTrue();
+        // The response the caller (sender/staff) gets carries NO code.
+        assertThat(resp.code()).isNull();
+        // Reassigned to the recipient.
+        assertThat(v.getAssigneePhone()).isEqualTo(recipientPhone);
+        assertThat(v.getAssignedUserId()).isEqualTo(recipient.getId());
+        // The rotated code is handed to the NEW holder out-of-band.
+        verify(notifications).deliver(v, recipientPhone);
+    }
+
+    // --- Fix: a CUSTOMER may only redeem a voucher assigned to their phone ------
+
+    @Test
+    void redeem_customerNotAssignee_isRejected_andVoucherUntouched() {
+        Voucher v = transferableVoucher("+263779998888"); // assigned to someone else
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        when(metrics.redemptionLatency())
+                .thenReturn(mock(io.micrometer.core.instrument.Timer.class));
+
+        // A genuine customer whose phone is NOT the assignee tries to redeem.
+        authenticateAsCustomer("+263770000111");
+
+        Dtos.RedeemVoucherRequest req = new Dtos.RedeemVoucherRequest(
+                MERCHANT_A, v.getCode(), null, null, null, null);
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT_A, req))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("NOT_VOUCHER_OWNER"));
+
+        // Refused before any consumption — the voucher is untouched.
+        assertThat(v.getStatus()).isEqualTo(Voucher.Status.ISSUED);
+        assertThat(v.getUsesRemaining()).isEqualTo(1);
+        // Logged as a fraud attempt with the dedicated reason.
+        verify(fraud).record(eq(TENANT), any(), eq(MERCHANT_A), eq(v.getCode()),
+                eq(com.innbucks.loyaltyservice.entity.FraudAttempt.Reason.NOT_ASSIGNEE),
+                anyString(), any(), any());
+    }
+
+    @Test
+    void redeem_staffBearer_bypassesAssigneeCheck_andSucceeds() {
+        Voucher v = transferableVoucher("+263779998888"); // assigned to a customer
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        when(merchants.requireMerchant(TENANT, MERCHANT_A))
+                .thenReturn(new com.innbucks.loyaltyservice.entity.Merchant());
+        when(redemptions.save(any())).thenAnswer(inv -> {
+            VoucherRedemption r = inv.getArgument(0);
+            r.setRedeemedAt(Instant.now());
+            return r;
+        });
+        when(metrics.redemptionLatency())
+                .thenReturn(mock(io.micrometer.core.instrument.Timer.class));
+
+        // Staff present the customer's code at the counter — no phone claim,
+        // exempt from the assignee check.
+        authenticateAsMerchant(MERCHANT_A);
+
+        Dtos.RedeemVoucherRequest req = new Dtos.RedeemVoucherRequest(
+                MERCHANT_A, v.getCode(), null, null, null, null);
+
+        Dtos.RedemptionResponse resp = service.redeem(TENANT, MERCHANT_A, req);
+
+        assertThat(resp.status()).isEqualTo(Voucher.Status.REDEEMED.name());
+        assertThat(v.getUsesRemaining()).isEqualTo(0);
+        // The assignee-mismatch fraud path was never taken.
+        verify(fraud, never()).record(any(), any(), any(), any(),
+                eq(com.innbucks.loyaltyservice.entity.FraudAttempt.Reason.NOT_ASSIGNEE),
+                anyString(), any(), any());
     }
 }

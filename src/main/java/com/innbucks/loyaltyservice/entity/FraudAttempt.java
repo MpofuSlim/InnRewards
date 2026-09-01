@@ -58,6 +58,11 @@ public class FraudAttempt {
         ALREADY_REDEEMED,
         USAGE_EXCEEDED,
         WRONG_MERCHANT,
+        /** Redeem-integrity: a genuine CUSTOMER attempted to redeem a voucher that
+         *  is NOT assigned to their phone — e.g. redeeming a code they transferred
+         *  away (whose old code they still remember) straight from their own app.
+         *  Refused AND logged; staff/S2S bearer redemptions are exempt. */
+        NOT_ASSIGNEE,
         BLOCKED_DEVICE,
         BLOCKED_USER,
         QR_REUSED,

@@ -1,11 +1,14 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.config.LoyaltyProperties;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Campaign;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -20,20 +23,75 @@ import java.util.UUID;
 @Transactional
 public class RuleAdminService {
 
+    /**
+     * Roles that oversee an entire tenant — every merchant in it, plus the
+     * tenant-wide GLOBAL rule. A caller outside this set is a single-merchant
+     * principal (MERCHANT_ADMIN / SHOP_ADMIN) and is confined to the merchant it
+     * administers.
+     */
+    private static final String[] TENANT_LEVEL_ROLES =
+            {"ROLE_SUPER_ADMIN", "ROLE_PLATFORM_ADMIN", "ROLE_TENANT_ADMIN"};
+
     private final LoyaltyRuleRepository rules;
     private final CampaignRepository campaigns;
     private final MerchantService merchants;
+    private final MerchantAuthz merchantAuthz;
+    private final LoyaltyProperties props;
 
     public RuleAdminService(LoyaltyRuleRepository rules, CampaignRepository campaigns,
-                            MerchantService merchants) {
+                            MerchantService merchants, MerchantAuthz merchantAuthz,
+                            LoyaltyProperties props) {
         this.rules = rules;
         this.campaigns = campaigns;
         this.merchants = merchants;
+        this.merchantAuthz = merchantAuthz;
+        this.props = props;
     }
 
     public LoyaltyRule createRule(UUID tenantId, UUID merchantId, Dtos.RuleRequest req) {
-        if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
-        return rules.save(build(tenantId, merchantId, req));
+        authorizeRuleScopeWrite(tenantId, merchantId);
+        return rules.save(build(tenantId, merchantId, req,
+                props.earnRate().maxPointsPerUnit(), props.earnRate().maxMultiplier()));
+    }
+
+    /**
+     * Object-level authorization for a rule/campaign WRITE at a given scope —
+     * the gate the audit found missing, which let any tenant MERCHANT_ADMIN
+     * rewrite a sibling merchant's earn rate or the tenant-wide standard.
+     *
+     * <ul>
+     *   <li><b>Global (merchantId == null)</b> — the tenant STANDARD every
+     *       merchant inherits, so only a tenant-level role may write it. A
+     *       MERCHANT_ADMIN reaches this branch by omitting merchantId (its token
+     *       carries no merchant claim), which is exactly the escalation to
+     *       refuse.</li>
+     *   <li><b>Merchant-scoped</b> — a tenant-level role may act on any merchant
+     *       in the tenant (existence + tenant checked); a single-merchant
+     *       principal is confined by {@link MerchantAuthz} to the merchant it
+     *       administers, so it cannot target a sibling.</li>
+     * </ul>
+     *
+     * <p>Deliberately NOT delegated wholesale to
+     * {@code requireCallerAdministersMerchant}: that exempts only SUPER_ADMIN, so
+     * it would wrongly 403 a TENANT_ADMIN managing a merchant in their own
+     * tenant. The tier here preserves tenant-level reach while closing the
+     * MERCHANT_ADMIN cross-scope hole.
+     */
+    private void authorizeRuleScopeWrite(UUID tenantId, UUID merchantId) {
+        if (merchantId == null) {
+            if (!CallerDetails.hasAnyRole(TENANT_LEVEL_ROLES)) {
+                throw LoyaltyException.forbidden("GLOBAL_RULE_ROLE",
+                        "Only a tenant administrator may create or change the tenant-wide "
+                                + "(global) rule or campaign. Specify a merchantId to configure your "
+                                + "own merchant instead.");
+            }
+            return;
+        }
+        if (CallerDetails.hasAnyRole(TENANT_LEVEL_ROLES)) {
+            merchants.requireMerchant(tenantId, merchantId); // existence + tenant scope only
+        } else {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        }
     }
 
     /**
@@ -45,8 +103,41 @@ public class RuleAdminService {
      * on this bean — {@code RuleAdminService} already depends on
      * {@code MerchantService}, so a bean-level edge back would be a cycle.
      * Callers are responsible for the merchant-exists check and the save.
+     *
+     * <p>The {@code maxPointsPerUnit}/{@code maxMultiplier} ceilings are passed
+     * in (from {@link LoyaltyProperties.EarnRate}) rather than read here, so this
+     * one mapper enforces the platform earn-rate bound on BOTH the create
+     * endpoint and merchant onboarding — no rate escapes the cap by which door it
+     * came through. A non-positive ceiling disables that bound.
      */
-    static LoyaltyRule build(UUID tenantId, UUID merchantId, Dtos.RuleRequest req) {
+    static LoyaltyRule build(UUID tenantId, UUID merchantId, Dtos.RuleRequest req,
+                             BigDecimal maxPointsPerUnit, BigDecimal maxMultiplier) {
+        // Earn-rate bounds (defence-in-depth behind the DTO @Positive): the
+        // platform carries the liability for every point issued, so a rate is
+        // refused at write time if it is non-positive or breaches the ceiling —
+        // the earliest point, before any transaction can mint against it.
+        if (req.pointsPerUnit() == null || req.pointsPerUnit().signum() <= 0) {
+            throw LoyaltyException.badRequest("BAD_EARN_RATE", "pointsPerUnit must be greater than zero.");
+        }
+        if (req.multiplier() != null && req.multiplier().signum() <= 0) {
+            throw LoyaltyException.badRequest("BAD_EARN_RATE", "multiplier must be greater than zero when set.");
+        }
+        if (req.maxPointsPerTxn() != null && req.maxPointsPerTxn().signum() <= 0) {
+            throw LoyaltyException.badRequest("BAD_EARN_RATE", "maxPointsPerTxn must be greater than zero when set.");
+        }
+        if (maxPointsPerUnit != null && maxPointsPerUnit.signum() > 0
+                && req.pointsPerUnit().compareTo(maxPointsPerUnit) > 0) {
+            throw LoyaltyException.badRequest("EARN_RATE_TOO_HIGH",
+                    "pointsPerUnit " + req.pointsPerUnit().toPlainString() + " exceeds the platform maximum of "
+                            + maxPointsPerUnit.toPlainString() + ".");
+        }
+        if (maxMultiplier != null && maxMultiplier.signum() > 0
+                && req.multiplier() != null && req.multiplier().compareTo(maxMultiplier) > 0) {
+            throw LoyaltyException.badRequest("EARN_MULTIPLIER_TOO_HIGH",
+                    "multiplier " + req.multiplier().toPlainString() + " exceeds the platform maximum of "
+                            + maxMultiplier.toPlainString() + ".");
+        }
+
         LoyaltyRule r = new LoyaltyRule();
         r.setTenantId(tenantId);
         r.setMerchantId(merchantId);
@@ -115,23 +206,35 @@ public class RuleAdminService {
         return rules.findByTenantId(tenantId, pageable);
     }
 
-    public LoyaltyRule deactivateRule(UUID tenantId, UUID ruleId, UUID callerMerchantId) {
+    public LoyaltyRule deactivateRule(UUID tenantId, UUID ruleId) {
         LoyaltyRule r = rules.findById(ruleId).orElseThrow(() -> LoyaltyException.notFound("rule"));
         if (!r.getTenantId().equals(tenantId)) throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
-        // Global rules (merchantId=null) can only be deactivated by TENANT_ADMIN+ (callerMerchantId=null).
-        // Merchant-specific rules can only be deactivated by that merchant's admin.
-        if (r.getMerchantId() == null && callerMerchantId != null) {
-            throw LoyaltyException.forbidden("GLOBAL_RULE", "only tenant admin can deactivate global rules");
-        }
-        if (r.getMerchantId() != null && callerMerchantId != null && !r.getMerchantId().equals(callerMerchantId)) {
-            throw LoyaltyException.forbidden("WRONG_MERCHANT", "rule belongs to a different merchant");
-        }
+        // Same scope authorization as creation, keyed on the rule's OWN scope:
+        // a global rule needs a tenant-level role; a merchant rule needs that
+        // merchant's admin (or a tenant-level role). The previous check keyed on
+        // the caller's merchant CLAIM, which is null for a MERCHANT_ADMIN — so a
+        // MERCHANT_ADMIN fell through both guards and could deactivate any rule,
+        // global included. Routing through the role-based check closes that.
+        authorizeRuleScopeWrite(tenantId, r.getMerchantId());
         r.setActive(false);
         return r;
     }
 
     public Campaign createCampaign(UUID tenantId, UUID merchantId, Dtos.CampaignRequest req) {
-        if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
+        authorizeRuleScopeWrite(tenantId, merchantId);
+        // Same platform ceiling as a rule's multiplier — a campaign multiplier
+        // stacks on top of the rule rate into the same liability, so an
+        // unbounded campaign is the same mint vector by another door.
+        if (req.multiplier() == null || req.multiplier().signum() <= 0) {
+            throw LoyaltyException.badRequest("BAD_EARN_RATE", "multiplier must be greater than zero.");
+        }
+        BigDecimal maxMultiplier = props.earnRate().maxMultiplier();
+        if (maxMultiplier != null && maxMultiplier.signum() > 0
+                && req.multiplier().compareTo(maxMultiplier) > 0) {
+            throw LoyaltyException.badRequest("EARN_MULTIPLIER_TOO_HIGH",
+                    "multiplier " + req.multiplier().toPlainString() + " exceeds the platform maximum of "
+                            + maxMultiplier.toPlainString() + ".");
+        }
         if (req.endsAt().isBefore(req.startsAt())) {
             throw LoyaltyException.badRequest("BAD_DATES", "endsAt must be after startsAt");
         }

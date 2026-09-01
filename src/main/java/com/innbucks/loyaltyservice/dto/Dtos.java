@@ -304,12 +304,14 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "PURCHASE")
             @NotNull TransactionType transactionType,
-            @Schema(example = "1.000000", description = "Points awarded per 1 unit of currency spent.")
-            @NotNull BigDecimal pointsPerUnit,
-            @Schema(example = "2.0000", nullable = true, description = "Multiplier applied on top of pointsPerUnit (e.g. 2x during a promo).")
-            BigDecimal multiplier,
+            @Schema(example = "1.000000", description = "Points awarded per 1 unit of currency spent. Must be positive "
+                    + "and within the platform ceiling (loyalty.earn-rate.max-points-per-unit).")
+            @NotNull @Positive BigDecimal pointsPerUnit,
+            @Schema(example = "2.0000", nullable = true, description = "Multiplier applied on top of pointsPerUnit (e.g. 2x "
+                    + "during a promo). When present must be positive and within the platform ceiling.")
+            @Positive BigDecimal multiplier,
             @Schema(example = "500.0000", nullable = true, description = "Cap on points earnable in a single transaction.")
-            BigDecimal maxPointsPerTxn,
+            @Positive BigDecimal maxPointsPerTxn,
             @Schema(example = "MAIN", nullable = true, description = "Target wallet pocket for earned points.")
             String pocket,
             @Schema(example = "2026-06-01T00:00:00Z", nullable = true, description = "When this rule becomes active (null = immediately).")
@@ -345,8 +347,9 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "Weekend 2x Points")
             @NotBlank @Size(max = 200) String name,
-            @Schema(example = "2.0000", description = "Points multiplier during the campaign window.")
-            @NotNull BigDecimal multiplier,
+            @Schema(example = "2.0000", description = "Points multiplier during the campaign window. Must be positive "
+                    + "and within the platform ceiling (loyalty.earn-rate.max-multiplier).")
+            @NotNull @Positive BigDecimal multiplier,
             @Schema(example = "PURCHASE", nullable = true)
             TransactionType transactionType,
             @Schema(example = "2026-06-04T00:00:00Z")

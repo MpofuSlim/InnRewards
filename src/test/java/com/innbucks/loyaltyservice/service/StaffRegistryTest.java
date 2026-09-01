@@ -26,7 +26,7 @@ class StaffRegistryTest {
 
     private final UserServiceClient client = mock(UserServiceClient.class);
     private final StaffRegistry registry = new StaffRegistry(client,
-            new LoyaltyProperties(null, null, null, null, null, null));
+            new LoyaltyProperties(null, null, null, null, null, null, null));
 
     @Test
     void staffPhone_matches_andTheSetIsCached_oneLookupPerWindow() {

@@ -340,11 +340,10 @@ public class RuleController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> deactivate(@PathVariable UUID id) {
-        // Use currentMerchantId rather than resolveMerchantId here: TENANT_ADMINs
-        // legitimately deactivate global rules with no merchant scope, and we have
-        // no body to read from on this endpoint.
-        LoyaltyRule data = rules.deactivateRule(
-                tenantContext.requireTenantId(), id, CallerDetails.currentMerchantId());
+        // Scope authorization lives in the service now (keyed on the rule's own
+        // scope + the caller's role), so it can't be bypassed by a MERCHANT_ADMIN
+        // whose merchant claim is null.
+        LoyaltyRule data = rules.deactivateRule(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Rule deactivated successfully", data));
     }
 

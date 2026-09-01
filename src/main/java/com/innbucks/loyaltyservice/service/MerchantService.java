@@ -32,16 +32,22 @@ public class MerchantService {
     // circular reference. The mapping/validation is still shared, via
     // RuleAdminService.build.
     private final com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules;
+    // Earn-rate ceilings, so a rule created via the onboarding loyaltyOverride
+    // block is bound by the SAME platform cap as one created through
+    // POST /loyalty/rules — no rate slips the cap by the onboarding door.
+    private final com.innbucks.loyaltyservice.config.LoyaltyProperties props;
 
     @org.springframework.beans.factory.annotation.Value("${innbucks.currency:USD}")
     private String cellCurrency;
 
 
     public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient,
-                           com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules) {
+                           com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules,
+                           com.innbucks.loyaltyservice.config.LoyaltyProperties props) {
         this.merchants = merchants;
         this.userServiceClient = userServiceClient;
         this.rules = rules;
+        this.props = props;
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
@@ -104,7 +110,8 @@ public class MerchantService {
                 o.feeRedeemed());
         // The merchant was just created in this transaction, so the
         // requireMerchant round-trip createRule would do is redundant here.
-        return rules.save(RuleAdminService.build(tenantId, merchantId, asRule));
+        return rules.save(RuleAdminService.build(tenantId, merchantId, asRule,
+                props.earnRate().maxPointsPerUnit(), props.earnRate().maxMultiplier()));
     }
 
     /**

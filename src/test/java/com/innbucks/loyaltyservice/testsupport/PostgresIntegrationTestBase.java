@@ -1,14 +1,21 @@
 package com.innbucks.loyaltyservice.testsupport;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.util.List;
 
 /**
  * Base class for integration tests that need a real PostgreSQL — used for
@@ -48,6 +55,28 @@ public abstract class PostgresIntegrationTestBase {
         if (!POSTGRES.isRunning()) {
             POSTGRES.start();
         }
+    }
+
+    /**
+     * Seed data as an authenticated platform operator. These ITs call service
+     * methods directly (not through MockMvc), so no JWT populates the security
+     * context — but rule/campaign writes now run object-level authorization
+     * (RuleAdminService), which reads it. A bare SUPER_ADMIN authority satisfies
+     * that without a {@code CallerDetails} payload, so every {@code current*Id}
+     * accessor stays null and transaction attribution is unchanged — only the
+     * role check flips. A subclass {@code @BeforeEach} runs AFTER this one, so
+     * the context is in place before it seeds.
+     */
+    @BeforeEach
+    void authenticateFixtureAsSuperAdmin() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("it-fixture", null,
+                        List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"))));
+    }
+
+    @AfterEach
+    void clearFixtureAuthentication() {
+        SecurityContextHolder.clearContext();
     }
 
     /**

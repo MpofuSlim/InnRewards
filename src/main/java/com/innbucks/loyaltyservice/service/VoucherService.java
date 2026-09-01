@@ -324,6 +324,29 @@ public class VoucherService {
             throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher can't be redeemed at this shop.");
         }
 
+        // A genuine CUSTOMER caller may only redeem a voucher assigned to THEM.
+        // Without this a customer who knows (or guesses) a code — e.g. one they
+        // transferred away, whose old code they still remember — could redeem it
+        // straight from their own app, the redeem-side twin of the transfer
+        // rotation above. The check is scoped to real customers: staff / cashier
+        // roles (SHOP_USER, SHOP_ADMIN, MERCHANT_ADMIN, SUPER_ADMIN) present the
+        // code at the counter on the holder's behalf and carry no phone claim, and
+        // the S2S / no-context redemption paths (shop-checkout, QR consume) run
+        // without an authenticated CUSTOMER — all of those keep the bearer flow.
+        if (CallerDetails.hasAnyRole("ROLE_CUSTOMER")
+                && !CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
+                        "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER")) {
+            String callerPhone = CallerDetails.currentPhoneNumber();
+            if (callerPhone == null || !callerPhone.equals(v.getAssigneePhone())) {
+                recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "not voucher assignee");
+                fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
+                        FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher",
+                        req.deviceFingerprint(), req.ipAddress());
+                throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                        "This voucher isn't assigned to you.");
+            }
+        }
+
         if (req.userId() != null) {
             LoyaltyUser u = users.findById(req.userId()).orElse(null);
             if (u != null && u.getStatus() == LoyaltyUser.Status.BLOCKED) {
@@ -485,6 +508,21 @@ public class VoucherService {
         // overwrite assigneeName with something that isn't a name.
         v.setAssigneeName(null);
 
+        // Rotate the code + recompute its signature on transfer. Reassigning the
+        // voucher above changes WHO owns it, but the old code was already in the
+        // SENDER's hands — they saw it in-app and (for delivered vouchers) got it
+        // by WhatsApp/SMS at issuance. Left unchanged, the previous holder could
+        // still walk into a shop and redeem a voucher they've given away, draining
+        // the value from the person they handed it to (redeem is keyed by the code,
+        // not by who presents it). Minting a fresh code and re-signing it makes the
+        // sender's copy dead the instant this transfer commits; only the new
+        // assignee can retrieve the new code — they're now the voucher's owner for
+        // requireCallerMayViewVoucher and for the tenant-scoped activeForPhone the
+        // customer app reads.
+        String rotatedCode = uniqueCode();
+        v.setCode(rotatedCode);
+        v.setSignature(signer.sign(tenantId + ":" + v.getTemplateId() + ":" + rotatedCode));
+
         // Clear the pre-expiry warning stamp. It records that the PREVIOUS
         // holder was warned; leaving it set would make ExpiryWarningSweeper skip
         // the new holder entirely, so they'd never hear the voucher was about to
@@ -514,7 +552,27 @@ public class VoucherService {
                 v.getValue(), v.getCurrency(), expiresOn);
         memberNotifier.notifyVoucherSent(fromPhone, valueType, v.getValue(), v.getCurrency());
 
-        return toResponse(v);
+        // Hand the ROTATED code to the new holder the same way issuance does —
+        // best-effort WhatsApp/SMS. The sender's old code is now dead, so the
+        // recipient needs a route to the new one; the in-app view (activeForPhone
+        // → toResponse) is the primary path, this is the out-of-band mirror.
+        notifications.deliver(v, recipient.getPhoneNumber());
+
+        // Redact the code from the transfer RESPONSE. The response goes to the
+        // CALLER — the sender (a CUSTOMER handing off their own voucher) or staff
+        // acting on their behalf — neither of whom should now hold the rotated
+        // code, or the rotation above would be pointless. The recipient reads it
+        // in-app as the voucher's new assignee.
+        return redactCode(toResponse(v));
+    }
+
+    /** Copy of a VoucherResponse with the {@code code} nulled out — used where the
+     *  caller must not see the code (e.g. the sender's view of a transfer they just
+     *  made, after the code has been rotated to the recipient). */
+    private static Dtos.VoucherResponse redactCode(Dtos.VoucherResponse r) {
+        return new Dtos.VoucherResponse(r.id(), null, r.status(), r.templateId(),
+                r.assignedUserId(), r.assigneePhone(), r.usesRemaining(),
+                r.valueType(), r.value(), r.currency(), r.issuedAt(), r.expiresAt());
     }
 
     @Transactional(readOnly = true)

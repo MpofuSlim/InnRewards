@@ -51,10 +51,17 @@ class TransactionServiceTest {
     // case runs exactly as before the guard existed.
     private final StaffRegistry staffRegistry = mock(StaffRegistry.class);
 
+    /** Real FX service on a USD-only allowlist: USD converts by identity without
+     *  touching the repository, so no stubbing is needed. */
+    private final ExchangeRateService fx = new ExchangeRateService(
+            mock(com.innbucks.loyaltyservice.repository.ExchangeRateRepository.class),
+            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+            new java.math.BigDecimal("25"));
+
     private final TransactionService service = new TransactionService(
             transactions, users, merchants, walletService, rulesEngine, metrics, memberNotifier,
             props, fraudService, staffRegistry,
-            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
+            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"), fx);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();

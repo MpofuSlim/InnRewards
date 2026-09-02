@@ -177,10 +177,12 @@ public class ExchangeRateController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller lacks a tenant-admin role, or is not a member of the tenant",
+                    description = "Caller lacks a tenant-admin role, or is not a member of the tenant. " +
+                            "Both produce the SAME body — the reason is deliberately not disclosed to the " +
+                            "caller, so a client cannot distinguish them and must gate on its own role/tenant.",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
-                                    { "code": "403 FORBIDDEN", "message": "You are not a member of this tenant.", "data": null }
+                                    { "code": "403 FORBIDDEN", "message": "You don't have permission to do that.", "data": null }
                                     """)))
     })
     public ResponseEntity<ApiResult<Dtos.ExchangeRateResponse>> setTenantOverride(

@@ -319,7 +319,8 @@ class PublicTestControllerTest {
         Dtos.TransactionResponse row = new Dtos.TransactionResponse(
                 UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("100.00"),
                 new BigDecimal("10.00"), null, null, null, null,
-                null, null, "ORDER-4471", Instant.parse("2026-08-24T09:15:00Z"), null);
+                null, null, "ORDER-4471", Instant.parse("2026-08-24T09:15:00Z"), null,
+                "USD", new BigDecimal("100.00"));
         return new PageImpl<>(List.of(row), PageRequest.of(0, 20), 1);
     }
 }

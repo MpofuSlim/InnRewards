@@ -161,7 +161,12 @@ public class QrService {
                     com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(), null,
                     // invoiceId is null: this response is built in-flight, before
                     // any billing period containing it has been invoiced.
-                    req.reference(), Instant.now(), null);
+                    req.reference(), Instant.now(), null,
+                    // A P2P transfer moves POINTS, not money — there is no
+                    // transacted currency amount, so no currency and no USD
+                    // base value. Null here means "not a money leg", which is
+                    // why it must never be rendered as a zero amount.
+                    null, null);
         }
     }
 }

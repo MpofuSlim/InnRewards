@@ -103,7 +103,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V36**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V37**; never edit an applied
 migration — add the next version.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
@@ -137,13 +137,26 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   `POST /loyalty/exchange-rates/override` (tenant admins, X-Tenant header),
   `GET /loyalty/exchange-rates?currency=` (effective, staff-readable),
   `GET /loyalty/exchange-rates/history` (SUPER_ADMIN, all scopes).
-- **TEMPORARY pricing guard**: earn and redeem call
-  `SupportedCurrencies.requireBaseFor(...)` and refuse any non-USD currency —
-  the rules engine is currency-blind (`points = amount × rate`), so a ZWG 500
-  earn would over-credit ~27× if let through. Design PR 2 (earn) and PR 3
-  (redeem) replace these refusals with `fx.toBase(...)` conversions and stamp
-  the frozen base value + rate id on money rows ("read back, never
-  recompute"). Do not remove the guard without shipping the conversion.
+- **Earn is USD-anchored and frozen (V37).** `TransactionService.post` converts
+  the transacted amount to USD via `fx.toBaseWithRate(...)` and evaluates
+  `RulesEngine` on the **base** amount — the engine is currency-blind by design
+  and must only ever see BASE. The ledger keeps all three: `amount` +
+  `currency` (what the customer transacted), `base_amount` (the USD value
+  points were awarded on) and `fx_rate_id` (the `exchange_rates` row that
+  justifies it). **Read `base_amount` back; never recompute it** — re-deriving
+  at a newer rate restates history, which for ZWG means the same row is worth a
+  different number of dollars every day. `fx_rate_id` is NULL for a USD
+  transaction (identity, no rate row exists) and for pre-V37 rows; `base_amount`
+  is NULL only for a pre-V37 non-USD row (V37 backfilled USD history) and must
+  never be read as zero.
+- **`loyalty_rules.points_per_unit` means points-per-USD** (V37), and
+  `min_transaction_amount` is a **USD** floor. No data migration: every existing
+  rule was authored against a USD-only cell, so the numbers already mean that.
+- **TEMPORARY pricing guard, redeem only**: `RedemptionService` still calls
+  `SupportedCurrencies.requireBaseFor(...)` and refuses a non-USD merchant
+  currency — the redemption rate + stamped liability value are USD-only until
+  design PR 3 converts them. Do not remove that guard without shipping the
+  conversion. (Earn's guard is gone, replaced by the real conversion above.)
 
 ## Transactions carry the invoice that billed them (V33, IN-9)
 

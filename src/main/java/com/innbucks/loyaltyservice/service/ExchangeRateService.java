@@ -86,18 +86,45 @@ public class ExchangeRateService {
     }
 
     /**
+     * A completed conversion: the converted amount together with the id of the
+     * {@link ExchangeRate} row that produced it, so the caller can FREEZE both
+     * onto the money row it is writing. {@code rateId} is null for a base-
+     * currency conversion (identity — no rate row exists or is needed).
+     *
+     * <p>Callers that persist money must use {@link #toBaseWithRate} rather than
+     * {@link #toBase}: storing the converted value without the rate that made it
+     * leaves an unauditable number, and recomputing it later at a newer rate
+     * would restate history.
+     */
+    public record Conversion(BigDecimal amount, UUID rateId) {}
+
+    /**
      * Convert an amount in {@code currency} to its {@link SupportedCurrencies#BASE}
      * (USD) value at the rate in force for {@code tenantId} — the direction earn
      * takes before the points math. Scale {@value #MONEY_SCALE}, HALF_UP. Base
      * in = identity (rescaled), no table read.
+     *
+     * <p>Use {@link #toBaseWithRate} when the result is going to be persisted.
      */
     public BigDecimal toBase(UUID tenantId, BigDecimal amount, String currency) {
+        return toBaseWithRate(tenantId, amount, currency).amount();
+    }
+
+    /**
+     * {@link #toBase}, but also returning WHICH rate row did the conversion —
+     * the form every persisting caller should use, so the stored value and its
+     * justification are written together.
+     */
+    public Conversion toBaseWithRate(UUID tenantId, BigDecimal amount, String currency) {
         requireNonNegative(amount);
         String ccy = currencies.requireSupported(currency);
         if (SupportedCurrencies.BASE.equals(ccy)) {
-            return amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            return new Conversion(amount.setScale(MONEY_SCALE, RoundingMode.HALF_UP), null);
         }
-        return amount.divide(currentRate(tenantId, ccy).getRatePerUsd(), MONEY_SCALE, RoundingMode.HALF_UP);
+        ExchangeRate rate = currentRate(tenantId, ccy);
+        return new Conversion(
+                amount.divide(rate.getRatePerUsd(), MONEY_SCALE, RoundingMode.HALF_UP),
+                rate.getId());
     }
 
     /**

@@ -39,6 +39,7 @@ public class TransactionService {
     private final FraudService fraud;
     private final StaffRegistry staffRegistry;
     private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
+    private final ExchangeRateService fx;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               UserService users,
@@ -50,7 +51,8 @@ public class TransactionService {
                               com.innbucks.loyaltyservice.config.LoyaltyProperties props,
                               FraudService fraud,
                               StaffRegistry staffRegistry,
-                              com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
+                              com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
+                              ExchangeRateService fx) {
         this.transactions = transactions;
         this.users = users;
         this.merchants = merchants;
@@ -62,6 +64,7 @@ public class TransactionService {
         this.fraud = fraud;
         this.staffRegistry = staffRegistry;
         this.supportedCurrencies = supportedCurrencies;
+        this.fx = fx;
     }
 
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req,
@@ -186,10 +189,26 @@ public class TransactionService {
         // through FX to the USD base (design PR 2, which replaces this guard with
         // fx.toBase(...)), only BASE-currency earns are accepted; unknown codes
         // are refused outright by the allowlist.
-        String currency = supportedCurrencies.requireBaseFor(
-                req.currency() == null ? m.getCurrency() : req.currency(), "earn");
+        // Multi-currency earn (design PR 2). The transaction happens in the
+        // merchant's currency (or an explicit request currency); points are
+        // awarded on its USD value. Converting HERE, once, is what keeps a point
+        // worth the same real value in every currency — the rules engine below
+        // is currency-blind by design and must only ever see BASE amounts.
+        // An unsupported currency is refused by the allowlist; a supported one
+        // with no in-force rate is refused by NO_FX_RATE (fail closed) rather
+        // than being priced at 1:1.
+        String currency = supportedCurrencies.requireSupported(
+                req.currency() == null ? m.getCurrency() : req.currency());
+        var converted = fx.toBaseWithRate(tenantId, req.amount(), currency);
+        // Frozen on the row below: re-deriving this later at a newer rate would
+        // restate what the transaction was worth (ZWG moves fast), so the value
+        // and the rate that produced it are written together and read back.
+        BigDecimal baseAmount = converted.amount();
 
-        var eval = rulesEngine.evaluate(tenantId, m.getId(), req.type(), req.amount());
+        // Evaluated on the BASE amount: points_per_unit is points-per-USD (V37)
+        // and min_transaction_amount is a USD floor, so both sides of every
+        // comparison are in one currency.
+        var eval = rulesEngine.evaluate(tenantId, m.getId(), req.type(), baseAmount);
 
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
@@ -204,6 +223,10 @@ public class TransactionService {
         t.setType(req.type());
         t.setAmount(req.amount());
         t.setCurrency(currency);
+        // Freeze-on-write: the USD value points were awarded on, plus the FX row
+        // that justifies it. Null rateId for a USD transaction (identity).
+        t.setBaseAmount(baseAmount);
+        t.setFxRateId(converted.rateId());
         t.setPointsDelta(eval.points());
         t.setRuleId(eval.ruleId());
         t.setCampaignId(eval.campaignId());
@@ -475,7 +498,8 @@ public class TransactionService {
         return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
                 t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
                 t.getShopId(), t.getPostedBy(), t.getChannel(),
-                t.getReference(), t.getCreatedAt(), t.getInvoiceId());
+                t.getReference(), t.getCreatedAt(), t.getInvoiceId(),
+                t.getCurrency(), t.getBaseAmount());
     }
 
 }

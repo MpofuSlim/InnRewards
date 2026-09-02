@@ -170,4 +170,30 @@ class UserServiceTest {
                 .as("PENDING reassures that points keep accruing")
                 .containsIgnoringCase("earn");
     }
+
+    @Test
+    void pendingRefusal_doesNotTellTheCustomerToSignUp() {
+        // The regression this pins, reported from production by the customer app.
+        //
+        // The old copy said "finish signing up to spend your points". That was
+        // accurate only while every customer arrived through ticketing's OTP
+        // registration, which is what calls the promote webhook
+        // (user-service OtpService:363, :378 -> POST /loyalty/internal/users/promote).
+        // The customer app now authenticates against a different system and never
+        // walks that flow, so the message named a screen its readers have no route
+        // to — it asked them to do something impossible.
+        //
+        // PENDING is cleared by a server-to-server webhook, never by the customer.
+        // So this copy must describe a state, never instruct an action, until some
+        // caller actually wires promote for the new auth source.
+        String msg = org.junit.jupiter.api.Assertions.assertThrows(LoyaltyException.class,
+                () -> service.requireSpendable(withStatus(LoyaltyUser.Status.PENDING))).getMessage();
+
+        assertThat(msg)
+                .doesNotContainIgnoringCase("sign up")
+                .doesNotContainIgnoringCase("signing up")
+                .doesNotContainIgnoringCase("signup")
+                .doesNotContainIgnoringCase("register")
+                .doesNotContainIgnoringCase("registration");
+    }
 }

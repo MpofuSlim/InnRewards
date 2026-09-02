@@ -589,15 +589,20 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "DUPLICATE_REFERENCE — this (merchant, reference) was already redeemed. An "
-                            + "idempotent replay of the original; treat as success rather than retrying.",
+                    description = "DUPLICATE_REFERENCE — the reference is already tied to a NON-redemption "
+                            + "transaction (e.g. an earn), so it can't be reused for a redemption. A genuine "
+                            + "duplicate redeem does NOT reach here: a sequential retry AND a concurrent "
+                            + "double-tap both return 200 with the original result and no second debit (the "
+                            + "double-tap is retried server-side into that replay). On this 409, do NOT reuse "
+                            + "the reference and do NOT treat it as a redemption — refetch the wallet to "
+                            + "confirm nothing moved under it.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Duplicate reference", value = """
+                            examples = @ExampleObject(name = "Reference used by a non-redemption transaction", value = """
                                     {
                                       "code": "DUPLICATE_REFERENCE",
-                                      "message": "A redemption with that reference already exists.",
+                                      "message": "This reference is already used by a non-redemption transaction.",
                                       "data": null
                                     }
                                     """)
@@ -608,7 +613,9 @@ public class TransactionController {
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
         // enforceCallerOwnership=true: a CUSTOMER may only redeem their own
         // wallet (admins may act on behalf). The S2S callers use the 3-arg form.
-        var result = redemptionService.redeemPoints(tenantContext.requireTenantId(),
+        // Idempotent variant: a concurrent double-tap replays to a clean 200
+        // instead of surfacing a 409 for a redemption that actually went through.
+        var result = redemptionService.redeemPointsIdempotent(tenantContext.requireTenantId(),
                 CallerDetails.resolveMerchantId(req.merchantId()), req, true);
         Map<String, Object> data = Map.of(
                 "status", "OK",

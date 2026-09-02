@@ -404,7 +404,7 @@ public class PublicTestController {
         UUID merchantId = resolveMerchant(customer.getTenantId(), body.merchantId());
 
         RedemptionService.RedemptionResult result = asCustomer(customer, () ->
-                redemptions.redeemPoints(customer.getTenantId(), merchantId,
+                redemptions.redeemPointsIdempotent(customer.getTenantId(), merchantId,
                         new Dtos.RedemptionRequest(merchantId, customer.getId(), body.points(),
                                 body.reason(), body.reference()),
                         true));

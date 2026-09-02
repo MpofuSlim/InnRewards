@@ -252,7 +252,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
         UUID merchant = UUID.randomUUID();
         UUID shop = UUID.randomUUID();
 
-        when(redemptionService.redeemPoints(any(UUID.class), any(UUID.class),
+        when(redemptionService.redeemPointsIdempotent(any(UUID.class), any(UUID.class),
                 any(com.innbucks.loyaltyservice.dto.Dtos.RedemptionRequest.class),
                 org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(new com.innbucks.loyaltyservice.service.RedemptionService.RedemptionResult(

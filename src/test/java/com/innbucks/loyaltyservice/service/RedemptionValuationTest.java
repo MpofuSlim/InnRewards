@@ -43,9 +43,12 @@ class RedemptionValuationTest {
     private final RedemptionRateService rateService = mock(RedemptionRateService.class);
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier =
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class);
+    @SuppressWarnings("unchecked")
+    private final org.springframework.beans.factory.ObjectProvider<RedemptionService> self =
+            mock(org.springframework.beans.factory.ObjectProvider.class);
 
     private final RedemptionService service =
-            new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier);
+            new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier, self);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();

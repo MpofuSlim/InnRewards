@@ -230,14 +230,14 @@ class PublicTestControllerTest {
                 new com.innbucks.loyaltyservice.entity.Merchant();
         m.setId(merchantId);
         when(merchants.findByTenantId(tenant)).thenReturn(List.of(m));
-        when(redemptions.redeemPoints(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
+        when(redemptions.redeemPointsIdempotent(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(new com.innbucks.loyaltyservice.service.RedemptionService.RedemptionResult(
                         UUID.randomUUID(), new java.math.BigDecimal("25.00")));
 
         controller(true).redeemPoints(PHONE, new PublicTestController.PublicRedeemPointsRequest(
                 new java.math.BigDecimal("500"), null, null, "ORDER-1"));
 
-        verify(redemptions).redeemPoints(eq(tenant), eq(merchantId), any(),
+        verify(redemptions).redeemPointsIdempotent(eq(tenant), eq(merchantId), any(),
                 org.mockito.ArgumentMatchers.eq(true));
     }
 

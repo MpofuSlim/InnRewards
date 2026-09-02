@@ -134,13 +134,24 @@ public class ExchangeRateService {
      * {@value #MONEY_SCALE}, HALF_UP. Base out = identity (rescaled).
      */
     public BigDecimal fromBase(UUID tenantId, BigDecimal baseAmount, String currency) {
+        return fromBaseWithRate(tenantId, baseAmount, currency).amount();
+    }
+
+    /**
+     * {@link #fromBase}, but also returning WHICH rate row did the conversion —
+     * the form every persisting caller should use, so the stored value and its
+     * justification are written together.
+     */
+    public Conversion fromBaseWithRate(UUID tenantId, BigDecimal baseAmount, String currency) {
         requireNonNegative(baseAmount);
         String ccy = currencies.requireSupported(currency);
         if (SupportedCurrencies.BASE.equals(ccy)) {
-            return baseAmount.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            return new Conversion(baseAmount.setScale(MONEY_SCALE, RoundingMode.HALF_UP), null);
         }
-        return baseAmount.multiply(currentRate(tenantId, ccy).getRatePerUsd())
-                .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        ExchangeRate rate = currentRate(tenantId, ccy);
+        return new Conversion(
+                baseAmount.multiply(rate.getRatePerUsd()).setScale(MONEY_SCALE, RoundingMode.HALF_UP),
+                rate.getId());
     }
 
     /**

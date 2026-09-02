@@ -25,9 +25,10 @@ import java.util.Set;
  * go-live.
  *
  * <p>Being IN the set does not make a currency priceable: pricing additionally
- * requires an in-force FX rate ({@code NO_FX_RATE} otherwise), and — until the
- * earn/redeem paths are USD-anchored (design PRs 2-3) — pricing is restricted
- * to the base currency outright via {@link #requireBaseFor}.
+ * requires an in-force FX rate, and
+ * {@link com.innbucks.loyaltyservice.service.ExchangeRateService} refuses with
+ * {@code NO_FX_RATE} when none is configured. Membership here is the first of
+ * those two gates, not the whole of it.
  */
 @Component
 @Slf4j
@@ -75,24 +76,6 @@ public class SupportedCurrencies {
             throw LoyaltyException.badRequest("UNSUPPORTED_CURRENCY",
                     "Currency " + ccy + " is not supported on this cell. Supported: "
                             + String.join(", ", supported) + ".");
-        }
-        return ccy;
-    }
-
-    /**
-     * TEMPORARY pricing guard for the multi-currency rollout: until the earn and
-     * redeem paths convert through FX to the USD base (design PRs 2-3), a
-     * non-base amount must be REFUSED rather than fed unconverted into the
-     * points math — the currency-blind earn (`points = amount × rate`) would
-     * over-credit a ZWG amount ~27×. The replacement for this call is
-     * {@code fx.toBase(...)}, which fails closed on its own via NO_FX_RATE.
-     */
-    public String requireBaseFor(String currency, String operation) {
-        String ccy = requireSupported(currency);
-        if (!BASE.equals(ccy)) {
-            throw LoyaltyException.badRequest("UNSUPPORTED_CURRENCY",
-                    "Multi-currency " + operation + " is not enabled yet — only " + BASE
-                            + " amounts are accepted until FX pricing ships.");
         }
         return ccy;
     }

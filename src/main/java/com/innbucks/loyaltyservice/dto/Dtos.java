@@ -455,11 +455,17 @@ public class Dtos {
                                   "again, so a retry can't double-spend. Omit for one-off redemptions.")
             String reference,
             @Schema(example = "5.0000", nullable = true,
-                    description = "Currency value to redeem (e.g. $5.00 off). When present the server converts " +
-                                  "it to a whole-points debit at the platform redemption rate — the correct " +
-                                  "direction for the model, since the platform sets what a point is worth. " +
-                                  "Provide EITHER this or `points`.")
-            @Positive BigDecimal amount
+                    description = "Currency value to redeem (e.g. $5.00 off), expressed in `currency`. When " +
+                                  "present the server converts it to USD, then to a whole-points debit at the " +
+                                  "platform redemption rate — the correct direction for the model, since the " +
+                                  "platform sets what a point is worth. Provide EITHER this or `points`.")
+            @Positive BigDecimal amount,
+            @Schema(example = "ZWG", nullable = true,
+                    description = "ISO 4217 currency of `amount`, and the currency the redemption's value is " +
+                                  "recorded in. Defaults to the merchant's currency when omitted. Must be in " +
+                                  "the cell's supported set, and a non-USD currency needs an in-force exchange " +
+                                  "rate (NO_FX_RATE otherwise).")
+            String currency
     ) {
         /**
          * Back-compat constructor for callers built against the pre-rate,
@@ -468,7 +474,17 @@ public class Dtos {
          */
         public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
                                  String reason, String reference) {
-            this(merchantId, userId, points, reason, reference, null);
+            this(merchantId, userId, points, reason, reference, null, null);
+        }
+
+        /**
+         * Back-compat constructor for callers built against the pre-multi-currency
+         * shape (no {@code currency}). Omitting it means "the merchant's
+         * currency", which is what those callers always meant.
+         */
+        public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
+                                 String reason, String reference, BigDecimal amount) {
+            this(merchantId, userId, points, reason, reference, amount, null);
         }
     }
 

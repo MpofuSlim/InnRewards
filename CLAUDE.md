@@ -152,11 +152,20 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
 - **`loyalty_rules.points_per_unit` means points-per-USD** (V37), and
   `min_transaction_amount` is a **USD** floor. No data migration: every existing
   rule was authored against a USD-only cell, so the numbers already mean that.
-- **TEMPORARY pricing guard, redeem only**: `RedemptionService` still calls
-  `SupportedCurrencies.requireBaseFor(...)` and refuses a non-USD merchant
-  currency — the redemption rate + stamped liability value are USD-only until
-  design PR 3 converts them. Do not remove that guard without shipping the
-  conversion. (Earn's guard is gone, replaced by the real conversion above.)
+- **Redeem is USD-anchored too.** `RedemptionService` takes an optional request
+  `currency` (defaulting to the merchant's), converts a requested local
+  `amount` to USD, applies the redemption rate **in USD**, then converts the
+  resulting liability back for the receipt. The row freezes all of it:
+  `amount` + `currency` (local value off the bill), `base_amount` (the USD
+  liability the platform owes) and `fx_rate_id`.
+- **The redemption rate is read at BASE regardless of transaction currency.**
+  One USD-denominated rate is what keeps a point worth the same real value
+  everywhere; deriving local figures through FX means there is no second,
+  independently-drifting per-currency rate to arbitrage. A non-USD row in
+  `redemption_rates` is therefore never consulted — don't add one expecting it
+  to take effect.
+- The temporary `requireBaseFor` rollout guard is **gone** (both paths now
+  convert); don't reintroduce it.
 
 ## Transactions carry the invoice that billed them (V33, IN-9)
 

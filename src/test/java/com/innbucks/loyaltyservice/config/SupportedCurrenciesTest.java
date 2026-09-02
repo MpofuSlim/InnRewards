@@ -10,9 +10,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Pins the supported-currency allowlist contract (multi-currency PR 1): the
  * effective set is configured-list ∪ BASE ∪ cell currency, resolution
  * normalizes case/whitespace and defaults blank to the base, anything outside
- * the set fails CLOSED with {@code UNSUPPORTED_CURRENCY}, and the temporary
- * {@link SupportedCurrencies#requireBaseFor} pricing guard refuses even
- * supported non-base currencies until FX pricing ships (design PRs 2-3).
+ * the set fails CLOSED with {@code UNSUPPORTED_CURRENCY}. Membership is only
+ * the FIRST pricing gate — a supported currency still needs an in-force FX
+ * rate, which ExchangeRateService enforces separately.
  */
 class SupportedCurrenciesTest {
 
@@ -67,31 +67,6 @@ class SupportedCurrenciesTest {
                 .hasMessageContaining("not supported on this cell");
     }
 
-    @Test
-    void requireBaseFor_passesBase() {
-        SupportedCurrencies c = new SupportedCurrencies("USD,ZWG", "USD");
-        assertThat(c.requireBaseFor("usd", "earn")).isEqualTo("USD");
-        assertThat(c.requireBaseFor(null, "earn")).isEqualTo("USD");
-    }
 
-    @Test
-    void requireBaseFor_refusesSupportedNonBase_untilFxPricingShips() {
-        // The temporary rollout guard: ZWG is in the allowlist, but the earn/
-        // redeem math is still currency-blind, so a ZWG amount must be refused
-        // rather than priced as if it were dollars.
-        SupportedCurrencies c = new SupportedCurrencies("USD,ZWG", "USD");
-        assertThatThrownBy(() -> c.requireBaseFor("ZWG", "earn"))
-                .isInstanceOfSatisfying(LoyaltyException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo("UNSUPPORTED_CURRENCY"))
-                .hasMessageContaining("not enabled yet");
-    }
 
-    @Test
-    void requireBaseFor_refusesUnknownCode_withTheAllowlistMessage() {
-        SupportedCurrencies c = new SupportedCurrencies("USD,ZWG", "USD");
-        assertThatThrownBy(() -> c.requireBaseFor("GBP", "redeem"))
-                .isInstanceOfSatisfying(LoyaltyException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo("UNSUPPORTED_CURRENCY"))
-                .hasMessageContaining("not supported on this cell");
-    }
 }

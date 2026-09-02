@@ -94,4 +94,80 @@ class UserServiceTest {
                 .isInstanceOf(LoyaltyException.class)
                 .hasMessageContaining("Invalid phone number");
     }
+
+    // ---- requireSpendable: the spend gate on redeem + outgoing transfer ----
+    //
+    // Nothing pinned this contract before. The only test that named USER_PENDING
+    // was a RedemptionServiceTest mock that fabricated it as a 400, so the real
+    // 403 was never asserted anywhere and a status change would have shipped
+    // silently. The FE branches on `code` and renders `message`, so both are
+    // part of the wire contract, not implementation detail.
+
+    private static LoyaltyUser withStatus(LoyaltyUser.Status status) {
+        LoyaltyUser u = new LoyaltyUser();
+        u.setId(UUID.randomUUID());
+        u.setTenantId(TENANT);
+        u.setPhoneNumber(PHONE);
+        u.setStatus(status);
+        return u;
+    }
+
+    @Test
+    void requireSpendable_active_passes() {
+        service.requireSpendable(withStatus(LoyaltyUser.Status.ACTIVE));
+    }
+
+    @Test
+    void requireSpendable_pending_is403_USER_PENDING() {
+        assertThatThrownBy(() -> service.requireSpendable(withStatus(LoyaltyUser.Status.PENDING)))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("USER_PENDING");
+                    assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                });
+    }
+
+    @Test
+    void requireSpendable_blocked_is403_USER_BLOCKED() {
+        assertThatThrownBy(() -> service.requireSpendable(withStatus(LoyaltyUser.Status.BLOCKED)))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("USER_BLOCKED");
+                    assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                });
+    }
+
+    @Test
+    void requireSpendable_inactive_is403_USER_INACTIVE() {
+        assertThatThrownBy(() -> service.requireSpendable(withStatus(LoyaltyUser.Status.INACTIVE)))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("USER_INACTIVE");
+                    assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                });
+    }
+
+    /**
+     * Every refusal here is read by a CUSTOMER, so none of them may drift back
+     * into developer register. Pins the properties that distinguish customer
+     * copy from a log line: addressed to "you", sentence-cased, punctuated.
+     * PENDING must also say points keep accruing — "you can't spend" alone
+     * reads as though the balance were gone.
+     */
+    @Test
+    void requireSpendable_refusalsAreCustomerFacingProse() {
+        for (LoyaltyUser.Status status : new LoyaltyUser.Status[]{
+                LoyaltyUser.Status.PENDING, LoyaltyUser.Status.BLOCKED, LoyaltyUser.Status.INACTIVE}) {
+            String msg = org.junit.jupiter.api.Assertions.assertThrows(LoyaltyException.class,
+                    () -> service.requireSpendable(withStatus(status))).getMessage();
+            assertThat(msg).as("%s addresses the customer", status).containsIgnoringCase("your");
+            assertThat(msg).as("%s starts sentence-cased", status)
+                    .matches("^[A-Z].*");
+            assertThat(msg).as("%s is punctuated prose, not a log fragment", status).endsWith(".");
+            assertThat(msg).as("%s avoids internal jargon", status)
+                    .doesNotContainIgnoringCase("msisdn")
+                    .doesNotContainIgnoringCase("null");
+        }
+        assertThat(org.junit.jupiter.api.Assertions.assertThrows(LoyaltyException.class,
+                () -> service.requireSpendable(withStatus(LoyaltyUser.Status.PENDING))).getMessage())
+                .as("PENDING reassures that points keep accruing")
+                .containsIgnoringCase("earn");
+    }
 }

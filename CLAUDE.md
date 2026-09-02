@@ -178,6 +178,18 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   `consume` hands both to `TransactionService.post`, so it converts at
   scan time through the earn path above — correct, since the earn happens
   when scanned, and QR TTLs are short.
+- **Money aggregations sum `baseValue` / `base_amount`, never the local
+  amount.** Summing a local money column across a scope that mixes currencies
+  adds ZWG to USD and returns a plausible number that is money in no currency —
+  a regression that keeps working silently, which is why
+  `VoucherMoneySumUnitTest` pins the column choice. Both voucher money sums
+  (`reportSummaryByStatus`, `sumRedeemedValueByMerchantId`) are USD. **Every
+  points aggregation is currency-neutral and correct as-is** — don't "fix"
+  those. Report DTOs label their money figures as USD.
+  Side effect worth knowing: PERCENT/FREE_ITEM/COMBO vouchers have a NULL
+  `baseValue`, so SQL `SUM` drops them from money totals while `COUNT` still
+  includes them. That is a correction — a "10% off" voucher used to contribute
+  a literal `10` to a money total.
 - The temporary `requireBaseFor` rollout guard is **gone** (both paths now
   convert); don't reintroduce it.
 

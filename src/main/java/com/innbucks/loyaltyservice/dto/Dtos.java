@@ -818,9 +818,9 @@ public class Dtos {
             @Schema(example = "412") long total,
             @Schema(description = "Voucher count per status (ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED).")
             Map<String, Long> byStatus,
-            @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued.")
+            @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued, in USD (the platform base currency). Excludes vouchers with no money face value — PERCENT, FREE_ITEM and COMBO — which are still counted in `byStatus`.")
             BigDecimal valueIssuedAllTime,
-            @Schema(example = "7150.0000", description = "Summed face value of vouchers that have been (fully or partially) redeemed.")
+            @Schema(example = "7150.0000", description = "Summed face value of vouchers that have been (fully or partially) redeemed, in USD (the platform base currency).")
             BigDecimal valueRedeemedAllTime,
             @Schema(example = "38") long issuedLast30Days,
             @Schema(example = "22") long redeemedLast30Days) {}

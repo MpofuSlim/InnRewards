@@ -48,11 +48,35 @@ public class LoyaltyTransaction {
     @Column(nullable = false, length = 30)
     private TransactionType type;
 
+    /** What the customer actually transacted, in {@link #currency}. */
     @Column(precision = 19, scale = 4)
     private BigDecimal amount;
 
     @Column(length = 8)
     private String currency = "USD";
+
+    /**
+     * The BASE-currency (USD) value of {@link #amount}, frozen at the rate in
+     * force when this row was written (V37) — the figure points were awarded
+     * on. Read it back; never recompute it. Re-converting at today's rate would
+     * restate history, which for a fast-moving currency like ZWG means the same
+     * transaction is worth a different number of dollars every day.
+     *
+     * <p>Null = not known in USD: a row written before V37 in a non-USD
+     * currency. A USD row's base value equals its amount (V37 backfilled the
+     * history). Never read null as zero.
+     */
+    @Column(name = "base_amount", precision = 19, scale = 4)
+    private BigDecimal baseAmount;
+
+    /**
+     * The {@link ExchangeRate} row whose rate produced {@link #baseAmount} — the
+     * receipt for the conversion. Null when no conversion was needed (a USD
+     * transaction: the base is identity and USD is never stored in
+     * {@code exchange_rates}) or for pre-V37 rows.
+     */
+    @Column(name = "fx_rate_id")
+    private UUID fxRateId;
 
     @Column(name = "points_delta", nullable = false, precision = 19, scale = 4)
     private BigDecimal pointsDelta = BigDecimal.ZERO;

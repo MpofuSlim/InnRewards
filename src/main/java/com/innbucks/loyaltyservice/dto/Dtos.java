@@ -405,7 +405,13 @@ public class Dtos {
                                       // whose period covered this row. Null = not billed — either the
                                       // period isn't invoiced yet, or the merchant had no billable
                                       // voucher activity so no invoice was raised at all.
-                                      UUID invoiceId) {}
+                                      UUID invoiceId,
+                                      // Multi-currency (additive, V37). `currency` is the currency of
+                                      // `amount` — always render the two together, never `amount`
+                                      // alone. `baseAmount` is the USD value points were awarded on,
+                                      // frozen at the rate in force when the row was written; null
+                                      // means not known in USD (a pre-V37 non-USD row), never zero.
+                                      String currency, BigDecimal baseAmount) {}
 
     // Sender (fromUserId) MUST be a registered LoyaltyUser — you can't spend a
     // pending balance. Recipient may be either a registered user (toUserId) or

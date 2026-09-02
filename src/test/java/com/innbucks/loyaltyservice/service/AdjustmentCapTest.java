@@ -73,7 +73,8 @@ class AdjustmentCapTest {
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(MemberActivityNotifier.class),
                 props, fraud, mock(StaffRegistry.class),
-                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                usdOnlyFx());
 
         Merchant m = new Merchant();
         m.setId(MERCHANT);
@@ -227,7 +228,8 @@ class AdjustmentCapTest {
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(MemberActivityNotifier.class),
                 off, fraud, mock(StaffRegistry.class),
-                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                usdOnlyFx());
 
         unlimited.adjust(TENANT, TARGET, MERCHANT, new BigDecimal("999999"), "migration");
 
@@ -240,5 +242,14 @@ class AdjustmentCapTest {
                 List.of(roles).stream().map(SimpleGrantedAuthority::new).toList());
         auth.setDetails(new CallerDetails(null, null, "+263779999999", OPERATOR));
         SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    /** Real FX service on a USD-only allowlist: USD converts by identity without
+     *  touching the repository, so no stubbing is needed. */
+    private static ExchangeRateService usdOnlyFx() {
+        return new ExchangeRateService(
+                mock(com.innbucks.loyaltyservice.repository.ExchangeRateRepository.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                new BigDecimal("25"));
     }
 }

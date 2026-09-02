@@ -656,7 +656,13 @@ public class Dtos {
                                   // valueType={AMOUNT, PERCENT, FREE_ITEM, COMBO} tells the client how to
                                   // render `value` (currency-formatted amount, percent off, etc.).
                                   String valueType, BigDecimal value, String currency,
-                                  Instant issuedAt, Instant expiresAt) {}
+                                  Instant issuedAt, Instant expiresAt,
+                                  // Multi-currency liability (additive, V38): the USD worth of `value`,
+                                  // frozen at the rate in force when the voucher was ISSUED. Null when
+                                  // there is no money figure to convert — a PERCENT/FREE_ITEM/COMBO
+                                  // voucher, or a pre-V38 row — never zero. Display uses `value` +
+                                  // `currency`; this is for liability reporting, not the customer.
+                                  BigDecimal baseValue) {}
 
     /**
      * Hand a voucher to another customer. SINGLE HOP — see

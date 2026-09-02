@@ -96,6 +96,30 @@ public class Voucher {
     @Column(name = "currency", length = 8)
     private String currency;
 
+    /**
+     * The BASE-currency (USD) worth of {@link #value}, frozen at the rate in
+     * force when the voucher was ISSUED (V38) — the liability the platform took
+     * on by promising this discount. Read it back; never recompute it, or the
+     * outstanding-voucher book would swing daily on currency movement alone,
+     * with nothing issued and nothing redeemed.
+     *
+     * <p>Null means there is no USD liability figure, never zero, and for three
+     * different reasons: the voucher isn't denominated in money at all (PERCENT
+     * / FREE_ITEM / COMBO — "10% off" is not 10 of anything and must never be
+     * run through an exchange rate), it predates V38, or it is a pre-V38 non-USD
+     * voucher whose issue-time rate is unknown.
+     */
+    @Column(name = "base_value", precision = 19, scale = 4)
+    private BigDecimal baseValue;
+
+    /**
+     * The {@link ExchangeRate} row whose rate produced {@link #baseValue}. Null
+     * when no conversion was needed or recorded: a USD voucher (identity), a
+     * non-money value type, or a pre-V38 row.
+     */
+    @Column(name = "fx_rate_id")
+    private UUID fxRateId;
+
     @Column(name = "uses_remaining", nullable = false)
     private int usesRemaining = 1;
 

@@ -103,7 +103,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V37**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V38**; never edit an applied
 migration — add the next version.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
@@ -164,6 +164,20 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   independently-drifting per-currency rate to arbitrage. A non-USD row in
   `redemption_rates` is therefore never consulted — don't add one expecting it
   to take effect.
+- **Voucher liability freezes at ISSUE (V38).** `vouchers.base_value` +
+  `fx_rate_id` pin the USD worth of an issued voucher at the rate in force
+  *when it was issued*, because that is when the platform makes the promise.
+  Revaluing the outstanding book at today's rate would swing the liability
+  daily on FX alone, with nothing issued and nothing redeemed.
+  **Only `valueType = AMOUNT` is converted** — a PERCENT voucher's value is a
+  *percentage* and FREE_ITEM/COMBO have no money face value, so running them
+  through a rate would mint a confident, meaningless figure. Those stay NULL
+  forever, which is why a liability report must filter on value type rather
+  than treating NULL as zero.
+- **QR needs no FX code of its own.** A QR carries an amount + currency and
+  `consume` hands both to `TransactionService.post`, so it converts at
+  scan time through the earn path above — correct, since the earn happens
+  when scanned, and QR TTLs are short.
 - The temporary `requireBaseFor` rollout guard is **gone** (both paths now
   convert); don't reintroduce it.
 

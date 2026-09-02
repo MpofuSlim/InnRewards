@@ -123,12 +123,20 @@ class PhoneKeyedWalletTest {
         assertThat(voucher.currency()).isEqualTo("USD");
 
         // 3) PENDING user cannot redeem the voucher yet.
+        //
+        // Asserts the CODE, not the prose. `message` is customer-facing copy that
+        // product may reword at any time (it just was); `code` is the wire
+        // contract clients branch on. This assertion used to match the substring
+        // "unregistered" and broke the moment the copy was made customer-safe —
+        // a test failing for a reason that isn't a defect.
         assertThatThrownBy(() ->
                 voucherService.redeem(t.getId(), mr.id(),
                         new Dtos.RedeemVoucherRequest(null, voucher.code(), created.getId(),
                                 "OUTLET-A", "dev-1", "127.0.0.1")))
-                .isInstanceOf(LoyaltyException.class)
-                .hasMessageContaining("unregistered");
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("USER_PENDING");
+                    assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                });
 
         // 4) Promote webhook fires. PENDING -> ACTIVE.
         int promoted = userService.promoteByPhone(phone);

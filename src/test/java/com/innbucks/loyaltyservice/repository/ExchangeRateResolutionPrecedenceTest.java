@@ -114,4 +114,34 @@ class ExchangeRateResolutionPrecedenceTest {
 
         assertThat(repo.currentRate(TENANT, ZWG, NOW)).isEmpty();
     }
+
+    @Test
+    void clearedTenantRow_isATombstone_andFallsThroughToThePlatformRate() {
+        useRealResolution();
+        // The tenant deliberately went back to the bank rate: their latest
+        // in-force row is a revocation, not a rate.
+        ExchangeRate tombstone = rate(TENANT, ExchangeRate.Source.ADMIN, "1");
+        tombstone.setRatePerUsd(null);
+        tombstone.setCleared(true);
+        ExchangeRate bank = rate(null, ExchangeRate.Source.ADMIN, "26.700000");
+        when(repo.findInForceForTenant(eq(TENANT), eq(ZWG), eq(NOW), any(Pageable.class)))
+                .thenReturn(List.of(tombstone));
+        when(repo.findInForcePlatform(eq(ZWG), eq(ExchangeRate.Source.ADMIN), eq(NOW), any(Pageable.class)))
+                .thenReturn(List.of(bank));
+
+        assertThat(repo.currentRate(TENANT, ZWG, NOW)).contains(bank);
+    }
+
+    @Test
+    void aNewerOverrideAfterAClear_winsAgain() {
+        useRealResolution();
+        // "latest in force wins" means an override set AFTER a clear is live
+        // again — the tombstone only suppresses while it is the newest row.
+        ExchangeRate reinstated = rate(TENANT, ExchangeRate.Source.ADMIN, "27.500000");
+        when(repo.findInForceForTenant(eq(TENANT), eq(ZWG), eq(NOW), any(Pageable.class)))
+                .thenReturn(List.of(reinstated));
+
+        assertThat(repo.currentRate(TENANT, ZWG, NOW)).contains(reinstated);
+        verify(repo, never()).findInForcePlatform(anyString(), any(), any(), any());
+    }
 }

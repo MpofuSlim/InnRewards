@@ -59,10 +59,28 @@ public class ExchangeRate {
     /**
      * Units of {@link #currency} per 1 USD. {@code NUMERIC(19,6)} — a rate is a
      * multiplier, not an amount, so it gets two more decimals than the (19,4)
-     * money columns. Strictly positive (service validation + V36 CHECK).
+     * money columns. Strictly positive when set.
+     *
+     * <p>NULL only on a {@link #cleared} tombstone, which has no rate by
+     * definition. The V39 CHECK enforces the pairing: a row either sets a
+     * positive rate or clears the override, never neither and never both.
      */
-    @Column(name = "rate_per_usd", nullable = false, precision = 19, scale = 6)
+    @Column(name = "rate_per_usd", precision = 19, scale = 6)
     private BigDecimal ratePerUsd;
+
+    /**
+     * TRUE = this row is a TOMBSTONE revoking its scope's override rather than
+     * setting a rate (V39). Resolution finds it like any other row — latest
+     * {@code effectiveFrom <= T} — and falls through to the next scope down.
+     *
+     * <p>That is how a tenant goes BACK to the platform ("bank") rate without
+     * mutating history: append-only is preserved, the decision is attributable
+     * and effective-dated, and the trail reads as what actually happened rather
+     * than a row quietly vanishing. Only meaningful at tenant scope — a platform
+     * tombstone would just mean {@code NO_FX_RATE}, so the service refuses one.
+     */
+    @Column(nullable = false)
+    private boolean cleared = false;
 
     /**
      * When this rate starts being in force — distinct from {@link #createdAt} so

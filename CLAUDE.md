@@ -103,7 +103,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V38**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V39**; never edit an applied
 migration — add the next version.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
@@ -130,6 +130,18 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   refuses with `NO_FX_RATE`, never silently prices at 1.0.
   `FxProvisioningCheck` logs a boot-time HALF-PROVISIONED error for a
   supported-but-rateless currency.
+- **Going back to the bank rate is a TOMBSTONE, not a delete (V39).**
+  `DELETE /loyalty/exchange-rates/override` appends a tenant-scoped row with
+  `cleared = true` and `rate_per_usd = NULL`; resolution sees it as the latest
+  in-force tenant row and falls through to the platform scope. Append-only,
+  attributable and effective-dated, and the history still reads as the true
+  sequence of decisions. **Do NOT "clear" by writing an override equal to
+  today's bank rate** — that looks equivalent but re-freezes the tenant at a
+  stale number the moment the bank rate next moves. Only the LATEST in-force
+  tenant row is inspected, so an override set after a clear is live again.
+  Clearing when nothing is in force is refused (`FX_NO_OVERRIDE`) so stray
+  tombstones don't accumulate; platform scope can't be cleared at all
+  (`FX_CANNOT_CLEAR_PLATFORM` — "no bank rate" is just `NO_FX_RATE`).
 - **`setRate` sanity band** (`LOYALTY_FX_MAX_CHANGE_PERCENT`, default 25):
   a change beyond the band vs the in-force rate for the same scope needs
   `force=true` WITH a note (`FX_RATE_OUT_OF_BAND` / `FX_FORCE_NEEDS_NOTE`).

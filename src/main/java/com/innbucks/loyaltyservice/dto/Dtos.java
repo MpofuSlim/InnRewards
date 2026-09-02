@@ -550,7 +550,15 @@ public class Dtos {
                                   "tenant.")
             UUID tenantId,
             @Schema(example = "ZWG") String currency,
-            @Schema(example = "26.700000") BigDecimal ratePerUsd,
+            @Schema(example = "26.700000", nullable = true,
+                    description = "Units of the quote currency per 1 USD. Null on a `cleared` row — "
+                                  + "a revocation carries no rate.")
+            BigDecimal ratePerUsd,
+            @Schema(example = "false",
+                    description = "True = this row REVOKED its scope's override rather than setting a "
+                                  + "rate, so the scope falls back to the platform rate from "
+                                  + "`effectiveFrom`. Only ever true on a tenant-scoped row.")
+            boolean cleared,
             @Schema(example = "2026-10-01T00:00:00Z") Instant effectiveFrom,
             @Schema(example = "ADMIN", allowableValues = {"ADMIN", "FEED"},
                     description = "ADMIN = operator-entered (e.g. the daily RBZ figure); FEED = the " +
@@ -564,6 +572,7 @@ public class Dtos {
     ) {
         public static ExchangeRateResponse of(com.innbucks.loyaltyservice.entity.ExchangeRate r) {
             return new ExchangeRateResponse(r.getId(), r.getTenantId(), r.getCurrency(), r.getRatePerUsd(),
+                    r.isCleared(),
                     r.getEffectiveFrom(), r.getSource() == null ? null : r.getSource().name(),
                     r.getCreatedBy(), r.getNote(), r.getCreatedAt());
         }

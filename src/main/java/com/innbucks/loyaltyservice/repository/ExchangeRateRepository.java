@@ -65,7 +65,12 @@ public interface ExchangeRateRepository extends JpaRepository<ExchangeRate, UUID
         if (tenantId != null) {
             Optional<ExchangeRate> override =
                     findInForceForTenant(tenantId, currency, at, one).stream().findFirst();
-            if (override.isPresent()) return override;
+            // A CLEARED row is a tombstone (V39): the tenant deliberately went
+            // back to the platform rate, so fall through instead of returning it.
+            // Note this checks only the LATEST in-force tenant row — an older
+            // tombstone behind a newer override must NOT suppress that override,
+            // which is exactly what "latest wins" already gives us.
+            if (override.isPresent() && !override.get().isCleared()) return override;
         }
         Optional<ExchangeRate> admin =
                 findInForcePlatform(currency, ExchangeRate.Source.ADMIN, at, one).stream().findFirst();

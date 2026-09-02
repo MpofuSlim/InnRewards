@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.entity.ExchangeRate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.ExchangeRateRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -221,6 +222,61 @@ public class ExchangeRateService {
         r.setCreatedBy(createdBy);
         r.setNote(note);
         return rates.save(r);
+    }
+
+    /**
+     * Revoke a tenant's override so it goes BACK to the platform ("bank") rate
+     * (V39). Append-only, like everything else here: this writes a TOMBSTONE
+     * row rather than deleting the override, so the history reads as the true
+     * sequence of decisions and the change is attributable and effective-dated.
+     *
+     * <p>Deliberately NOT implemented as "write an override equal to today's
+     * bank rate" — that looks equivalent but silently re-freezes the tenant at a
+     * stale number the moment the bank rate next moves, which is the opposite of
+     * what the operator asked for.
+     *
+     * <p>Refused when the tenant has no override in force
+     * ({@code FX_NO_OVERRIDE}) — clearing nothing is far more likely a mistaken
+     * tenant/currency than an intent, and a stray tombstone is noise in an audit
+     * trail. Platform scope is refused outright ({@code FX_CANNOT_CLEAR_PLATFORM}):
+     * "no bank rate" is not a state, it is {@code NO_FX_RATE}.
+     *
+     * @param effectiveFrom when the revocation takes force; null = now
+     */
+    @Transactional
+    public ExchangeRate clearOverride(UUID tenantId, String currency, Instant effectiveFrom,
+                                      UUID createdBy, String note) {
+        if (tenantId == null) {
+            throw LoyaltyException.badRequest("FX_CANNOT_CLEAR_PLATFORM",
+                    "The platform rate cannot be cleared — every tenant falls back to it. Set a new "
+                            + "platform rate instead, or remove the currency from the supported set.");
+        }
+        String ccy = currencies.requireSupported(currency);
+        requireNotBase(ccy);
+
+        Instant when = effectiveFrom != null ? effectiveFrom : Instant.now();
+        // Check against the instant the clear takes force, not "now": scheduling
+        // a clear for a moment when no override will be in force is the same
+        // mistake as clearing nothing today.
+        ExchangeRate inForce = rates.findInForceForTenant(tenantId, ccy, when, Pageable.ofSize(1))
+                .stream().findFirst().orElse(null);
+        if (inForce == null || inForce.isCleared()) {
+            throw LoyaltyException.badRequest("FX_NO_OVERRIDE",
+                    "This tenant has no " + ccy + " override in force, so there is nothing to clear. "
+                            + "It is already using the platform rate.");
+        }
+
+        ExchangeRate tombstone = new ExchangeRate();
+        tombstone.setId(UUID.randomUUID());
+        tombstone.setTenantId(tenantId);
+        tombstone.setCurrency(ccy);
+        tombstone.setRatePerUsd(null);   // a tombstone has no rate, by definition
+        tombstone.setCleared(true);
+        tombstone.setEffectiveFrom(when);
+        tombstone.setSource(ExchangeRate.Source.ADMIN);
+        tombstone.setCreatedBy(createdBy);
+        tombstone.setNote(note);
+        return rates.save(tombstone);
     }
 
     /** Full history across all scopes for a currency, newest-effective first. */

@@ -11,6 +11,34 @@ loyalty-relevant subset of that monorepo's `CLAUDE.md`.
 > the latest `master` before committing, push with `git push -u origin <branch>`,
 > and open a **draft** PR. One feature per branch.
 
+## Frontend integration docs on merge (standing)
+
+> [!IMPORTANT]
+> **Every time a PR that adds or changes a frontend-facing HTTP surface merges to
+> `master`, automatically produce a frontend integration Markdown guide for that
+> change and deliver it to the user in-session (`SendUserFile`) — without being
+> asked, in the same session that observes the merge.** This holds in every
+> session, not just the one that wrote the code. **Skip only when an equivalent
+> guide for the same change already exists** (the user made it, or one was
+> produced earlier for that surface).
+
+- **"Frontend-facing"** = a new endpoint, or a changed request/response shape,
+  auth, headers, status/error codes, or client-visible behaviour. Pure
+  backend/infra/schema/CI/test/doc changes with **no** client surface need no
+  guide — say so briefly instead of inventing one.
+- **Shape** — mirror the guides already shared with the FE (the
+  `*-Frontend-Integration.md` deliverables: Redemption, My-Tickets,
+  ShopUser-Bulk-Upload): base URL + auth + required headers (note when a call
+  needs `X-Tenant-Id` and when it doesn't), each endpoint with request/response
+  JSON, error handling split into top-level vs per-row/field, realistic request
+  examples, and a gotchas checklist. Anchor every field to the merged code, not
+  memory.
+- Loyalty note: the customer-app surface is the **`/loyalty/public/**` staging
+  endpoints** (unauthenticated today, planned `x-api-key`), whose authenticated
+  twins are the production target — keep new guides consistent with that
+  authenticated-public-for-staging posture and map public → authenticated where
+  it applies.
+
 ## Extraction context — what stayed behind in ticketing-system
 
 - **The API gateway route stays in `ticketing-system`.** The gateway routes

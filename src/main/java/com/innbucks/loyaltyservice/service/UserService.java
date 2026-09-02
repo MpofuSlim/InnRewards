@@ -113,12 +113,19 @@ public class UserService {
      * Throws if the user can't perform a *spending* action right now. Use this
      * on every redemption / outgoing-transfer path so PENDING (not yet
      * registered) and BLOCKED (fraud) accounts can accrue but not spend.
+     *
+     * <p>Every message here reaches a CUSTOMER — a cashier reads it off the till
+     * or the app renders it verbatim — so all four branches stay in the same
+     * plain second-person register. PENDING additionally says that points keep
+     * accruing, because "you can't spend yet" without "you're still earning"
+     * reads as though the balance were lost.
      */
     public void requireSpendable(LoyaltyUser u) {
         switch (u.getStatus()) {
             case ACTIVE -> { /* ok */ }
             case PENDING -> throw LoyaltyException.forbidden("USER_PENDING",
-                    "user has not completed registration; balance can be received but not spent");
+                    "Your account isn't fully registered yet. Finish signing up to spend your "
+                            + "points — you'll keep earning them in the meantime.");
             case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
             case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "Your account is inactive. Please contact support to reactivate it.");
         }

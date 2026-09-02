@@ -75,7 +75,12 @@ class RedemptionServiceTest {
         // Short-circuit right after the (skipped) ownership check so we don't have
         // to stub the whole earn path — the assertion is that the S2S overload
         // never consults requireCallerOwnsOrIsAdmin.
-        doThrow(LoyaltyException.badRequest("USER_PENDING", "pending"))
+        //
+        // The stub mirrors what requireSpendable ACTUALLY throws (403). It used to
+        // fabricate a 400, which made this read as documentation that USER_PENDING
+        // is a bad-request — it isn't, and nothing else pinned the real status.
+        // UserServiceTest now owns that contract; this stub just has to stop lying.
+        doThrow(LoyaltyException.forbidden("USER_PENDING", "stub — see UserServiceTest for the real message"))
                 .when(users).requireSpendable(target);
 
         assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req()))
@@ -91,5 +96,36 @@ class RedemptionServiceTest {
                 org.mockito.Mockito.mock(com.innbucks.loyaltyservice.repository.ExchangeRateRepository.class),
                 new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
                 new java.math.BigDecimal("25"));
+    }
+
+    /**
+     * A PENDING customer must be refused on redeem BEFORE anything moves, and
+     * with the exact code + status the FE branches on. The wiring is what this
+     * pins: {@code requireSpendable} is genuinely on the redeem path (it would
+     * be easy to drop while refactoring), and its refusal reaches the caller
+     * unchanged rather than being swallowed or remapped.
+     *
+     * <p>Pending accounts accrue but cannot spend, so a leaked debit here would
+     * take points the customer has no way to have authorised yet.
+     */
+    @Test
+    void pendingUser_isRefusedOnRedeem_andNeverDebits() {
+        LoyaltyUser target = new LoyaltyUser();
+        target.setId(USER);
+        target.setStatus(LoyaltyUser.Status.PENDING);
+        when(users.require(TENANT, USER)).thenReturn(target);
+        doThrow(LoyaltyException.forbidden("USER_PENDING", "Your account isn't fully registered yet."))
+                .when(users).requireSpendable(target);
+
+        assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req()))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    org.assertj.core.api.Assertions.assertThat(ex.getCode()).isEqualTo("USER_PENDING");
+                    org.assertj.core.api.Assertions.assertThat(ex.getStatus())
+                            .isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                });
+
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+        verify(transactions, never()).save(any());
+        verify(transactions, never()).saveAndFlush(any());
     }
 }

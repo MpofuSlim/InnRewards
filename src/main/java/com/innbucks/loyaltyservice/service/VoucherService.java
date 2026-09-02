@@ -381,8 +381,13 @@ public class VoucherService {
             // to ACTIVE the moment user-service confirms signup.
             if (u != null && u.getStatus() == LoyaltyUser.Status.PENDING) {
                 recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "user pending registration");
+                // Customer-safe prose: VoucherController's 403 documentation
+                // promises callers that `message` can be shown as-is, and a
+                // cashier reads this one off the till to the person holding the
+                // voucher.
                 throw LoyaltyException.forbidden("USER_PENDING",
-                        "voucher belongs to an unregistered phone; recipient must register before redeeming");
+                        "This voucher belongs to a phone number that isn't registered yet. "
+                                + "The recipient needs to finish signing up before it can be redeemed.");
             }
         }
 

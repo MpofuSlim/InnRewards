@@ -52,7 +52,8 @@ class RedemptionServiceIdempotentRetryTest {
 
     private final RedemptionService service =
             new RedemptionService(users, merchants, walletService, transactions, metrics, rateService,
-                    memberNotifier, self);
+                    memberNotifier, self,
+                    new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();

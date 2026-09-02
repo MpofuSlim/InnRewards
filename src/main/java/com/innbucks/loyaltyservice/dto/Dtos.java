@@ -499,6 +499,54 @@ public class Dtos {
         }
     }
 
+    public record ExchangeRateRequest(
+            @Schema(example = "ZWG", description = "Quote currency (ISO 4217). Must be in the cell's " +
+                    "supported set and must NOT be the base (USD is 1 by definition).")
+            @NotBlank String currency,
+            @Schema(example = "26.700000", description = "Units of the quote currency per 1 USD. " +
+                    "Must be greater than zero. A change beyond the sanity band vs the current rate is " +
+                    "refused unless force=true with a note.")
+            @NotNull @Positive BigDecimal ratePerUsd,
+            @Schema(example = "2026-10-01T00:00:00Z", nullable = true,
+                    description = "When the rate takes force (UTC). Omit for immediate; a future instant " +
+                                  "schedules the change and the resolver ignores it until then.")
+            Instant effectiveFrom,
+            @Schema(example = "RBZ interbank 2026-09-02", nullable = true,
+                    description = "Why this rate was set — shown in history. REQUIRED when force=true.")
+            @Size(max = 500) String note,
+            @Schema(example = "false", nullable = true,
+                    description = "Set true (with a note) to push a rate through the sanity band deliberately.")
+            Boolean force
+    ) {}
+
+    /** A single effective-dated FX rate row (USD base). */
+    public record ExchangeRateResponse(
+            @Schema(example = "7c9e6679-7425-40de-944b-e07fc1f90ae7") UUID id,
+            @Schema(example = "3fa85f64-5717-4562-b3fc-2c963f66afa6", nullable = true,
+                    description = "Null = a platform row (the inherited \"bank rate\" default); set = " +
+                                  "that tenant's own override, which beats the platform rows for that " +
+                                  "tenant.")
+            UUID tenantId,
+            @Schema(example = "ZWG") String currency,
+            @Schema(example = "26.700000") BigDecimal ratePerUsd,
+            @Schema(example = "2026-10-01T00:00:00Z") Instant effectiveFrom,
+            @Schema(example = "ADMIN", allowableValues = {"ADMIN", "FEED"},
+                    description = "ADMIN = operator-entered (e.g. the daily RBZ figure); FEED = the " +
+                                  "scheduled public-feed job (later phase).")
+            String source,
+            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
+                    description = "Operator who set it; null for FEED rows.")
+            UUID createdBy,
+            @Schema(example = "RBZ interbank 2026-09-02", nullable = true) String note,
+            @Schema(example = "2026-09-02T08:30:00Z") Instant createdAt
+    ) {
+        public static ExchangeRateResponse of(com.innbucks.loyaltyservice.entity.ExchangeRate r) {
+            return new ExchangeRateResponse(r.getId(), r.getTenantId(), r.getCurrency(), r.getRatePerUsd(),
+                    r.getEffectiveFrom(), r.getSource() == null ? null : r.getSource().name(),
+                    r.getCreatedBy(), r.getNote(), r.getCreatedAt());
+        }
+    }
+
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); null means tenant-wide template.
     public record VoucherTemplateRequest(
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,

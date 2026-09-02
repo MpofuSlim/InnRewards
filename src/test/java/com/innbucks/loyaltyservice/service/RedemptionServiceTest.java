@@ -39,7 +39,8 @@ class RedemptionServiceTest {
             mock(org.springframework.beans.factory.ObjectProvider.class);
 
     private final RedemptionService service =
-            new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier, self);
+            new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier, self,
+                    new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();

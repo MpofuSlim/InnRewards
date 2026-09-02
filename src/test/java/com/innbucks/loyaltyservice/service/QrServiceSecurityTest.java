@@ -62,7 +62,8 @@ class QrServiceSecurityTest {
                     "unit-test-qr-secret-unit-test-qr-secret-unit-test", 300), null, null, null, null, null);
 
     private final QrService qrService = new QrService(
-            qrs, transactionService, transferService, fraud, userService, merchantAuthz, props);
+            qrs, transactionService, transferService, fraud, userService, merchantAuthz, props,
+            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
 
     @AfterEach
     void clearContext() {

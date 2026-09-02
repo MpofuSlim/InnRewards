@@ -41,13 +41,17 @@ public class MerchantService {
     private String cellCurrency;
 
 
+    private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
+
     public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient,
                            com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules,
-                           com.innbucks.loyaltyservice.config.LoyaltyProperties props) {
+                           com.innbucks.loyaltyservice.config.LoyaltyProperties props,
+                           com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
         this.merchants = merchants;
         this.userServiceClient = userServiceClient;
         this.rules = rules;
         this.props = props;
+        this.supportedCurrencies = supportedCurrencies;
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
@@ -66,8 +70,11 @@ public class MerchantService {
         m.setName(HtmlSanitizer.stripAll(name));
         m.setCategory(HtmlSanitizer.stripAll(req.category()));
         // Default to this cell's currency (ZW=USD, KE=KES) — was a hardcoded
-        // "USD" entity default that mislabelled every KE merchant.
-        m.setCurrency(req.currency() != null ? req.currency() : cellCurrency);
+        // "USD" entity default that mislabelled every KE merchant. Validated
+        // against the supported-currency allowlist (fail closed) so an unknown
+        // code can never become a merchant's pricing currency.
+        m.setCurrency(supportedCurrencies.requireSupported(
+                req.currency() != null ? req.currency() : cellCurrency));
         if (req.billingCycle() != null) m.setBillingCycle(req.billingCycle());
         applyFeeIssued(m, req.feeIssued());
         applyFeeRedeemed(m, req.feeRedeemed());

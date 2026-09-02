@@ -34,10 +34,13 @@ public class QrService {
     private String cellCurrency;
 
 
+    private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
+
     public QrService(QrTokenRepository qrs, TransactionService transactionService,
                      TransferService transferService, FraudService fraud,
                      UserService userService, MerchantAuthz merchantAuthz,
-                     LoyaltyProperties props) {
+                     LoyaltyProperties props,
+                     com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
         this.qrs = qrs;
         this.transactionService = transactionService;
         this.transferService = transferService;
@@ -46,6 +49,7 @@ public class QrService {
         this.merchantAuthz = merchantAuthz;
         this.signer = new CryptoSigner(props.qr().secret());
         this.defaultTtl = props.qr().ttlSeconds();
+        this.supportedCurrencies = supportedCurrencies;
     }
 
     public Dtos.QrPayload issue(UUID tenantId, Dtos.QrIssueRequest req) {
@@ -76,7 +80,10 @@ public class QrService {
         q.setSourceId(req.sourceId());
         q.setTransactionType(req.transactionType());
         q.setAmount(req.amount());
-        q.setCurrency(req.currency() != null ? req.currency() : cellCurrency);
+        // Allowlist-validated (fail closed) — a QR encodes a money value; an
+        // unknown currency code must never be minted into a signed token.
+        q.setCurrency(supportedCurrencies.requireSupported(
+                req.currency() != null ? req.currency() : cellCurrency));
         int ttl = req.ttlSeconds() == null ? defaultTtl : Math.max(30, req.ttlSeconds());
         q.setExpiresAt(Instant.now().plusSeconds(ttl));
         q.setToken(CryptoSigner.randomToken(24));

@@ -19,10 +19,13 @@ public class VoucherTemplateService {
 
     private final VoucherTemplateRepository templates;
     private final MerchantService merchants;
+    private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
 
-    public VoucherTemplateService(VoucherTemplateRepository templates, MerchantService merchants) {
+    public VoucherTemplateService(VoucherTemplateRepository templates, MerchantService merchants,
+                                  com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
         this.templates = templates;
         this.merchants = merchants;
+        this.supportedCurrencies = supportedCurrencies;
     }
 
     public VoucherTemplate create(UUID tenantId, UUID merchantId, Dtos.VoucherTemplateRequest req) {
@@ -51,9 +54,11 @@ public class VoucherTemplateService {
         t.setType(req.type());
         t.setValueType(req.valueType());
         // Inherit the merchant's currency when the template doesn't override it
-        // (was a hardcoded "USD" entity default).
-        t.setCurrency(req.currency() != null ? req.currency()
-                : merchants.requireMerchant(tenantId, merchantId).getCurrency());
+        // (was a hardcoded "USD" entity default). Allowlist-validated (fail
+        // closed): a voucher's face value is a money figure and its currency
+        // must be one the platform can price.
+        t.setCurrency(supportedCurrencies.requireSupported(req.currency() != null ? req.currency()
+                : merchants.requireMerchant(tenantId, merchantId).getCurrency()));
         t.setFreeItemSku(req.freeItemSku());
         t.setUsageLimit(req.usageLimit());
         t.setValidityDays(req.validityDays());

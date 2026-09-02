@@ -33,6 +33,7 @@ public class RedemptionService {
      *  {@link #redeemPointsIdempotent} re-enters {@link #redeemPoints} across the
      *  proxy and gets a fresh transaction each attempt. */
     private final ObjectProvider<RedemptionService> self;
+    private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
 
     public RedemptionService(UserService users, MerchantService merchants,
                              WalletService walletService,
@@ -40,7 +41,8 @@ public class RedemptionService {
                              LoyaltyMetrics metrics,
                              RedemptionRateService rateService,
                              com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
-                             ObjectProvider<RedemptionService> self) {
+                             ObjectProvider<RedemptionService> self,
+                             com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
@@ -49,6 +51,7 @@ public class RedemptionService {
         this.rateService = rateService;
         this.memberNotifier = memberNotifier;
         this.self = self;
+        this.supportedCurrencies = supportedCurrencies;
     }
 
     /**
@@ -169,7 +172,12 @@ public class RedemptionService {
         // stamped on the ledger row (below). Supplying both a points and an amount
         // that disagree at the current rate is refused rather than trusting the
         // caller's number.
-        String currency = m.getCurrency();
+        // Multi-currency guard (fail closed): the redemption rate resolution and
+        // the stamped liability value both assume BASE (USD) until the redeem
+        // path converts through FX (design PR 3, which replaces this guard with
+        // the fx conversion + an optional request currency). A non-base merchant
+        // currency is refused rather than mispriced.
+        String currency = supportedCurrencies.requireBaseFor(m.getCurrency(), "redeem");
         BigDecimal pointsToDebit;
         if (req.amount() != null) {
             pointsToDebit = rateService.pointsFor(req.amount(), currency);

@@ -103,8 +103,47 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V35**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V36**; never edit an applied
 migration — add the next version.
+
+## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
+
+The cell supports USD (BASE) + ZAR + ZWG. Points stay ONE currency-neutral
+pool anchored to USD; any non-USD money amount crosses `ExchangeRateService`
+exactly once (earn: local → USD → points; redeem: points → USD → local).
+
+- **`SupportedCurrencies` is the allowlist** — configured set
+  (`LOYALTY_SUPPORTED_CURRENCIES`, default `USD`) ∪ BASE ∪ the cell currency
+  (`INNBUCKS_CURRENCY`). Every write entry point that accepts or defaults a
+  currency (merchant create, QR issue, voucher template, earn, redeem)
+  resolves through it and FAILS CLOSED (`UNSUPPORTED_CURRENCY`) on anything
+  outside — the currency analogue of `KNOWN_COUNTRIES`.
+- **`exchange_rates` (V36) is append-only + effective-dated** (the
+  `redemption_rates` model) with TWO scopes and this resolution precedence
+  (mirrors the loyalty_rules global/merchant inheritance): **tenant override
+  (`tenant_id` set) → platform ADMIN (`tenant_id` NULL) → platform FEED**.
+  The "bank rate" (platform scope; feed job is a later phase) applies ONLY
+  when nobody set one — a tenant-set rate overrides it for that tenant, and a
+  platform-admin rate overrides the feed for everyone, regardless of recency.
+  Pinned by `ExchangeRateResolutionPrecedenceTest`. USD is never stored
+  (`FX_BASE_IMMUTABLE`); no seed — a supported currency with no in-force rate
+  refuses with `NO_FX_RATE`, never silently prices at 1.0.
+  `FxProvisioningCheck` logs a boot-time HALF-PROVISIONED error for a
+  supported-but-rateless currency.
+- **`setRate` sanity band** (`LOYALTY_FX_MAX_CHANGE_PERCENT`, default 25):
+  a change beyond the band vs the in-force rate for the same scope needs
+  `force=true` WITH a note (`FX_RATE_OUT_OF_BAND` / `FX_FORCE_NEEDS_NOTE`).
+  Endpoints: `POST /loyalty/exchange-rates` (SUPER_ADMIN, platform),
+  `POST /loyalty/exchange-rates/override` (tenant admins, X-Tenant header),
+  `GET /loyalty/exchange-rates?currency=` (effective, staff-readable),
+  `GET /loyalty/exchange-rates/history` (SUPER_ADMIN, all scopes).
+- **TEMPORARY pricing guard**: earn and redeem call
+  `SupportedCurrencies.requireBaseFor(...)` and refuse any non-USD currency —
+  the rules engine is currency-blind (`points = amount × rate`), so a ZWG 500
+  earn would over-credit ~27× if let through. Design PR 2 (earn) and PR 3
+  (redeem) replace these refusals with `fx.toBase(...)` conversions and stamp
+  the frozen base value + rate id on money rows ("read back, never
+  recompute"). Do not remove the guard without shipping the conversion.
 
 ## Transactions carry the invoice that billed them (V33, IN-9)
 

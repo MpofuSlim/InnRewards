@@ -38,6 +38,7 @@ public class TransactionService {
     private final com.innbucks.loyaltyservice.config.LoyaltyProperties props;
     private final FraudService fraud;
     private final StaffRegistry staffRegistry;
+    private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               UserService users,
@@ -48,7 +49,8 @@ public class TransactionService {
                               com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                               com.innbucks.loyaltyservice.config.LoyaltyProperties props,
                               FraudService fraud,
-                              StaffRegistry staffRegistry) {
+                              StaffRegistry staffRegistry,
+                              com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
         this.transactions = transactions;
         this.users = users;
         this.merchants = merchants;
@@ -59,6 +61,7 @@ public class TransactionService {
         this.props = props;
         this.fraud = fraud;
         this.staffRegistry = staffRegistry;
+        this.supportedCurrencies = supportedCurrencies;
     }
 
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req,
@@ -176,6 +179,16 @@ public class TransactionService {
             throw LoyaltyException.badRequest("INVALID_AMOUNT", "amount must be zero or positive");
         }
 
+        // Multi-currency guard (fail closed). The rules engine is currency-blind
+        // (points = amount × pointsPerUnit, no conversion), so an amount in any
+        // non-BASE currency fed to it would be massively mispriced — e.g. a
+        // ZWG 500 earn credited as if it were $500. Until the earn path converts
+        // through FX to the USD base (design PR 2, which replaces this guard with
+        // fx.toBase(...)), only BASE-currency earns are accepted; unknown codes
+        // are refused outright by the allowlist.
+        String currency = supportedCurrencies.requireBaseFor(
+                req.currency() == null ? m.getCurrency() : req.currency(), "earn");
+
         var eval = rulesEngine.evaluate(tenantId, m.getId(), req.type(), req.amount());
 
         LoyaltyTransaction t = new LoyaltyTransaction();
@@ -190,7 +203,7 @@ public class TransactionService {
         t.setUserId(u.getId());
         t.setType(req.type());
         t.setAmount(req.amount());
-        t.setCurrency(req.currency() == null ? m.getCurrency() : req.currency());
+        t.setCurrency(currency);
         t.setPointsDelta(eval.points());
         t.setRuleId(eval.ruleId());
         t.setCampaignId(eval.campaignId());

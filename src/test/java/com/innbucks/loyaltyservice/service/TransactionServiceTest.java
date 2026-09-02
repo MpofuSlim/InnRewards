@@ -53,7 +53,8 @@ class TransactionServiceTest {
 
     private final TransactionService service = new TransactionService(
             transactions, users, merchants, walletService, rulesEngine, metrics, memberNotifier,
-            props, fraudService, staffRegistry);
+            props, fraudService, staffRegistry,
+            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();

@@ -72,7 +72,8 @@ class AdjustmentCapTest {
                 mock(RulesEngine.class),
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(MemberActivityNotifier.class),
-                props, fraud, mock(StaffRegistry.class));
+                props, fraud, mock(StaffRegistry.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
 
         Merchant m = new Merchant();
         m.setId(MERCHANT);
@@ -225,7 +226,8 @@ class AdjustmentCapTest {
                 mock(RulesEngine.class),
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(MemberActivityNotifier.class),
-                off, fraud, mock(StaffRegistry.class));
+                off, fraud, mock(StaffRegistry.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
 
         unlimited.adjust(TENANT, TARGET, MERCHANT, new BigDecimal("999999"), "migration");
 

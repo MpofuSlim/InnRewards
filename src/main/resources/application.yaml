@@ -74,6 +74,21 @@ innbucks-notify:
   logo-url: ${NOTIFY_LOGO_URL:}
 
 loyalty:
+  # Multi-currency (design: USD base + ZAR + ZWG). The cell's supported-currency
+  # allowlist — every write that accepts or defaults a currency validates against
+  # it (UNSUPPORTED_CURRENCY, fail closed). The effective set always includes the
+  # BASE (USD) and this cell's INNBUCKS_CURRENCY. Enabling a currency here does
+  # NOT make it priceable: pricing additionally needs an in-force USD→X row in
+  # `exchange_rates` (NO_FX_RATE otherwise), and earn/redeem stay BASE-only until
+  # the FX-anchoring PRs land. ZW go-live value: USD,ZAR,ZWG.
+  currency:
+    supported: ${LOYALTY_SUPPORTED_CURRENCIES:USD}
+  fx:
+    # Sanity band on POST /loyalty/exchange-rates: a new rate deviating more
+    # than this many percent from the current in-force rate is refused
+    # (FX_RATE_OUT_OF_BAND) unless force=true is sent WITH a note. Guards a
+    # fat-fingered ZWG rate; non-positive disables the band.
+    max-change-percent: ${LOYALTY_FX_MAX_CHANGE_PERCENT:25}
   points:
     # 0 (the default) = points NEVER expire: every credit opens a lot with a
     # NULL expires_at, which no expiry query matches, so nothing is released as

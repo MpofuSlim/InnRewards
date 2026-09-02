@@ -23,7 +23,8 @@ class VoucherTemplateServiceTest {
 
     private static VoucherTemplateService newService(VoucherTemplateRepository templates,
                                                      MerchantService merchants) {
-        return new VoucherTemplateService(templates, merchants);
+        return new VoucherTemplateService(templates, merchants,
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
     }
 
     private static Dtos.VoucherTemplateRequest req(UUID merchantId, String name) {

@@ -196,6 +196,80 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
                 .isEqualTo(1);
     }
 
+    @Test
+    void idempotent_wrapper_sequential_replays_and_debits_once() {
+        String reference = "BOOKING-" + UUID.randomUUID();
+
+        RedemptionService.RedemptionResult first = redemptionService.redeemPointsIdempotent(tenantId, merchantId,
+                new Dtos.RedemptionRequest(null, userId, new BigDecimal("100"), "redeem", reference), false);
+        assertThat(first.balance()).isEqualByComparingTo("900");
+
+        RedemptionService.RedemptionResult retry = redemptionService.redeemPointsIdempotent(tenantId, merchantId,
+                new Dtos.RedemptionRequest(null, userId, new BigDecimal("100"), "redeem", reference), false);
+
+        assertThat(retry.transactionId())
+                .as("wrapper replays the original redemption's id, returning a clean 200")
+                .isEqualTo(first.transactionId());
+        assertThat(walletService.mainWallet(phone).getBalance()).isEqualByComparingTo("900");
+        assertThat(redemptionRowsFor(reference)).isEqualTo(1);
+    }
+
+    /**
+     * The footgun this hardening removes: through the idempotent wrapper, a
+     * concurrent double-tap must NOT surface a 409 to any caller — every
+     * race-loser is retried into the clean 200 replay — while still debiting the
+     * wallet exactly once.
+     */
+    @Test
+    void idempotent_wrapper_concurrent_never_surfaces_409() throws Exception {
+        final String reference = "BOOKING-" + UUID.randomUUID();
+
+        ExecutorService pool = Executors.newFixedThreadPool(CONCURRENCY);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicInteger returned = new AtomicInteger();          // all should return a result
+        AtomicInteger duplicateRejections = new AtomicInteger(); // must stay zero
+        AtomicInteger otherErrors = new AtomicInteger();
+        List<Throwable> unexpected = new ArrayList<>();
+
+        for (int i = 0; i < CONCURRENCY; i++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    redemptionService.redeemPointsIdempotent(tenantId, merchantId,
+                            new Dtos.RedemptionRequest(null, userId, new BigDecimal("100"), "redeem", reference),
+                            false);
+                    returned.incrementAndGet();
+                } catch (LoyaltyException ex) {
+                    if ("DUPLICATE_REFERENCE".equals(ex.getCode())) {
+                        duplicateRejections.incrementAndGet();
+                    } else {
+                        otherErrors.incrementAndGet();
+                        synchronized (unexpected) { unexpected.add(ex); }
+                    }
+                } catch (Throwable other) {
+                    otherErrors.incrementAndGet();
+                    synchronized (unexpected) { unexpected.add(other); }
+                }
+            });
+        }
+
+        start.countDown();
+        pool.shutdown();
+        assertThat(pool.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(otherErrors.get()).as("no unexpected errors; got %s", unexpected).isZero();
+        assertThat(duplicateRejections.get())
+                .as("the wrapper retries every race-loser to a 200 — no 409 reaches a caller")
+                .isZero();
+        assertThat(returned.get())
+                .as("every worker got a 200 (winner + replayed losers)")
+                .isEqualTo(CONCURRENCY);
+        assertThat(walletService.mainWallet(phone).getBalance())
+                .as("wallet debited exactly once")
+                .isEqualByComparingTo("900");
+        assertThat(redemptionRowsFor(reference)).isEqualTo(1);
+    }
+
     private long redemptionRowsFor(String reference) {
         return transactionRepository.findAll().stream()
                 .filter(x -> x.getType() == TransactionType.REDEMPTION)

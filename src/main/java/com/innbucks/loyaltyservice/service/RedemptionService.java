@@ -6,10 +6,13 @@ import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.exception.RedemptionRaceException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -26,13 +29,18 @@ public class RedemptionService {
     private final LoyaltyMetrics metrics;
     private final RedemptionRateService rateService;
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
+    /** Self reference through the Spring proxy, so the retry in
+     *  {@link #redeemPointsIdempotent} re-enters {@link #redeemPoints} across the
+     *  proxy and gets a fresh transaction each attempt. */
+    private final ObjectProvider<RedemptionService> self;
 
     public RedemptionService(UserService users, MerchantService merchants,
                              WalletService walletService,
                              LoyaltyTransactionRepository transactions,
                              LoyaltyMetrics metrics,
                              RedemptionRateService rateService,
-                             com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier) {
+                             com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
+                             ObjectProvider<RedemptionService> self) {
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
@@ -40,6 +48,58 @@ public class RedemptionService {
         this.metrics = metrics;
         this.rateService = rateService;
         this.memberNotifier = memberNotifier;
+        this.self = self;
+    }
+
+    /**
+     * Idempotent, retry-safe entry point for the PUBLIC redeem endpoints
+     * ({@code POST /loyalty/redeem} and its public-test twin). Wraps
+     * {@link #redeemPoints} so a genuine concurrent double-tap — the
+     * {@link RedemptionRaceException} flush-race — returns the clean 200 replay
+     * instead of a 409: on the race the OTHER request already committed the
+     * single debit, so re-running {@code redeemPoints} re-enters the idempotency
+     * pre-check, finds that committed REDEMPTION row, and replays it.
+     *
+     * <p>Runs {@code NOT_SUPPORTED} (non-transactionally) so each
+     * {@code self.redeemPoints(...)} call — through the Spring proxy — gets its
+     * OWN transaction: the first attempt's tx rolls back cleanly on the race
+     * before the second attempt's fresh tx reads the winner. (A same-transaction
+     * re-read would be unsafe — a Postgres unique-violation aborts the whole
+     * transaction — which is why the retry happens ABOVE the transactional
+     * method, not inside its catch.)
+     *
+     * <p>Exactly ONE retry: the winner is guaranteed committed by the time the
+     * loser observes the duplicate-key violation (Postgres blocks the conflicting
+     * insert until the other transaction resolves), and ledger rows are
+     * append-only, so the retry's pre-check WILL find the row and return before
+     * any second insert. A second, unexpected race is allowed to propagate as the
+     * original 409.
+     *
+     * <p>Only {@link RedemptionRaceException} is retried. The cross-type pre-check
+     * conflict (a plain {@link LoyaltyException}, same 409 code, thrown BEFORE any
+     * insert when the reference belongs to a non-redemption transaction) is a
+     * genuine error and propagates on the first attempt — retrying it would loop
+     * and could mask a real collision as success.
+     *
+     * <p>In-process callers (shop-checkout, ticketing) deliberately do NOT use
+     * this wrapper: they join {@code redeemPoints}' transaction, so a race there
+     * poisons their whole transaction and cannot be retried at this level. They
+     * keep calling {@link #redeemPoints} directly and still see the identical 409
+     * (a {@link RedemptionRaceException} IS a {@link LoyaltyException}).
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public RedemptionResult redeemPointsIdempotent(UUID tenantId, UUID merchantId,
+                                                   Dtos.RedemptionRequest req,
+                                                   boolean enforceCallerOwnership) {
+        try {
+            return self.getObject().redeemPoints(tenantId, merchantId, req, enforceCallerOwnership);
+        } catch (RedemptionRaceException race) {
+            // Lost the (merchant, reference) insert race — the winner already
+            // committed the single debit. Retry ONCE: the pre-check now finds that
+            // committed REDEMPTION row and replays it as a clean 200, no double
+            // debit. A still-racing second attempt propagates as the 409.
+            return self.getObject().redeemPoints(tenantId, merchantId, req, enforceCallerOwnership);
+        }
     }
 
     /**
@@ -152,8 +212,11 @@ public class RedemptionService {
             try {
                 transactions.saveAndFlush(t);
             } catch (DataIntegrityViolationException dup) {
-                throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
-                        "A redemption with this reference is already being processed.");
+                // Lost the unique-index race: the concurrent winner committed the
+                // single debit; this flow never reached the wallet. Typed so the
+                // idempotent wrapper can retry it into a clean 200 replay, while a
+                // caller that lets it propagate still gets the same 409 it always did.
+                throw new RedemptionRaceException();
             }
         } else {
             transactions.save(t);

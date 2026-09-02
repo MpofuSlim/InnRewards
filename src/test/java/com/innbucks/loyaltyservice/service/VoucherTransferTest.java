@@ -79,7 +79,7 @@ class VoucherTransferTest {
                 mock(FraudService.class),
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 memberNotifier,
-                props);
+                props, usdOnlyFx());
 
         authenticateAs(HOLDER_PHONE, "ROLE_CUSTOMER");
     }
@@ -364,5 +364,14 @@ class VoucherTransferTest {
                 List.of(roles).stream().map(SimpleGrantedAuthority::new).toList());
         auth.setDetails(new CallerDetails(null, null, phone, UUID.randomUUID()));
         SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    /** Real FX service on a USD-only allowlist: USD converts by identity without
+     *  touching the repository, so no stubbing is needed. */
+    private static ExchangeRateService usdOnlyFx() {
+        return new ExchangeRateService(
+                org.mockito.Mockito.mock(com.innbucks.loyaltyservice.repository.ExchangeRateRepository.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                new java.math.BigDecimal("25"));
     }
 }

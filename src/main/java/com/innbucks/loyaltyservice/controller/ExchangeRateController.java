@@ -198,6 +198,71 @@ public class ExchangeRateController {
                         Dtos.ExchangeRateResponse.of(saved)));
     }
 
+    @DeleteMapping("/override")
+    @PreAuthorize("hasAnyRole('TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @Operation(summary = "Revert THIS tenant to the platform (bank) rate",
+            description = "Revokes the tenant's own override so it falls back to the platform rate " +
+                    "again. Append-only: this records a dated, attributed revocation rather than " +
+                    "deleting anything, so the rate history still reads as the true sequence of " +
+                    "decisions. Omit `effectiveFrom` for immediate; a future instant schedules the " +
+                    "revert. Refused when the tenant has no override in force (FX_NO_OVERRIDE) — " +
+                    "clearing nothing is usually a mistaken tenant or currency. `ratePerUsd` in the " +
+                    "body is ignored.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Override revoked; the tenant now uses the platform rate",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tenant exchange-rate override cleared",
+                                      "data": {
+                                        "id": "9e1f8891-9647-62f0-b66d-129he3h12cg9",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "currency": "ZWG",
+                                        "ratePerUsd": null,
+                                        "cleared": true,
+                                        "effectiveFrom": "2026-09-04T06:00:00Z",
+                                        "source": "ADMIN",
+                                        "createdBy": "22222222-3333-4444-5555-666666666666",
+                                        "note": "Back to the platform rate",
+                                        "createdAt": "2026-09-04T06:00:00Z"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "No override in force, missing tenant header, unsupported or base currency",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Nothing to clear", value = """
+                                    {
+                                      "code": "FX_NO_OVERRIDE",
+                                      "message": "This tenant has no ZWG override in force, so there is nothing to clear. It is already using the platform rate.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller lacks a tenant-admin role, or is not a member of the tenant. " +
+                            "Both produce the SAME body — the reason is deliberately not disclosed.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "You don't have permission to do that.", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<Dtos.ExchangeRateResponse>> clearTenantOverride(
+            @RequestParam("currency") String currency,
+            @RequestParam(value = "effectiveFrom", required = false)
+            @org.springframework.format.annotation.DateTimeFormat(iso =
+                    org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.Instant effectiveFrom,
+            @RequestParam(value = "note", required = false) String note) {
+        UUID tenantId = tenantContext.requireTenantId();
+        ExchangeRate cleared = fx.clearOverride(tenantId, currency, effectiveFrom,
+                CallerDetails.currentUserId(), note);
+        log.info("Tenant exchange-rate override cleared tenantId={} currency={} effectiveFrom={} by={}",
+                tenantId, cleared.getCurrency(), cleared.getEffectiveFrom(), cleared.getCreatedBy());
+        return ResponseEntity.ok(ApiResult.ok("Tenant exchange-rate override cleared",
+                Dtos.ExchangeRateResponse.of(cleared)));
+    }
+
     @GetMapping
     @Operation(summary = "Get the EFFECTIVE USD→currency rate",
             description = "The rate that actually applies right now: with an X-Tenant-Id/X-Tenant-Code " +

@@ -103,7 +103,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V37**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V39**; never edit an applied
 migration — add the next version.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
@@ -130,6 +130,18 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   refuses with `NO_FX_RATE`, never silently prices at 1.0.
   `FxProvisioningCheck` logs a boot-time HALF-PROVISIONED error for a
   supported-but-rateless currency.
+- **Going back to the bank rate is a TOMBSTONE, not a delete (V39).**
+  `DELETE /loyalty/exchange-rates/override` appends a tenant-scoped row with
+  `cleared = true` and `rate_per_usd = NULL`; resolution sees it as the latest
+  in-force tenant row and falls through to the platform scope. Append-only,
+  attributable and effective-dated, and the history still reads as the true
+  sequence of decisions. **Do NOT "clear" by writing an override equal to
+  today's bank rate** — that looks equivalent but re-freezes the tenant at a
+  stale number the moment the bank rate next moves. Only the LATEST in-force
+  tenant row is inspected, so an override set after a clear is live again.
+  Clearing when nothing is in force is refused (`FX_NO_OVERRIDE`) so stray
+  tombstones don't accumulate; platform scope can't be cleared at all
+  (`FX_CANNOT_CLEAR_PLATFORM` — "no bank rate" is just `NO_FX_RATE`).
 - **`setRate` sanity band** (`LOYALTY_FX_MAX_CHANGE_PERCENT`, default 25):
   a change beyond the band vs the in-force rate for the same scope needs
   `force=true` WITH a note (`FX_RATE_OUT_OF_BAND` / `FX_FORCE_NEEDS_NOTE`).
@@ -152,11 +164,46 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
 - **`loyalty_rules.points_per_unit` means points-per-USD** (V37), and
   `min_transaction_amount` is a **USD** floor. No data migration: every existing
   rule was authored against a USD-only cell, so the numbers already mean that.
-- **TEMPORARY pricing guard, redeem only**: `RedemptionService` still calls
-  `SupportedCurrencies.requireBaseFor(...)` and refuses a non-USD merchant
-  currency — the redemption rate + stamped liability value are USD-only until
-  design PR 3 converts them. Do not remove that guard without shipping the
-  conversion. (Earn's guard is gone, replaced by the real conversion above.)
+- **Redeem is USD-anchored too.** `RedemptionService` takes an optional request
+  `currency` (defaulting to the merchant's), converts a requested local
+  `amount` to USD, applies the redemption rate **in USD**, then converts the
+  resulting liability back for the receipt. The row freezes all of it:
+  `amount` + `currency` (local value off the bill), `base_amount` (the USD
+  liability the platform owes) and `fx_rate_id`.
+- **The redemption rate is read at BASE regardless of transaction currency.**
+  One USD-denominated rate is what keeps a point worth the same real value
+  everywhere; deriving local figures through FX means there is no second,
+  independently-drifting per-currency rate to arbitrage. A non-USD row in
+  `redemption_rates` is therefore never consulted — don't add one expecting it
+  to take effect.
+- **Voucher liability freezes at ISSUE (V38).** `vouchers.base_value` +
+  `fx_rate_id` pin the USD worth of an issued voucher at the rate in force
+  *when it was issued*, because that is when the platform makes the promise.
+  Revaluing the outstanding book at today's rate would swing the liability
+  daily on FX alone, with nothing issued and nothing redeemed.
+  **Only `valueType = AMOUNT` is converted** — a PERCENT voucher's value is a
+  *percentage* and FREE_ITEM/COMBO have no money face value, so running them
+  through a rate would mint a confident, meaningless figure. Those stay NULL
+  forever, which is why a liability report must filter on value type rather
+  than treating NULL as zero.
+- **QR needs no FX code of its own.** A QR carries an amount + currency and
+  `consume` hands both to `TransactionService.post`, so it converts at
+  scan time through the earn path above — correct, since the earn happens
+  when scanned, and QR TTLs are short.
+- **Money aggregations sum `baseValue` / `base_amount`, never the local
+  amount.** Summing a local money column across a scope that mixes currencies
+  adds ZWG to USD and returns a plausible number that is money in no currency —
+  a regression that keeps working silently, which is why
+  `VoucherMoneySumUnitTest` pins the column choice. Both voucher money sums
+  (`reportSummaryByStatus`, `sumRedeemedValueByMerchantId`) are USD. **Every
+  points aggregation is currency-neutral and correct as-is** — don't "fix"
+  those. Report DTOs label their money figures as USD.
+  Side effect worth knowing: PERCENT/FREE_ITEM/COMBO vouchers have a NULL
+  `baseValue`, so SQL `SUM` drops them from money totals while `COUNT` still
+  includes them. That is a correction — a "10% off" voucher used to contribute
+  a literal `10` to a money total.
+- The temporary `requireBaseFor` rollout guard is **gone** (both paths now
+  convert); don't reintroduce it.
 
 ## Transactions carry the invoice that billed them (V33, IN-9)
 

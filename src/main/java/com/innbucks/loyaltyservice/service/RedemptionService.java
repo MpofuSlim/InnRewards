@@ -34,6 +34,7 @@ public class RedemptionService {
      *  proxy and gets a fresh transaction each attempt. */
     private final ObjectProvider<RedemptionService> self;
     private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
+    private final ExchangeRateService fx;
 
     public RedemptionService(UserService users, MerchantService merchants,
                              WalletService walletService,
@@ -42,7 +43,8 @@ public class RedemptionService {
                              RedemptionRateService rateService,
                              com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                              ObjectProvider<RedemptionService> self,
-                             com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
+                             com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
+                             ExchangeRateService fx) {
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
@@ -52,6 +54,7 @@ public class RedemptionService {
         this.memberNotifier = memberNotifier;
         this.self = self;
         this.supportedCurrencies = supportedCurrencies;
+        this.fx = fx;
     }
 
     /**
@@ -172,29 +175,45 @@ public class RedemptionService {
         // stamped on the ledger row (below). Supplying both a points and an amount
         // that disagree at the current rate is refused rather than trusting the
         // caller's number.
-        // Multi-currency guard (fail closed): the redemption rate resolution and
-        // the stamped liability value both assume BASE (USD) until the redeem
-        // path converts through FX (design PR 3, which replaces this guard with
-        // the fx conversion + an optional request currency). A non-base merchant
-        // currency is refused rather than mispriced.
-        String currency = supportedCurrencies.requireBaseFor(m.getCurrency(), "redeem");
+        // Multi-currency redeem (design PR 3). The till asks for a discount in
+        // its own currency; the PLATFORM decides what a point is worth, in USD.
+        // So local money crosses FX into USD exactly once, and the redemption
+        // rate is applied in USD only.
+        //
+        // The redemption rate is deliberately read at BASE regardless of the
+        // transaction currency: a single USD-denominated rate is what makes a
+        // point worth the same real value everywhere, and deriving the local
+        // figure through FX means there is no second, independently-drifting
+        // per-currency rate for a merchant to arbitrage against. A ZWG row in
+        // redemption_rates is therefore never consulted.
+        String currency = supportedCurrencies.requireSupported(
+                req.currency() == null ? m.getCurrency() : req.currency());
         BigDecimal pointsToDebit;
         if (req.amount() != null) {
-            pointsToDebit = rateService.pointsFor(req.amount(), currency);
+            // local -> USD -> whole points.
+            BigDecimal baseWanted = fx.toBase(tenantId, req.amount(), currency);
+            pointsToDebit = rateService.pointsFor(baseWanted,
+                    com.innbucks.loyaltyservice.config.SupportedCurrencies.BASE);
             if (req.points() != null && req.points().compareTo(pointsToDebit) != 0) {
                 throw LoyaltyException.badRequest("RATE_MISMATCH",
                         "points (" + req.points().toPlainString() + ") does not match the "
                                 + pointsToDebit.toPlainString() + " points that " + req.amount().toPlainString()
-                                + " " + currency + " converts to at the current redemption rate. Send only "
-                                + "one of points/amount, or make them agree.");
+                                + " " + currency + " converts to at the current exchange and redemption rates. "
+                                + "Send only one of points/amount, or make them agree.");
             }
         } else {
             pointsToDebit = req.points();
         }
-        // Dollar value the platform honours for this burn — the liability figure,
-        // recorded in money terms on every redemption (feeds the outstanding-points
-        // valuation reporting).
-        BigDecimal value = rateService.valueOf(pointsToDebit, currency);
+        // The liability this burn creates, in USD — the figure the platform
+        // actually owes, and the one the outstanding-points valuation sums.
+        BigDecimal baseValue = rateService.valueOf(pointsToDebit,
+                com.innbucks.loyaltyservice.config.SupportedCurrencies.BASE);
+        // ...and the same value expressed in the transaction's currency, which is
+        // what the customer sees come off the bill. Both are frozen on the row
+        // below together with the rate that links them, so a receipt reprinted
+        // next month still shows the discount that was actually given.
+        ExchangeRateService.Conversion localValue = fx.fromBaseWithRate(tenantId, baseValue, currency);
+        BigDecimal value = localValue.amount();
 
         LoyaltyTransaction t = new LoyaltyTransaction();
         // Attribution (V32): the caller who keyed the redemption (cashier or
@@ -208,6 +227,11 @@ public class RedemptionService {
         // Money value + currency of the points burned, at the platform rate.
         t.setAmount(value);
         t.setCurrency(currency);
+        // Freeze-on-write (V37), same contract as the earn path: the USD
+        // liability and the FX row that produced the local figure. Null rateId
+        // for a USD redemption (identity).
+        t.setBaseAmount(baseValue);
+        t.setFxRateId(localValue.rateId());
         // Store the idempotency reference when provided; otherwise fall back to
         // the free-text reason (unchanged behaviour for callers without a key).
         // Only the free-text reason is HTML-sanitized — the idempotency key is a

@@ -99,8 +99,8 @@ public final class VoucherReportDtos {
     public record VoucherSummary(
             @Schema(example = "1240", description = "All vouchers issued in scope over the period.") long totalIssued,
             @Schema(description = "Voucher count per status.") Map<String, Long> countByStatus,
-            @Schema(description = "Summed face value per status.") Map<String, BigDecimal> faceValueByStatus,
-            @Schema(example = "8420.00", description = "Sum of every voucher's face value.") BigDecimal totalFaceValue,
+            @Schema(description = "Summed face value per status, in USD (the platform base currency). Vouchers with no money face value (PERCENT/FREE_ITEM/COMBO) contribute 0 here but are still counted in countByStatus.") Map<String, BigDecimal> faceValueByStatus,
+            @Schema(example = "8420.00", description = "Sum of every voucher's face value, in USD (the platform base currency), so a mixed-currency scope totals in one unit.") BigDecimal totalFaceValue,
             @Schema(example = "388") long redeemedCount,
             @Schema(example = "2110.00") BigDecimal redeemedFaceValue,
             @Schema(example = "760", description = "Live vouchers (ISSUED + DELIVERED + VIEWED + PARTIALLY_USED).") long outstandingCount,

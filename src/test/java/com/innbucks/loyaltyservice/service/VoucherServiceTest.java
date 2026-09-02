@@ -68,7 +68,7 @@ class VoucherServiceTest {
             vouchers, batches, redemptions, templateService, merchants, users, userService,
             notifications, fraud, metrics,
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
-            new LoyaltyProperties(null, null, null, null, null, null, null));
+            new LoyaltyProperties(null, null, null, null, null, null, null), usdOnlyFx());
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();
@@ -316,5 +316,14 @@ class VoucherServiceTest {
         verify(fraud, never()).record(any(), any(), any(), any(),
                 eq(com.innbucks.loyaltyservice.entity.FraudAttempt.Reason.NOT_ASSIGNEE),
                 anyString(), any(), any());
+    }
+
+    /** Real FX service on a USD-only allowlist: USD converts by identity without
+     *  touching the repository, so no stubbing is needed. */
+    private static ExchangeRateService usdOnlyFx() {
+        return new ExchangeRateService(
+                org.mockito.Mockito.mock(com.innbucks.loyaltyservice.repository.ExchangeRateRepository.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                new java.math.BigDecimal("25"));
     }
 }

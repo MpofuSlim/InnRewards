@@ -49,7 +49,8 @@ class RedemptionValuationTest {
 
     private final RedemptionService service =
             new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier, self,
-                    new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"));
+                    new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                    usdOnlyFx());
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();
@@ -97,7 +98,7 @@ class RedemptionValuationTest {
     @Test
     @DisplayName("amount-based redeem: server computes the points from the platform rate")
     void amountBasedComputesPoints() {
-        when(rateService.pointsFor(new BigDecimal("2.50"), "USD")).thenReturn(new BigDecimal("250"));
+        when(rateService.pointsFor(new BigDecimal("2.5000"), "USD")).thenReturn(new BigDecimal("250"));
         when(rateService.valueOf(new BigDecimal("250"), "USD")).thenReturn(new BigDecimal("2.5000"));
         // points null, amount supplied
         Dtos.RedemptionRequest req =
@@ -115,7 +116,7 @@ class RedemptionValuationTest {
     @Test
     @DisplayName("a points/amount pair that disagrees at the current rate is REFUSED, nothing debited")
     void mismatchRefused() {
-        when(rateService.pointsFor(new BigDecimal("2.50"), "USD")).thenReturn(new BigDecimal("250"));
+        when(rateService.pointsFor(new BigDecimal("2.5000"), "USD")).thenReturn(new BigDecimal("250"));
         // caller claims 999 points cover $2.50 — server says 250
         Dtos.RedemptionRequest req =
                 new Dtos.RedemptionRequest(MERCHANT, USER, new BigDecimal("999"), "reason", null, new BigDecimal("2.50"));
@@ -135,5 +136,14 @@ class RedemptionValuationTest {
         assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req))
                 .isInstanceOf(LoyaltyException.class)
                 .hasMessageContaining("greater than zero");
+    }
+
+    /** Real FX service on a USD-only allowlist: USD converts by identity without
+     *  touching the repository, so no stubbing is needed. */
+    private static ExchangeRateService usdOnlyFx() {
+        return new ExchangeRateService(
+                org.mockito.Mockito.mock(com.innbucks.loyaltyservice.repository.ExchangeRateRepository.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                new java.math.BigDecimal("25"));
     }
 }

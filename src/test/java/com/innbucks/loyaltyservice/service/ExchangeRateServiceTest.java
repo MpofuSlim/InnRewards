@@ -225,4 +225,69 @@ class ExchangeRateServiceTest {
         // Band off → the current rate is never even consulted.
         verify(repo, never()).currentRate(nullable(UUID.class), anyString(), any());
     }
+
+    // ---- clearOverride (V39) ----------------------------------------------
+
+    @Test
+    void clearOverride_writesATombstoneWithNoRate() {
+        when(repo.findInForceForTenant(eq(TENANT), eq("ZWG"), any(Instant.class), any()))
+                .thenReturn(java.util.List.of(rate("ZWG", "27.500000")));
+        when(repo.save(any(ExchangeRate.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ExchangeRate cleared = fx.clearOverride(TENANT, "zwg", null, OPERATOR, "back to bank rate");
+
+        assertThat(cleared.isCleared()).isTrue();
+        assertThat(cleared.getRatePerUsd()).as("a revocation carries no rate").isNull();
+        assertThat(cleared.getTenantId()).isEqualTo(TENANT);
+        assertThat(cleared.getCurrency()).isEqualTo("ZWG");
+        assertThat(cleared.getCreatedBy()).isEqualTo(OPERATOR);
+    }
+
+    @Test
+    void clearOverride_withNoOverrideInForce_isRefused() {
+        when(repo.findInForceForTenant(eq(TENANT), eq("ZWG"), any(Instant.class), any()))
+                .thenReturn(java.util.List.of());
+
+        assertThatThrownBy(() -> fx.clearOverride(TENANT, "ZWG", null, OPERATOR, null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("FX_NO_OVERRIDE"));
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void clearOverride_whenAlreadyCleared_isRefused_soTombstonesDontPileUp() {
+        ExchangeRate existingTombstone = rate("ZWG", "1");
+        existingTombstone.setRatePerUsd(null);
+        existingTombstone.setCleared(true);
+        when(repo.findInForceForTenant(eq(TENANT), eq("ZWG"), any(Instant.class), any()))
+                .thenReturn(java.util.List.of(existingTombstone));
+
+        assertThatThrownBy(() -> fx.clearOverride(TENANT, "ZWG", null, OPERATOR, null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("FX_NO_OVERRIDE"));
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void clearOverride_onPlatformScope_isRefused() {
+        assertThatThrownBy(() -> fx.clearOverride(null, "ZWG", null, OPERATOR, null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("FX_CANNOT_CLEAR_PLATFORM"));
+        verifyNoInteractions(repo);
+    }
+
+    @Test
+    void clearOverride_checksTheOverrideAtTheSCHEDULEDInstant_notNow() {
+        // A clear scheduled for next week must be validated against what will be
+        // in force THEN, not what is in force today.
+        Instant nextWeek = Instant.now().plusSeconds(7 * 24 * 3600);
+        when(repo.findInForceForTenant(eq(TENANT), eq("ZWG"), eq(nextWeek), any()))
+                .thenReturn(java.util.List.of(rate("ZWG", "27.500000")));
+        when(repo.save(any(ExchangeRate.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ExchangeRate cleared = fx.clearOverride(TENANT, "ZWG", nextWeek, OPERATOR, "scheduled revert");
+
+        assertThat(cleared.getEffectiveFrom()).isEqualTo(nextWeek);
+        verify(repo).findInForceForTenant(eq(TENANT), eq("ZWG"), eq(nextWeek), any());
+    }
 }

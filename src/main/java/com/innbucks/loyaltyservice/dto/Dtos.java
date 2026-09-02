@@ -455,11 +455,17 @@ public class Dtos {
                                   "again, so a retry can't double-spend. Omit for one-off redemptions.")
             String reference,
             @Schema(example = "5.0000", nullable = true,
-                    description = "Currency value to redeem (e.g. $5.00 off). When present the server converts " +
-                                  "it to a whole-points debit at the platform redemption rate — the correct " +
-                                  "direction for the model, since the platform sets what a point is worth. " +
-                                  "Provide EITHER this or `points`.")
-            @Positive BigDecimal amount
+                    description = "Currency value to redeem (e.g. $5.00 off), expressed in `currency`. When " +
+                                  "present the server converts it to USD, then to a whole-points debit at the " +
+                                  "platform redemption rate — the correct direction for the model, since the " +
+                                  "platform sets what a point is worth. Provide EITHER this or `points`.")
+            @Positive BigDecimal amount,
+            @Schema(example = "ZWG", nullable = true,
+                    description = "ISO 4217 currency of `amount`, and the currency the redemption's value is " +
+                                  "recorded in. Defaults to the merchant's currency when omitted. Must be in " +
+                                  "the cell's supported set, and a non-USD currency needs an in-force exchange " +
+                                  "rate (NO_FX_RATE otherwise).")
+            String currency
     ) {
         /**
          * Back-compat constructor for callers built against the pre-rate,
@@ -468,7 +474,17 @@ public class Dtos {
          */
         public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
                                  String reason, String reference) {
-            this(merchantId, userId, points, reason, reference, null);
+            this(merchantId, userId, points, reason, reference, null, null);
+        }
+
+        /**
+         * Back-compat constructor for callers built against the pre-multi-currency
+         * shape (no {@code currency}). Omitting it means "the merchant's
+         * currency", which is what those callers always meant.
+         */
+        public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
+                                 String reason, String reference, BigDecimal amount) {
+            this(merchantId, userId, points, reason, reference, amount, null);
         }
     }
 
@@ -534,7 +550,15 @@ public class Dtos {
                                   "tenant.")
             UUID tenantId,
             @Schema(example = "ZWG") String currency,
-            @Schema(example = "26.700000") BigDecimal ratePerUsd,
+            @Schema(example = "26.700000", nullable = true,
+                    description = "Units of the quote currency per 1 USD. Null on a `cleared` row — "
+                                  + "a revocation carries no rate.")
+            BigDecimal ratePerUsd,
+            @Schema(example = "false",
+                    description = "True = this row REVOKED its scope's override rather than setting a "
+                                  + "rate, so the scope falls back to the platform rate from "
+                                  + "`effectiveFrom`. Only ever true on a tenant-scoped row.")
+            boolean cleared,
             @Schema(example = "2026-10-01T00:00:00Z") Instant effectiveFrom,
             @Schema(example = "ADMIN", allowableValues = {"ADMIN", "FEED"},
                     description = "ADMIN = operator-entered (e.g. the daily RBZ figure); FEED = the " +
@@ -548,6 +572,7 @@ public class Dtos {
     ) {
         public static ExchangeRateResponse of(com.innbucks.loyaltyservice.entity.ExchangeRate r) {
             return new ExchangeRateResponse(r.getId(), r.getTenantId(), r.getCurrency(), r.getRatePerUsd(),
+                    r.isCleared(),
                     r.getEffectiveFrom(), r.getSource() == null ? null : r.getSource().name(),
                     r.getCreatedBy(), r.getNote(), r.getCreatedAt());
         }
@@ -640,7 +665,13 @@ public class Dtos {
                                   // valueType={AMOUNT, PERCENT, FREE_ITEM, COMBO} tells the client how to
                                   // render `value` (currency-formatted amount, percent off, etc.).
                                   String valueType, BigDecimal value, String currency,
-                                  Instant issuedAt, Instant expiresAt) {}
+                                  Instant issuedAt, Instant expiresAt,
+                                  // Multi-currency liability (additive, V38): the USD worth of `value`,
+                                  // frozen at the rate in force when the voucher was ISSUED. Null when
+                                  // there is no money figure to convert — a PERCENT/FREE_ITEM/COMBO
+                                  // voucher, or a pre-V38 row — never zero. Display uses `value` +
+                                  // `currency`; this is for liability reporting, not the customer.
+                                  BigDecimal baseValue) {}
 
     /**
      * Hand a voucher to another customer. SINGLE HOP — see
@@ -796,9 +827,9 @@ public class Dtos {
             @Schema(example = "412") long total,
             @Schema(description = "Voucher count per status (ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED).")
             Map<String, Long> byStatus,
-            @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued.")
+            @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued, in USD (the platform base currency). Excludes vouchers with no money face value — PERCENT, FREE_ITEM and COMBO — which are still counted in `byStatus`.")
             BigDecimal valueIssuedAllTime,
-            @Schema(example = "7150.0000", description = "Summed face value of vouchers that have been (fully or partially) redeemed.")
+            @Schema(example = "7150.0000", description = "Summed face value of vouchers that have been (fully or partially) redeemed, in USD (the platform base currency).")
             BigDecimal valueRedeemedAllTime,
             @Schema(example = "38") long issuedLast30Days,
             @Schema(example = "22") long redeemedLast30Days) {}

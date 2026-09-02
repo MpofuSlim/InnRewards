@@ -100,10 +100,22 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
      * the internal ticketing tenant, everything else null), tenant, merchant and
      * shop. Status is NOT a filter here — the report always shows the full status
      * breakdown for its scope. Row shape: [Voucher.Status status, long count,
-     * BigDecimal faceValueSum]. Bounded to {@code issuedAt} in [from, to).
+     * BigDecimal baseValueSum]. Bounded to {@code issuedAt} in [from, to).
+     *
+     * <p><b>The money column is {@code baseValue} (USD), not {@code value}</b>
+     * (multi-currency, V38). Summing {@code value} across a scope that mixes
+     * currencies adds ZWG to USD and yields a number that is not money in any
+     * currency. {@code baseValue} is the issue-time USD figure, so every row in
+     * the sum is in one unit.
+     *
+     * <p>Consequence: rows with a NULL {@code baseValue} drop out of the sum
+     * (SQL SUM ignores NULL) while still being COUNTed. That is deliberate and
+     * correct — those are the vouchers with no money face value (PERCENT /
+     * FREE_ITEM / COMBO), which never belonged in a money total: a "10% off"
+     * voucher was previously contributing a literal 10 to it.
      */
     @Query("""
-        SELECT v.status, COUNT(v), COALESCE(SUM(v.value), 0)
+        SELECT v.status, COUNT(v), COALESCE(SUM(v.baseValue), 0)
         FROM Voucher v
         WHERE (:tenantId IS NULL OR v.tenantId = :tenantId)
           AND (:excludeTenantId IS NULL OR v.tenantId <> :excludeTenantId)
@@ -120,13 +132,17 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
                                          @Param("to") Instant to);
 
     /**
-     * Total face value the merchant's customers have actually redeemed (fully or
+     * Total USD value the merchant's customers have actually redeemed (fully or
      * partially — {@code redeemedAt} is stamped on both). Powers the merchant-360
      * report's voucher block; the issued-side value comes from
      * {@link #reportSummaryByStatus} so it isn't duplicated here.
+     *
+     * <p>Sums {@code baseValue}, not {@code value}, for the same reason as
+     * {@link #reportSummaryByStatus}: one unit per sum, and no percentages
+     * masquerading as money.
      */
     @Query("""
-        SELECT COALESCE(SUM(v.value), 0) FROM Voucher v
+        SELECT COALESCE(SUM(v.baseValue), 0) FROM Voucher v
         WHERE v.merchantId = :merchantId AND v.redeemedAt IS NOT NULL
         """)
     BigDecimal sumRedeemedValueByMerchantId(@Param("merchantId") UUID merchantId);

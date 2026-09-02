@@ -48,6 +48,7 @@ public class VoucherService {
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final CryptoSigner signer;
+    private final ExchangeRateService fx;
 
     public VoucherService(VoucherRepository vouchers,
                           VoucherBatchRepository batches,
@@ -60,7 +61,8 @@ public class VoucherService {
                           FraudService fraud,
                           com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
                           com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
-                          LoyaltyProperties props) {
+                          LoyaltyProperties props,
+                          ExchangeRateService fx) {
         this.vouchers = vouchers;
         this.batches = batches;
         this.redemptions = redemptions;
@@ -73,6 +75,7 @@ public class VoucherService {
         this.metrics = metrics;
         this.memberNotifier = memberNotifier;
         this.signer = new CryptoSigner(props.voucher().secret());
+        this.fx = fx;
     }
 
     public Dtos.VoucherResponse issue(UUID tenantId, Dtos.IssueVoucherRequest req) {
@@ -212,6 +215,23 @@ public class VoucherService {
         v.setValueType(tpl.getValueType());
         v.setValue(value);
         v.setCurrency(tpl.getCurrency());
+        // Multi-currency liability freeze (V38). An outstanding voucher is a
+        // promise the platform hasn't paid yet, and that promise is priced when
+        // it is MADE — so the USD worth is pinned here, at issuance, not
+        // recomputed at redemption. Otherwise the outstanding-voucher book would
+        // move every day on FX alone, with nothing issued and nothing redeemed.
+        //
+        // ONLY for AMOUNT: a PERCENT voucher's value is a percentage and a
+        // FREE_ITEM/COMBO has no money face value at all. "10% off" is not 10 of
+        // anything, so converting it would mint a confident, meaningless
+        // liability figure — those stay null by design.
+        if (tpl.getValueType() == VoucherTemplate.ValueType.AMOUNT
+                && value != null && value.signum() >= 0) {
+            ExchangeRateService.Conversion base =
+                    fx.toBaseWithRate(tenantId, value, v.getCurrency());
+            v.setBaseValue(base.amount());
+            v.setFxRateId(base.rateId());
+        }
         int uses = usesOverride != null ? usesOverride : tpl.getUsageLimit();
         v.setUsesRemaining(Math.max(1, uses));
         Integer validity = validityOverride != null ? validityOverride : tpl.getValidityDays();
@@ -572,7 +592,8 @@ public class VoucherService {
     private static Dtos.VoucherResponse redactCode(Dtos.VoucherResponse r) {
         return new Dtos.VoucherResponse(r.id(), null, r.status(), r.templateId(),
                 r.assignedUserId(), r.assigneePhone(), r.usesRemaining(),
-                r.valueType(), r.value(), r.currency(), r.issuedAt(), r.expiresAt());
+                r.valueType(), r.value(), r.currency(), r.issuedAt(), r.expiresAt(),
+                r.baseValue());
     }
 
     @Transactional(readOnly = true)
@@ -631,6 +652,6 @@ public class VoucherService {
                 v.getUsesRemaining(),
                 v.getValueType() == null ? null : v.getValueType().name(),
                 v.getValue(), v.getCurrency(),
-                v.getIssuedAt(), v.getExpiresAt());
+                v.getIssuedAt(), v.getExpiresAt(), v.getBaseValue());
     }
 }

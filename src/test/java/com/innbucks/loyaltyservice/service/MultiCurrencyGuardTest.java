@@ -105,12 +105,28 @@ class MultiCurrencyGuardTest {
                 mock(FraudService.class), mock(StaffRegistry.class), CURRENCIES, fx);
     }
 
+    /**
+     * Redemption rate stub standing in for "100 points buys 1 USD" — the
+     * platform rate, always read in USD (see RedemptionService). points = usd
+     * x 100; usd = points / 100.
+     */
+    private final RedemptionRateService rateService = mock(RedemptionRateService.class);
+
+    private void usdRedemptionRate() {
+        when(rateService.pointsFor(any(), eq("USD"))).thenAnswer(inv ->
+                ((BigDecimal) inv.getArgument(0)).multiply(new BigDecimal("100"))
+                        .setScale(0, java.math.RoundingMode.HALF_UP));
+        when(rateService.valueOf(any(), eq("USD"))).thenAnswer(inv ->
+                ((BigDecimal) inv.getArgument(0)).divide(new BigDecimal("100"), 4,
+                        java.math.RoundingMode.HALF_UP));
+    }
+
     @SuppressWarnings("unchecked")
     private RedemptionService redeemService() {
         return new RedemptionService(users, merchants, walletService, transactions,
-                mock(LoyaltyMetrics.class), mock(RedemptionRateService.class),
+                mock(LoyaltyMetrics.class), rateService,
                 mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
-                (ObjectProvider<RedemptionService>) mock(ObjectProvider.class), CURRENCIES);
+                (ObjectProvider<RedemptionService>) mock(ObjectProvider.class), CURRENCIES, fx);
     }
 
     private Dtos.TransactionRequest purchase(BigDecimal amount, String currency) {
@@ -217,22 +233,111 @@ class MultiCurrencyGuardTest {
         verifyNoInteractions(rulesEngine);
     }
 
-    // ---- redeem: still base-only until design PR 3 ------------------------
+    // ---- redeem: the conversion (design PR 3) ------------------------------
+
+    private void redeemStubs() {
+        when(users.require(TENANT, USER)).thenReturn(activeUser());
+        Wallet w = new Wallet();
+        w.setId(WALLET);
+        when(walletService.mainWallet(PHONE)).thenReturn(w);
+        when(walletService.apply(any(), any(), any(), anyString(), any()))
+                .thenReturn(new BigDecimal("42"));
+        usdRedemptionRate();
+    }
 
     @Test
-    void redeem_stillRefusesNonBaseMerchantCurrency_beforeAnyDebit() {
-        when(users.require(TENANT, USER)).thenReturn(activeUser());
+    void redeem_byLocalAmount_convertsToUsdBeforeApplyingTheRedemptionRate() {
         when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(merchant("ZWG"));
+        redeemStubs();
+        zwgRateInForce();
 
-        Dtos.RedemptionRequest req = new Dtos.RedemptionRequest(
-                MERCHANT, USER, new BigDecimal("100"), "counter redemption", null);
+        // The till wants ZWG 267.00 off the bill. That is USD 10.00 at 26.70,
+        // and at 100 points/USD it costs the customer 1000 points. Pricing the
+        // 267 as dollars would have burned 26,700.
+        redeemService().redeemPoints(TENANT, MERCHANT, new Dtos.RedemptionRequest(
+                MERCHANT, USER, null, "counter redemption", null, new BigDecimal("267.00")));
 
-        assertThatThrownBy(() -> redeemService().redeemPoints(TENANT, MERCHANT, req))
+        verify(rateService).pointsFor(new BigDecimal("10.0000"), "USD");
+        verify(walletService).apply(eq(WALLET), eq(new BigDecimal("1000").negate()),
+                any(), anyString(), eq(TENANT));
+    }
+
+    @Test
+    void redeem_freezesUsdLiabilityAndLocalValueAndTheRate() {
+        when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(merchant("ZWG"));
+        redeemStubs();
+        zwgRateInForce();
+
+        redeemService().redeemPoints(TENANT, MERCHANT, new Dtos.RedemptionRequest(
+                MERCHANT, USER, new BigDecimal("1000"), "counter redemption", null));
+
+        ArgumentCaptor<LoyaltyTransaction> saved = ArgumentCaptor.forClass(LoyaltyTransaction.class);
+        verify(transactions).save(saved.capture());
+        LoyaltyTransaction t = saved.getValue();
+        // 1000 points = USD 10.00 of liability = ZWG 267.00 off the customer's bill.
+        assertThat(t.getBaseAmount()).isEqualByComparingTo("10.0000");
+        assertThat(t.getAmount()).isEqualByComparingTo("267.0000");
+        assertThat(t.getCurrency()).isEqualTo("ZWG");
+        assertThat(t.getFxRateId()).isEqualTo(ZWG_RATE_ID);
+    }
+
+    @Test
+    void redeem_requestCurrencyOverridesTheMerchantDefault() {
+        // A USD merchant honouring a ZWG-denominated discount.
+        when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(merchant("USD"));
+        redeemStubs();
+        zwgRateInForce();
+
+        redeemService().redeemPoints(TENANT, MERCHANT, new Dtos.RedemptionRequest(
+                MERCHANT, USER, null, "counter redemption", null,
+                new BigDecimal("267.00"), "ZWG"));
+
+        verify(rateService).pointsFor(new BigDecimal("10.0000"), "USD");
+    }
+
+    @Test
+    void redeem_usdMerchant_isUnchangedAndStampsNoRate() {
+        when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(merchant("USD"));
+        redeemStubs();
+
+        redeemService().redeemPoints(TENANT, MERCHANT, new Dtos.RedemptionRequest(
+                MERCHANT, USER, new BigDecimal("1000"), "counter redemption", null));
+
+        ArgumentCaptor<LoyaltyTransaction> saved = ArgumentCaptor.forClass(LoyaltyTransaction.class);
+        verify(transactions).save(saved.capture());
+        assertThat(saved.getValue().getAmount()).isEqualByComparingTo("10.0000");
+        assertThat(saved.getValue().getBaseAmount()).isEqualByComparingTo("10.0000");
+        assertThat(saved.getValue().getFxRateId()).isNull();
+        verifyNoInteractions(fxRates);
+    }
+
+    @Test
+    void redeem_supportedCurrencyWithNoRate_failsClosedBeforeAnyDebit() {
+        when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(merchant("ZWG"));
+        when(users.require(TENANT, USER)).thenReturn(activeUser());
+        usdRedemptionRate();
+        when(fxRates.currentRate(nullable(UUID.class), anyString(), any(Instant.class)))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> redeemService().redeemPoints(TENANT, MERCHANT,
+                new Dtos.RedemptionRequest(MERCHANT, USER, new BigDecimal("1000"),
+                        "counter redemption", null)))
                 .isInstanceOfSatisfying(LoyaltyException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo("UNSUPPORTED_CURRENCY"))
-                .hasMessageContaining("not enabled yet");
-        verifyNoInteractions(walletService);
+                        ex -> assertThat(ex.getCode()).isEqualTo("NO_FX_RATE"));
+        verify(walletService, never()).apply(any(), any(), any(), anyString(), any());
         verify(transactions, never()).save(any());
-        verify(transactions, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void redeem_unsupportedCurrency_isRefusedByTheAllowlist() {
+        when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(merchant("USD"));
+        when(users.require(TENANT, USER)).thenReturn(activeUser());
+
+        assertThatThrownBy(() -> redeemService().redeemPoints(TENANT, MERCHANT,
+                new Dtos.RedemptionRequest(MERCHANT, USER, new BigDecimal("1000"),
+                        "counter redemption", null, null, "GBP")))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("UNSUPPORTED_CURRENCY"));
+        verify(transactions, never()).save(any());
     }
 }

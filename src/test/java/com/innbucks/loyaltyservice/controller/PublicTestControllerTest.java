@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -59,9 +60,16 @@ class PublicTestControllerTest {
             mock(com.innbucks.loyaltyservice.service.VoucherService.class);
 
     private PublicTestController controller(boolean enabled) {
+        return controller(enabled, null, null);
+    }
+
+    /** Overload for the tests that exercise the configured tenant / merchant pins. */
+    private PublicTestController controller(boolean enabled, String tenantPin, String merchantPin) {
         PublicTestController c = new PublicTestController(users, wallets, vouchers, merchants,
                 transactions, transfers, redemptions, voucherService);
         ReflectionTestUtils.setField(c, "enabled", enabled);
+        if (tenantPin != null) ReflectionTestUtils.setField(c, "configuredTenantId", tenantPin);
+        if (merchantPin != null) ReflectionTestUtils.setField(c, "configuredMerchantId", merchantPin);
         return c;
     }
 
@@ -199,21 +207,89 @@ class PublicTestControllerTest {
     }
 
     @Test
-    void sendPoints_refusesRatherThanGuessing_whenThePhoneSpansSeveralTenants() {
-        // Picking a tenant arbitrarily would move points in one the caller
-        // never chose, and the mistake would be silent.
-        LoyaltyUser a = user(UUID.randomUUID());
-        a.setTenantId(UUID.randomUUID());
-        LoyaltyUser b = user(UUID.randomUUID());
-        b.setTenantId(UUID.randomUUID());
-        when(users.findByPhoneNumber(PHONE)).thenReturn(List.of(a, b));
-        PublicTestController c = controller(true);
+    void sendPoints_prefersTheActiveProjection_whenThePhoneSpansSeveralTenants() {
+        // This case used to be refused with AMBIGUOUS_TENANT, which blocked the
+        // customer app outright: a phone gets a projection per tenant, and buying
+        // an event ticket mints one under the ticketing tenant, so anyone who has
+        // also used a loyalty merchant has two. Refusing was disproportionate
+        // because the choice does not move different money — TransferService
+        // resolves both wallets by PHONE and the wallet is global, so only the
+        // ledger attribution differs.
+        //
+        // ACTIVE wins over PENDING because registration is a property of the
+        // PHONE (the promote webhook flips every row at once). Picking the
+        // PENDING row would refuse a customer who is demonstrably registered.
+        LoyaltyUser pending = user(UUID.randomUUID());
+        pending.setTenantId(UUID.randomUUID());
+        pending.setStatus(LoyaltyUser.Status.PENDING);
+        pending.setCreatedAt(java.time.Instant.parse("2020-01-01T00:00:00Z"));  // older
+
+        UUID activeTenant = UUID.randomUUID();
+        UUID activeId = UUID.randomUUID();
+        LoyaltyUser active = user(activeId);
+        active.setTenantId(activeTenant);
+        active.setStatus(LoyaltyUser.Status.ACTIVE);
+        active.setCreatedAt(java.time.Instant.parse("2026-01-01T00:00:00Z"));   // newer
+
+        when(users.findByPhoneNumber(PHONE)).thenReturn(List.of(pending, active));
+        when(transfers.transfer(any(), any())).thenReturn(new java.math.BigDecimal("50.00"));
+
+        controller(true).sendPoints(PHONE, new PublicTestController.PublicSendPointsRequest(
+                "+263772222222", new java.math.BigDecimal("25"), null));
+
+        var req = org.mockito.ArgumentCaptor.forClass(Dtos.TransferRequest.class);
+        verify(transfers).transfer(eq(activeTenant), req.capture());
+        assertThat(req.getValue().fromUserId())
+                .as("ACTIVE beats PENDING even though PENDING is older")
+                .isEqualTo(activeId);
+    }
+
+    @Test
+    void sendPoints_isDeterministic_whenSeveralProjectionsShareAStatus() {
+        // Oldest-then-id is a TOTAL order, so the same request always attributes
+        // the ledger to the same tenant. Without the id tie-break the outcome
+        // would depend on row order, which is not something a caller could
+        // reproduce or an auditor could explain.
+        UUID oldestTenant = UUID.randomUUID();
+        UUID oldestId = UUID.randomUUID();
+        LoyaltyUser oldest = user(oldestId);
+        oldest.setTenantId(oldestTenant);
+        oldest.setStatus(LoyaltyUser.Status.PENDING);
+        oldest.setCreatedAt(java.time.Instant.parse("2024-01-01T00:00:00Z"));
+
+        LoyaltyUser newer = user(UUID.randomUUID());
+        newer.setTenantId(UUID.randomUUID());
+        newer.setStatus(LoyaltyUser.Status.PENDING);
+        newer.setCreatedAt(java.time.Instant.parse("2025-01-01T00:00:00Z"));
+
+        // Same inputs, opposite row order — must resolve identically.
+        for (List<LoyaltyUser> order : List.of(List.of(oldest, newer), List.of(newer, oldest))) {
+            reset(transfers);
+            when(users.findByPhoneNumber(PHONE)).thenReturn(order);
+            when(transfers.transfer(any(), any())).thenReturn(new java.math.BigDecimal("10.00"));
+
+            controller(true).sendPoints(PHONE, new PublicTestController.PublicSendPointsRequest(
+                    "+263772222222", new java.math.BigDecimal("5"), null));
+
+            verify(transfers).transfer(eq(oldestTenant), any());
+        }
+    }
+
+    @Test
+    void sendPoints_stillRefuses_whenThePinnedTenantHasNoProjection() {
+        // The configured pin still FILTERS rather than prefers — an operator who
+        // named a tenant meant it, so a phone with no row there is a 404, not a
+        // silent fallback to some other tenant.
+        LoyaltyUser elsewhere = user(UUID.randomUUID());
+        elsewhere.setTenantId(UUID.randomUUID());
+        when(users.findByPhoneNumber(PHONE)).thenReturn(List.of(elsewhere));
+
+        PublicTestController c = controller(true, UUID.randomUUID().toString(), null);
 
         assertThatThrownBy(() -> c.sendPoints(PHONE,
                 new PublicTestController.PublicSendPointsRequest(
                         "+263772222222", new java.math.BigDecimal("25"), null)))
-                .isInstanceOf(LoyaltyException.class)
-                .hasMessageContaining("more than one tenant");
+                .isInstanceOf(LoyaltyException.class);
 
         verify(transfers, never()).transfer(any(), any());
     }

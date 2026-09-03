@@ -114,7 +114,7 @@ class RedemptionServiceTest {
         target.setId(USER);
         target.setStatus(LoyaltyUser.Status.PENDING);
         when(users.require(TENANT, USER)).thenReturn(target);
-        doThrow(LoyaltyException.forbidden("USER_PENDING", "Your account isn't fully registered yet."))
+        doThrow(LoyaltyException.forbidden("USER_PENDING", "Your rewards account is still being set up."))
                 .when(users).requireSpendable(target);
 
         assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req()))

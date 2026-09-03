@@ -123,9 +123,19 @@ public class UserService {
     public void requireSpendable(LoyaltyUser u) {
         switch (u.getStatus()) {
             case ACTIVE -> { /* ok */ }
+            // Names NO customer action, deliberately. The previous wording told
+            // the holder to "finish signing up", which was accurate only while
+            // every customer reached us through ticketing's OTP registration —
+            // that flow is what calls the promote webhook
+            // (user-service OtpService:363, :378 -> POST /loyalty/internal/users/promote).
+            // The customer app now authenticates against a different system and
+            // never walks that path, so there is no signup screen for these
+            // customers to finish. Copy must not send someone looking for a door
+            // that does not exist; until the new auth source calls promote, the
+            // only honest statement is that setup is incomplete on our side.
             case PENDING -> throw LoyaltyException.forbidden("USER_PENDING",
-                    "Your account isn't fully registered yet. Finish signing up to spend your "
-                            + "points — you'll keep earning them in the meantime.");
+                    "Your rewards account is still being set up, so these points can't be spent "
+                            + "yet. You'll keep earning in the meantime.");
             case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
             case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "Your account is inactive. Please contact support to reactivate it.");
         }

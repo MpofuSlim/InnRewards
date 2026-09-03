@@ -385,9 +385,14 @@ public class VoucherService {
                 // promises callers that `message` can be shown as-is, and a
                 // cashier reads this one off the till to the person holding the
                 // voucher.
+                // Same reason as UserService.requireSpendable's PENDING branch:
+                // "needs to finish signing up" named ticketing's OTP flow, which
+                // the customer app no longer uses. A cashier reads this to the
+                // person at the till, so it must not instruct them to complete a
+                // signup they have no route to.
                 throw LoyaltyException.forbidden("USER_PENDING",
-                        "This voucher belongs to a phone number that isn't registered yet. "
-                                + "The recipient needs to finish signing up before it can be redeemed.");
+                        "This voucher's rewards account is still being set up, so it can't be "
+                                + "redeemed yet.");
             }
         }
 

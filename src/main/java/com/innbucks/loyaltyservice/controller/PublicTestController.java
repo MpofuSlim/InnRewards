@@ -44,6 +44,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -78,9 +79,10 @@ import java.util.function.Supplier;
  *       tenant projection the phone has.</li>
  *   <li>A voucher operation takes the tenant from the <b>voucher row itself</b>.</li>
  *   <li>The points writes resolve it: the configured override if set, else the
- *       phone's single projection. If the phone belongs to more than one tenant
- *       the request is refused rather than guessed — see
- *       {@link #resolveTenant}.</li>
+ *       phone's ACTIVE projection, else its oldest. They used to REFUSE when a
+ *       phone spanned tenants; they no longer do, because the choice does not
+ *       move different money — wallets are global per phone, so only the ledger
+ *       attribution differs. See {@link #resolveActingProjection}.</li>
  * </ul>
  *
  * <h2>Rules for anything added under this prefix</h2>
@@ -339,9 +341,15 @@ public class PublicTestController {
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "BAD_AMOUNT, SELF_TRANSFER, INSUFFICIENT_FUNDS, or AMBIGUOUS_TENANT "
-                                + "(the phone belongs to more than one tenant — pin one with "
-                                + "LOYALTY_PUBLIC_TEST_TENANT_ID)"),
+                    description = "BAD_AMOUNT, SELF_TRANSFER or INSUFFICIENT_FUNDS. A phone spanning "
+                                + "several tenants no longer returns AMBIGUOUS_TENANT — the acting "
+                                + "projection is resolved for you (ACTIVE first, then oldest)."),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "USER_PENDING / USER_BLOCKED / USER_INACTIVE — the sender's account "
+                                + "cannot spend. USER_PENDING means no projection for that phone has "
+                                + "been promoted to ACTIVE yet; it is cleared by the "
+                                + "POST /loyalty/internal/users/promote webhook, never by the customer."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404", description = "Public test endpoints are disabled, or no such customer")
     })
@@ -351,7 +359,7 @@ public class PublicTestController {
             @Valid @RequestBody PublicSendPointsRequest body) {
         requireEnabled();
         String phone = requirePhone(phoneNumber, "send-points");
-        LoyaltyUser sender = requireSingleProjection(phone);
+        LoyaltyUser sender = resolveActingProjection(phone);
 
         BigDecimal balance = asCustomer(sender, () -> transfers.transfer(
                 sender.getTenantId(),
@@ -389,8 +397,9 @@ public class PublicTestController {
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "INSUFFICIENT_FUNDS, AMBIGUOUS_TENANT, or AMBIGUOUS_MERCHANT "
-                                + "(supply merchantId, or pin LOYALTY_PUBLIC_TEST_MERCHANT_ID)"),
+                    description = "INSUFFICIENT_FUNDS, or AMBIGUOUS_MERCHANT (supply merchantId, or "
+                                + "pin LOYALTY_PUBLIC_TEST_MERCHANT_ID). The TENANT is resolved for "
+                                + "you and no longer returns AMBIGUOUS_TENANT."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404", description = "Public test endpoints are disabled, or no such customer")
     })
@@ -400,7 +409,7 @@ public class PublicTestController {
             @Valid @RequestBody PublicRedeemPointsRequest body) {
         requireEnabled();
         String phone = requirePhone(phoneNumber, "redeem-points");
-        LoyaltyUser customer = requireSingleProjection(phone);
+        LoyaltyUser customer = resolveActingProjection(phone);
         UUID merchantId = resolveMerchant(customer.getTenantId(), body.merchantId());
 
         RedemptionService.RedemptionResult result = asCustomer(customer, () ->
@@ -573,12 +582,50 @@ public class PublicTestController {
     }
 
     /**
-     * The single loyalty account for a phone, for operations that must name one
-     * tenant. Refuses rather than guesses when the phone spans several tenants:
-     * picking one arbitrarily would move points in a tenant the caller never
-     * chose, and the failure would be silent.
+     * The loyalty account to act as, for a phone that may have several.
+     *
+     * <p><b>This used to refuse (AMBIGUOUS_TENANT) rather than choose.</b> That
+     * was the wrong call for these two endpoints, and it blocked the customer app
+     * entirely: a {@code LoyaltyUser} is a per-tenant PROJECTION, and six paths
+     * mint one whenever a phone is touched under a new tenant — buying an event
+     * ticket creates one under the seeded ticketing tenant. So any customer who
+     * has bought a ticket AND used a loyalty merchant has two, which is the
+     * ordinary super-app case, not an anomaly.
+     *
+     * <p>What made refusing disproportionate is that <b>the choice does not move
+     * different money</b>. {@code TransferService} resolves both wallets by PHONE
+     * ({@code walletService.mainWallet(sender.getPhoneNumber())}), and the wallet
+     * is global per phone — {@code UserService.createWithWallet} deliberately
+     * reuses the one MAIN wallet across projections rather than creating a
+     * per-tenant silo. The balance debited, the amount credited and the recipient
+     * are identical whichever projection is picked. The tenant decides only
+     * LEDGER ATTRIBUTION (which tenant/merchant stamps the rows) and which tenant
+     * an auto-enrolled recipient lands under. Refusing a correct money movement
+     * because we cannot label its bookkeeping is the wrong trade.
+     *
+     * <p>Order of preference, and why:
+     * <ol>
+     *   <li><b>The configured pin</b>, when set — an operator who named a tenant
+     *       meant it, and the existing 404-when-absent behaviour is preserved.</li>
+     *   <li><b>An ACTIVE projection</b> over a PENDING one. Registration is a
+     *       property of the PHONE, not of a projection — the promote webhook
+     *       flips every row for a phone at once — so a customer holding one
+     *       ACTIVE row is registered, full stop. Without this, a registered
+     *       customer who then transacts with a NEW merchant gets a freshly
+     *       auto-enrolled PENDING projection and would be refused as unregistered
+     *       depending purely on which row we happened to pick. That is a real
+     *       bug, not a preference.</li>
+     *   <li><b>Oldest, then id</b> — a total order, so the same request resolves
+     *       the same way every time and the attribution is reproducible rather
+     *       than dependent on row order.</li>
+     * </ol>
+     *
+     * <p>Note what this does NOT change: a caller with no ACTIVE projection at all
+     * still cannot spend. They now get the truthful {@code USER_PENDING} from
+     * {@code requireSpendable} instead of a tenant error that named the wrong
+     * problem and pointed at a server env var the caller cannot set.
      */
-    private LoyaltyUser requireSingleProjection(String phone) {
+    private LoyaltyUser resolveActingProjection(String phone) {
         List<LoyaltyUser> found = users.findByPhoneNumber(phone);
         if (found.isEmpty()) {
             throw LoyaltyException.notFound("customer");
@@ -590,12 +637,13 @@ public class PublicTestController {
                     .findFirst()
                     .orElseThrow(() -> LoyaltyException.notFound("customer in the configured test tenant"));
         }
-        if (found.size() > 1) {
-            throw LoyaltyException.badRequest("AMBIGUOUS_TENANT",
-                    "This phone belongs to more than one tenant. Pin one with "
-                            + "LOYALTY_PUBLIC_TEST_TENANT_ID to use the public test writes.");
-        }
-        return found.get(0);
+        return found.stream()
+                .min(Comparator
+                        .comparing((LoyaltyUser u) -> u.getStatus() == LoyaltyUser.Status.ACTIVE ? 0 : 1)
+                        .thenComparing(LoyaltyUser::getCreatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(LoyaltyUser::getId))
+                .orElseThrow();  // unreachable: `found` is non-empty
     }
 
     /** Explicit id wins; else the configured pin; else the tenant's only merchant. */

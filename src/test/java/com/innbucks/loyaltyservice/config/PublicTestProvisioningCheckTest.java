@@ -1,100 +1,98 @@
 package com.innbucks.loyaltyservice.config;
 
-import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The boot-time detector for a half-provisioned {@code /loyalty/public/**}
- * surface.
+ * The boot check exists for exactly one condition: a tenant pin that is SET but
+ * unparseable, which {@code PublicTestController.parseUuidOrNull} swallows so it
+ * behaves identically to an unset one. Nothing else about it can go wrong now
+ * that a phone spanning tenants is resolved rather than refused.
  *
- * <p>Behaviour is expressed through the collaborator, not through log capture:
- * whether the check queries at all is the load-bearing part (a disabled surface
- * must touch nothing, and a pinned one needs no query), and the ERROR text is
- * prose that should be free to change without breaking a test.
+ * <p>These assert on the emitted level, because "does it shout" is the entire
+ * behaviour — there is no collaborator left to observe.
  */
 class PublicTestProvisioningCheckTest {
 
-    private static final String VALID_UUID = "0a571c1c-7c75-4000-a000-000000000001";
+    private ListAppender<ILoggingEvent> appender;
+    private Logger logger;
 
-    @Test
-    @DisplayName("does nothing at all when the public surface is off — the production case")
-    void disabled_doesNotEvenQuery() {
-        LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
+    @BeforeEach
+    void captureLogs() {
+        logger = (Logger) LoggerFactory.getLogger(PublicTestProvisioningCheck.class);
+        appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+    }
 
-        new PublicTestProvisioningCheck(false, "", users).checkPublicTestProvisioning();
+    @AfterEach
+    void detach() {
+        logger.detachAppender(appender);
+    }
 
-        // A production cell has this surface off and must stay off. The check
-        // must not add a startup query there, nor log anything that would read
-        // as though the surface were live.
-        verify(users, never()).countPhonesSpanningTenants();
+    private void run(boolean enabled, String pin) {
+        new PublicTestProvisioningCheck(enabled, pin).checkPublicTestProvisioning();
+    }
+
+    private List<ILoggingEvent> events() {
+        return appender.list;
     }
 
     @Test
-    @DisplayName("a valid pin short-circuits — no query needed, nothing is ambiguous")
-    void validPin_doesNotQuery() {
-        LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
+    @DisplayName("says nothing at all when the surface is off — the production case")
+    void disabled_isSilent() {
+        // A production cell has this off and must stay off. It should not even
+        // narrate, or the line becomes noise operators learn to skip.
+        run(false, "not-a-uuid");
 
-        new PublicTestProvisioningCheck(true, VALID_UUID, users).checkPublicTestProvisioning();
-
-        verify(users, never()).countPhonesSpanningTenants();
+        assertThat(events()).isEmpty();
     }
 
     @Test
-    @DisplayName("a MALFORMED pin is caught without querying — it is a misconfiguration whatever the data says")
-    void malformedPin_isReportedWithoutQuerying() {
-        // This is the nastiest case in production: PublicTestController's
-        // parseUuidOrNull swallows the parse failure and returns null, so a
-        // typo'd UUID behaves EXACTLY like an unset one. The operator sees the
-        // same AMBIGUOUS_TENANT and has no way to learn the value they set is
-        // being ignored. Boot is the only place that can tell them.
-        LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
+    @DisplayName("a malformed pin is an ERROR — it is silently ignored at runtime")
+    void malformedPin_isAnError() {
+        run(true, "0a571c1c-oops");
 
-        new PublicTestProvisioningCheck(true, "not-a-uuid", users).checkPublicTestProvisioning();
-
-        verify(users, never()).countPhonesSpanningTenants();
+        assertThat(events()).singleElement()
+                .satisfies(e -> {
+                    assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                    assertThat(e.getFormattedMessage())
+                            .contains("MISCONFIGURED")
+                            .contains("SILENTLY IGNORED");
+                });
     }
 
     @Test
-    @DisplayName("no pin: asks the data rather than assuming, because blank is correct on a single-tenant cell")
-    void noPin_queriesTheData() {
-        LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
-        when(users.countPhonesSpanningTenants()).thenReturn(0L);
+    @DisplayName("a valid pin is INFO, not an error")
+    void validPin_isInfo() {
+        run(true, "0a571c1c-7c75-4000-a000-000000000001");
 
-        new PublicTestProvisioningCheck(true, "", users).checkPublicTestProvisioning();
-
-        // Must consult the data: a blank pin is documented as correct when the
-        // resolution is unambiguous, so warning unconditionally would train the
-        // operator to ignore the line.
-        verify(users).countPhonesSpanningTenants();
+        assertThat(events()).singleElement()
+                .satisfies(e -> assertThat(e.getLevel()).isEqualTo(Level.INFO));
     }
 
     @Test
-    @DisplayName("no pin with phones spanning tenants: the half-provisioned case")
-    void noPin_withAffectedPhones_queries() {
-        LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
-        when(users.countPhonesSpanningTenants()).thenReturn(42L);
+    @DisplayName("no pin is INFO — it is a supported configuration, not a fault")
+    void noPin_isInfo() {
+        // Blank used to combine with multi-tenant phones to break the points
+        // writes. It no longer can, so this must not be reported as a problem.
+        for (String blank : new String[]{"", "   ", null}) {
+            appender.list.clear();
+            run(true, blank);
 
-        new PublicTestProvisioningCheck(true, "   ", users).checkPublicTestProvisioning();
-
-        // Whitespace is treated as unset — trimmed before the emptiness test, so
-        // a stray space in an env file does not read as a configured pin.
-        verify(users).countPhonesSpanningTenants();
-    }
-
-    @Test
-    @DisplayName("a null pin is treated as unset, not an NPE")
-    void nullPin_isTreatedAsUnset() {
-        LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
-        when(users.countPhonesSpanningTenants()).thenReturn(1L);
-
-        new PublicTestProvisioningCheck(true, null, users).checkPublicTestProvisioning();
-
-        verify(users).countPhonesSpanningTenants();
+            assertThat(events()).as("pin=%s", blank).singleElement()
+                    .satisfies(e -> assertThat(e.getLevel()).isEqualTo(Level.INFO));
+        }
     }
 }

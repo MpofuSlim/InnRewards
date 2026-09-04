@@ -261,12 +261,87 @@ second authentication the whole mode exists to remove.
   recording HOW the phone was proved, so an incident on one proof channel can be
   scoped to the tokens it minted. `loyalty-otp` is cross-repo and drift-prone;
   `loyalty-session` is read straight from `LoyaltySessionIssuer`.
-- **The TTL IS the revocation story** (`LOYALTY_SESSION_TTL_SECONDS`, 12h to
-  match user-service). No `userId` claim means the fleet's tokenVersion denylist
-  — keyed by user UUID — cannot reach these tokens. There is no refresh path.
+- **The access token's TTL is still its only self-contained end**
+  (`LOYALTY_SESSION_TTL_SECONDS`, 12h to match user-service). No `userId` claim
+  means the fleet's tokenVersion denylist — keyed by user UUID — cannot reach
+  these tokens. What changed in V43 is that the TTL is no longer *also* the
+  revocation story: see the refresh section below.
 - **A repeat registration still returns a fresh session.** `newlyRegistered:
   false` means the phone was already proved, not that the app holds a live
   token; withholding one would strand a returning customer.
+
+### The session RENEWS — a rotating refresh token, not a longer TTL (V43)
+
+**`loyalty_refresh_tokens` is what lets a customer stay signed in without a
+second SMS.** Registration is a permanent phone-level fact (V40), so an OTP
+should cost **one SMS per customer for life** — but with a 12h session and no
+renewal it cost one SMS every twelve hours, per device. That is the price that
+kept the customer app on `/loyalty/public/**`.
+
+Three endpoints under `/loyalty/session`, and which credential each takes is the
+whole design:
+
+- `POST /exchange` — **bearer: a live phone-scoped session**. Trades it for a
+  chain. Called ONCE, right after the OTP verify that minted the session.
+- `POST /refresh` — **credential: the refresh token in the BODY**. Rotates it
+  and returns a fresh access token.
+- `POST /logout` — same credential; revokes the chain.
+
+- **Do NOT "fix" this by lengthening the TTL or letting the access token renew
+  itself.** Both make the access token a long-lived bearer that nothing can
+  withdraw, and the self-renewing version is the worse of the two: a stolen copy
+  renews alongside the legitimate one forever, and because *both keep working*
+  there is no moment at which the theft is observable. A separate, rotating,
+  server-recorded credential exists precisely so a second holder becomes
+  **detectable**.
+- **Reuse detection is the load-bearing property.** Each refresh stamps
+  `used_at` on the presented row and issues a successor in the same `chain_id`.
+  Presenting a spent row means two parties hold credentials from one chain, and
+  nothing distinguishes them — so the WHOLE chain is revoked (the legitimate
+  device included) and the customer re-proves. Revoking only the replayed row
+  would leave the attacker's copy of the *current* token working, which is the
+  opposite of the point. `LoyaltySessionServiceTest.reusingASpentTokenRevokesTheWholeChain`
+  pins it; alert on `loyalty_session_rejected_total{reason="reuse_detected"}`,
+  which should be zero.
+- **Only the SHA-256 is stored, and bare SHA-256 is correct here.** The token is
+  32 random bytes, so there is no space to enumerate — the fleet's keyed-HMAC
+  rule exists for LOW-entropy secrets (a six-digit OTP, a voucher code). Don't
+  "upgrade" this to an HMAC on pattern-match.
+- **The window SLIDES** (`LOYALTY_SESSION_REFRESH_TTL_DAYS`, 90). Every rotation
+  issues a successor with a fresh window, so an app in ordinary use never
+  re-proves; a chain untouched for the whole window ages out, which is what
+  stops an abandoned device being a permanent credential.
+- **A refresh continues a proof; it never performs one.** Every refresh re-asks
+  `UserService.isPhoneRegistered`, so revoking the V40 registration tombstone
+  signs the customer out at their next renewal instead of being quietly outlived
+  by a live chain. `revokeAllForPhone` is the operator's "sign them out
+  everywhere" lever — deliberately NOT an endpoint, since it is aimed at a phone
+  number.
+- **`/refresh` and `/logout` are `permitAll` AND in `JwtFilter`'s excluded
+  paths** — exact paths, never the `/loyalty/session` prefix. Their credential is
+  the body token and the access token they exist to replace is normally expired
+  by the time they are called, so requiring a live bearer would make renewal
+  possible only while renewal was unnecessary; and an app whose HTTP client
+  attaches its stored bearer to everything would be 401'd out of the one call
+  that would have fixed it. The sibling `/exchange` keeps running through the
+  filter and stays `authenticated()`.
+- **`/exchange` is gated on the SCOPE MARKER, not `isAuthenticated()`.** A chain
+  is a long-lived phone-scoped credential, so only a caller already holding a
+  phone-proved session may open one — a staff token's phone claim is an
+  employee's number. The `@PreAuthorize` strings must be literals (the
+  annotation takes a compile-time constant), so nothing but
+  `LoyaltySessionControllerTest.authorityStringsMatchTheScopeMarkers` couples
+  them to `LOYALTY_SESSION_SCOPE`; a drift would 403 every customer.
+- **Every refusal is one opaque `401 SESSION_REFRESH_REJECTED`** and sign-out is
+  always `200`, even for an unknown token — otherwise either becomes an oracle
+  for whether a token exists. The client behaviour is the same for all of them:
+  get a fresh phone proof.
+- The gateway route lives in `ticketing-system`:
+  `loyalty-session-refresh-route`, POST-only, the two exact paths, IP-keyed
+  fail-safe limiter, ordered before `loyalty-service-route` and pinned in
+  `GatewayRouteTableTest`. The catch-all's `gatewayKeyResolver` keys on the raw
+  `Authorization` header, which these callers do not send — under it the whole
+  internet would share one bucket.
 
 ### …and `GET /loyalty/users/me` turns that session into something spendable
 

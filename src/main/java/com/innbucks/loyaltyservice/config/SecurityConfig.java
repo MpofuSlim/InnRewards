@@ -79,6 +79,25 @@ public class SecurityConfig {
                         // refuses every call until key material is provisioned
                         // (503).
                         .requestMatchers(HttpMethod.POST, "/loyalty/partner/registrations").permitAll()
+                        // Session renewal (V43). The credential is the refresh
+                        // token in the request body, not a bearer — and the
+                        // access token these calls exist to replace has usually
+                        // expired by the time they are made, so requiring a live
+                        // bearer would make renewal possible only while renewal
+                        // was unnecessary.
+                        //
+                        // Scoped to the exact method + path, so the sibling
+                        // /loyalty/session/exchange (which DOES require a
+                        // phone-scoped bearer, and further checks the scope
+                        // marker with @PreAuthorize) falls through to
+                        // .anyRequest().authenticated() and stays closed.
+                        //
+                        // The refresh token is 32 random bytes and every
+                        // refusal is one opaque 401, so there is nothing to
+                        // enumerate here; the gateway additionally fronts both
+                        // paths with an IP-keyed fail-safe rate limiter.
+                        .requestMatchers(HttpMethod.POST, "/loyalty/session/refresh").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/loyalty/session/logout").permitAll()
                         // TEST-ONLY unauthenticated endpoints (PublicTestController).
                         // Deliberately anonymous so a frontend can be built against
                         // real data before its auth flow exists. The controller

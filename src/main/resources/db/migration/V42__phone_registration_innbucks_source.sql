@@ -1,4 +1,10 @@
--- A fourth registration proof: the customer's own InnBucks session (V41).
+-- A fifth registration proof: the customer's own InnBucks session (V42).
+--
+-- Sits on top of V41 (VEENGU_SESSION), which shipped first. That mode was built
+-- against Veengu's Frontend API before the partner's own Postman collections
+-- showed the app actually authenticates against the InnBucks Client Service
+-- API. Both source values are kept: V41 is applied history and is never edited,
+-- and an unused enum value costs nothing.
 --
 -- THE PROBLEM V40 LEFT OPEN. V40 gave loyalty a place to record "the owner of
 -- this phone proved they hold it", and two ways to be told: a signed partner
@@ -38,4 +44,5 @@ ALTER TABLE phone_registrations
 
 ALTER TABLE phone_registrations
     ADD CONSTRAINT chk_phone_registration_source
-        CHECK (source IN ('TICKETING_OTP', 'PARTNER_ASSERTION', 'PARTNER_KEY', 'INNBUCKS_SESSION'));
+        CHECK (source IN ('TICKETING_OTP', 'PARTNER_ASSERTION', 'PARTNER_KEY',
+                          'VEENGU_SESSION', 'INNBUCKS_SESSION'));

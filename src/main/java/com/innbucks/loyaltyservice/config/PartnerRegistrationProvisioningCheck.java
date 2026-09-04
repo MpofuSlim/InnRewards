@@ -35,6 +35,8 @@ public class PartnerRegistrationProvisioningCheck {
     private final String authMode;
     private final String partnerKey;
     private final String publicKey;
+    private final String veenguBaseUrl;
+    private final String veenguTenant;
     private final String innbucksBaseUrl;
     private final String innbucksApiKey;
     private final String innbucksProbePath;
@@ -44,6 +46,8 @@ public class PartnerRegistrationProvisioningCheck {
             @Value("${loyalty.registration.partner.auth-mode:assertion}") String authMode,
             @Value("${loyalty.registration.partner.key:}") String partnerKey,
             @Value("${loyalty.registration.partner.public-key:}") String publicKey,
+            @Value("${loyalty.registration.partner.veengu.base-url:}") String veenguBaseUrl,
+            @Value("${loyalty.registration.partner.veengu.tenant:}") String veenguTenant,
             @Value("${loyalty.registration.partner.innbucks.base-url:}") String innbucksBaseUrl,
             @Value("${loyalty.registration.partner.innbucks.api-key:}") String innbucksApiKey,
             @Value("${loyalty.registration.partner.innbucks.probe-path:}") String innbucksProbePath) {
@@ -51,6 +55,8 @@ public class PartnerRegistrationProvisioningCheck {
         this.authMode = authMode == null ? "assertion" : authMode.trim().toLowerCase();
         this.partnerKey = partnerKey;
         this.publicKey = publicKey;
+        this.veenguBaseUrl = veenguBaseUrl;
+        this.veenguTenant = veenguTenant;
         this.innbucksBaseUrl = innbucksBaseUrl;
         this.innbucksApiKey = innbucksApiKey;
         this.innbucksProbePath = innbucksProbePath;
@@ -60,15 +66,18 @@ public class PartnerRegistrationProvisioningCheck {
     public void checkPartnerRegistrationProvisioning() {
         if (!enabled) return;
 
-        if (!"assertion".equals(authMode) && !"key".equals(authMode) && !"innbucks".equals(authMode)) {
+        if (!"assertion".equals(authMode) && !"key".equals(authMode)
+                && !"veengu".equals(authMode) && !"innbucks".equals(authMode)) {
             log.error("Partner registration is MISCONFIGURED: loyalty.registration.partner.auth-mode is "
-                    + "'{}', which is none of 'assertion', 'key' or 'innbucks'. The endpoint falls back "
-                    + "to assertion mode; set it explicitly.", authMode);
+                    + "'{}', which is none of 'assertion', 'key', 'veengu' or 'innbucks'. The endpoint "
+                    + "falls back to assertion mode; set it explicitly.", authMode);
             return;
         }
 
         boolean provisioned = switch (authMode) {
             case "key" -> partnerKey != null && !partnerKey.isBlank();
+            case "veengu" -> veenguBaseUrl != null && !veenguBaseUrl.isBlank()
+                    && veenguTenant != null && !veenguTenant.isBlank();
             case "innbucks" -> innbucksBaseUrl != null && !innbucksBaseUrl.isBlank()
                     && innbucksApiKey != null && !innbucksApiKey.isBlank()
                     && innbucksProbePath != null && !innbucksProbePath.isBlank();
@@ -78,6 +87,8 @@ public class PartnerRegistrationProvisioningCheck {
         if (!provisioned) {
             String missing = switch (authMode) {
                 case "key" -> "LOYALTY_PARTNER_REGISTRATION_KEY";
+                case "veengu" -> "LOYALTY_PARTNER_REGISTRATION_VEENGU_BASE_URL and/or "
+                        + "LOYALTY_PARTNER_REGISTRATION_VEENGU_TENANT";
                 case "innbucks" -> "LOYALTY_PARTNER_REGISTRATION_INNBUCKS_BASE_URL / _API_KEY / _PROBE_PATH";
                 default -> "LOYALTY_PARTNER_REGISTRATION_PUBLIC_KEY";
             };
@@ -93,6 +104,9 @@ public class PartnerRegistrationProvisioningCheck {
                     + "LOYALTY_PARTNER_REGISTRATION_KEY can register ANY phone number; it must live only "
                     + "in the partner's server-side config and never in a mobile client. Prefer "
                     + "auth-mode=assertion once the partner can sign.");
+            case "veengu" -> log.info("Partner registration is enabled in veengu mode: the customer's own "
+                    + "session token is validated against {} and the phone comes from Veengu's answer. "
+                    + "No partner credential is held in this mode.", veenguBaseUrl);
             case "innbucks" -> {
                 log.info("Partner registration is enabled in innbucks mode: a claimed phone is proved by "
                         + "reading it under the caller's own user token at {}{}.",

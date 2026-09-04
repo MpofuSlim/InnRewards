@@ -94,6 +94,47 @@ bodies using the project's `ApiResult` envelope (`{ "code", "message", "data" }`
 (400/401/403/404) with real messages thrown by the service code. `MerchantController`
 and `ShopController` are the canonical shape.
 
+## A plain CUSTOMER is exempt from tenant membership — so ownership checks are now load-bearing
+
+> [!IMPORTANT]
+> **Every new endpoint a `CUSTOMER` can reach MUST carry its own ownership
+> check.** `TenantContext.verifyMembership` no longer catches the omission for
+> them. Bind the acted-on account to the caller — `requireCallerOwns` (strict, no
+> admin bypass) on anything that mints or moves value, `requireCallerOwnsOrIsAdmin`
+> where support staff legitimately act on behalf.
+
+**Why the exemption exists.** `tenant_members` has exactly two writers:
+`TenantService.addMember`, called from ONE place (`TenantService:70`, inside
+tenant creation, attaching the creator), and `TenantMemberBackfill`, which is
+email-keyed off `tenant.ownerEmail`. `TenantController` has **no**
+`POST /{id}/members`, and the string `CUSTOMER` appears nowhere in it. So a
+customer could not self-join and no operator could add them: for a customer the
+check was not a gate but a wall, and `POST /loyalty/transfer` and
+`POST /loyalty/redeem` would have 403'd every one of them. That is why the
+customer app has only ever reached loyalty through `/loyalty/public/**`.
+
+**Why skipping it was safe.** All nine tenant-scoped endpoints a CUSTOMER can
+reach already bind the acted-on account to the caller, and the mint/drain paths
+use the STRICT check: transfer (`requireCallerOwns`), redeem
+(`requireCallerOwnsOrIsAdmin`), `/users/{id}/transactions`, voucher redeem
+(assignee phone), voucher transfer (`requireCallerMayViewVoucher`),
+vouchers-by-phone (`requireCallerOwnsPhoneOrIsAdmin`), QR issue
+(`requireCallerAdministersMerchant` / `requireCallerOwns`), QR consume
+(`requireCallerOwns`). The ninth, `GET /loyalty/mini-apps/manifest`, returns the
+tenant's mini-app catalogue — storefront content whose role list already names
+CUSTOMER.
+
+**"Plain" is role-set EQUALITY** (`{ROLE_CUSTOMER}`), not a deny-list of today's
+staff roles — a role invented later fails closed instead of inheriting the
+exemption. A mixed CUSTOMER+staff token still needs membership, so this can never
+widen a staff caller's reach. `SERVICE_*`, `TIER_*` and `VERIFIED` are filtered
+out: they describe the token, not a role.
+
+**What it does NOT change:** tenant RESOLUTION. A customer still needs a valid
+`X-Tenant-Id`/`X-Tenant-Code` (400 without, 404 for an unknown one) — only the
+membership check is skipped. And `/loyalty/public/**` is untouched: it never
+consulted `TenantContext` at all.
+
 ## The fraud auto-block may only ever act on the CALLER
 
 `FraudService.record` writes an evidence row and, past the velocity threshold,
@@ -132,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V41**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V42**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -171,15 +212,21 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   whoever decides that population is worth registering anyway. Existing ACTIVE
   rows keep spending — the ACTIVE branch is untouched.
 - **The partner endpoint is off by default** (`404`), and enabled-but-unprovisioned
-  is `503` plus a boot HALF-PROVISIONED error. Three auth modes:
+  is `503` plus a boot HALF-PROVISIONED error. Four auth modes:
   `assertion` (default — RS/ES-signed, phone in the signed `sub`, bounded TTL,
   monotonic replay guard; loyalty holds only the public key), `key`
-  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign, and
-  `innbucks` (V41). **Shared-key mode means whoever holds the key can register
-  ANY phone** — it logs a boot WARN, is guarded by `ProductionSecretsGuard`, and
-  must never reach a mobile client.
+  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign,
+  `veengu` (V41 — validates the customer's Veengu access token against Veengu's
+  `GET /auth/identity`), and `innbucks` (V42). **Shared-key mode means whoever
+  holds the key can register ANY phone** — it logs a boot WARN, is guarded by
+  `ProductionSecretsGuard`, and must never reach a mobile client.
+- **`veengu` shipped first and is SUPERSEDED — do not build on it.** The
+  partner's own Postman collections showed the app authenticates against the
+  InnBucks **Client Service** API, not Veengu directly, so a Veengu access token
+  is not what the app holds. The mode is left in place because V41 is applied
+  history and an idle mode costs nothing; `innbucks` is what the mobile app uses.
 
-### `innbucks` mode — the ONLY mode a mobile client may call (V41)
+### `innbucks` mode — the ONLY mode a mobile client may call (V42)
 
 The app authenticates its customers against the InnBucks Client Service API
 (`POST /auth/client-service/user/login`, username + PIN block → a user token),

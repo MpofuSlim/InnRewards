@@ -39,7 +39,7 @@ import java.util.Map;
  * spend. This endpoint is the missing edge, callable from outside the cluster by
  * the party that actually performed the phone verification.
  *
- * <h2>Three auth modes, and why the default is the signed one</h2>
+ * <h2>Four auth modes, and why the default is the signed one</h2>
  * <ul>
  *   <li>{@code assertion} (default) — the caller sends a short-lived,
  *       phone-scoped token signed with a private key it alone holds. Loyalty
@@ -49,12 +49,21 @@ import java.util.Map;
  *       that cannot sign. Honest about its weakness: whoever holds the key can
  *       register ANY phone, so it is opt-in, never the default, and the key must
  *       never reach a mobile client.</li>
+ *   <li>{@code veengu} — the customer's OWN Veengu session, validated against
+ *       Veengu's {@code GET /auth/identity}. Built before the partner's Postman
+ *       collections showed the app authenticates against the InnBucks Client
+ *       Service API rather than Veengu directly, so in practice
+ *       {@code innbucks} supersedes it; kept because it is merged and costs
+ *       nothing idle.</li>
  *   <li>{@code innbucks} — the customer's OWN InnBucks Client Service session is
- *       the proof. The app sends its {@code X-Innbucks-User-Token} and the phone
- *       it claims; loyalty asks the middleware to read THAT msisdn under THAT
- *       token, and registers only if it answers. The one mode a mobile client
- *       may call directly: it carries no credential of ours, and a stolen user
- *       token can only register the phone it was stolen from.</li>
+ *       the proof, and the mode the mobile app actually uses. The app sends its
+ *       {@code X-Innbucks-User-Token} and the phone it claims; loyalty asks the
+ *       middleware to read THAT msisdn under THAT token, and registers only if
+ *       it answers. Safe for a mobile client to call directly: it carries no
+ *       credential of ours, and a stolen user token can only register the phone
+ *       it was stolen from. Fail-closed — if the middleware cannot be reached,
+ *       nothing is registered and the caller gets a retryable 503, never a
+ *       default-to-registered.</li>
  * </ul>
  *
  * <h2>Why {@code innbucks} mode does not use the /validate endpoint</h2>
@@ -83,6 +92,7 @@ public class PartnerRegistrationController {
 
     private final UserService userService;
     private final RegistrationAssertionVerifier verifier;
+    private final com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient;
     private final com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient;
     private final MemberActivityNotifier memberNotifier;
     private final LoyaltyMetrics metrics;
@@ -93,6 +103,7 @@ public class PartnerRegistrationController {
     public PartnerRegistrationController(
             UserService userService,
             RegistrationAssertionVerifier verifier,
+            com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient,
             com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient,
             MemberActivityNotifier memberNotifier,
             LoyaltyMetrics metrics,
@@ -101,6 +112,7 @@ public class PartnerRegistrationController {
             @Value("${loyalty.registration.partner.key:}") String partnerKey) {
         this.userService = userService;
         this.verifier = verifier;
+        this.veenguClient = veenguClient;
         this.innbucksClient = innbucksClient;
         this.memberNotifier = memberNotifier;
         this.metrics = metrics;
@@ -116,13 +128,15 @@ public class PartnerRegistrationController {
                     future. Who calls it depends on the cell's auth mode: a trusted partner backend \
                     (`assertion` / `key`), or the customer app itself (`innbucks` — it sends its own \
                     `X-Innbucks-User-Token` plus the phone it claims, and loyalty registers only if \
-                    the InnBucks middleware lets that token read that number's account).
+                    the InnBucks middleware lets that token read that number's account; `veengu` is \
+                    the earlier equivalent against Veengu's own API).
 
                     Idempotent and safe to call on every login: a repeat is a no-op that reports \
                     `projectionsPromoted: 0`. The body `phoneNumber` is read in `key` and `innbucks` \
-                    modes only — in `assertion` mode the phone comes solely from the signed `sub`. \
-                    In `innbucks` mode a claimed number is never believed on its own: it is the thing \
-                    being proved, so naming someone else's number is refused with a 401.""")
+                    modes only — in `assertion` mode the phone comes solely from the signed `sub`, \
+                    and in `veengu` mode solely from Veengu's answer. In `innbucks` mode a claimed \
+                    number is never believed on its own: it is the thing being proved, so naming \
+                    someone else's number is refused with a 401.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registration recorded (or already present)",
                     content = @Content(mediaType = "application/json",
@@ -180,7 +194,7 @@ public class PartnerRegistrationController {
                                       "data": null
                                     }"""))),
             @ApiResponse(responseCode = "503", description = "REGISTRATION_UNCONFIGURED — enabled but not provisioned (half-provisioned cell); "
-                    + "or REGISTRATION_UPSTREAM_UNAVAILABLE — `innbucks` mode could not reach the middleware. RETRYABLE: nothing was registered and the claim was not refused.",
+                    + "or REGISTRATION_UPSTREAM_UNAVAILABLE — the upstream could not be reached. RETRYABLE: nothing was registered and the claim was not refused.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
@@ -190,7 +204,7 @@ public class PartnerRegistrationController {
                                               "message": "Partner registration is enabled but no credential is configured.",
                                               "data": null
                                             }"""),
-                                    @ExampleObject(name = "Middleware unreachable (retry)", value = """
+                                    @ExampleObject(name = "Upstream unreachable (retry)", value = """
                                             {
                                               "code": "REGISTRATION_UPSTREAM_UNAVAILABLE",
                                               "message": "Registration could not be verified right now. Please try again.",
@@ -199,6 +213,7 @@ public class PartnerRegistrationController {
     })
     public ResponseEntity<ApiResult<Map<String, Object>>> register(
             @RequestHeader(value = "X-Partner-Key", required = false) String presentedKey,
+            @RequestHeader(value = "X-Veengu-Access-Token", required = false) String veenguToken,
             @RequestHeader(value = "X-Innbucks-User-Token", required = false) String innbucksUserToken,
             @RequestBody(required = false) PartnerRegistrationRequest body) {
 
@@ -211,7 +226,39 @@ public class PartnerRegistrationController {
         String jti = null;
         PhoneRegistration.Source source;
 
-        if ("innbucks".equals(authMode)) {
+        if ("veengu".equals(authMode)) {
+            // The customer's own session is the proof. The phone comes ONLY
+            // from Veengu's answer — a body phoneNumber is ignored here for the
+            // same reason assertion mode ignores it: pairing a valid credential
+            // with someone ELSE'S number must be impossible by construction.
+            if (!veenguClient.isConfigured()) {
+                metrics.incPartnerRegistrationRejected("unconfigured");
+                throw unconfigured();
+            }
+            switch (veenguClient.identify(veenguToken)) {
+                case com.innbucks.loyaltyservice.client.VeenguIdentityClient.Verified v -> {
+                    phone = v.phoneNumber();
+                    source = PhoneRegistration.Source.VEENGU_SESSION;
+                }
+                case com.innbucks.loyaltyservice.client.VeenguIdentityClient.Rejected r -> {
+                    // Logged with the reason, answered without it — same opaque
+                    // 401 as the other modes.
+                    log.warn("Veengu session registration rejected: {}", r.reason());
+                    metrics.incPartnerRegistrationRejected("veengu_rejected");
+                    throw unauthorized();
+                }
+                case com.innbucks.loyaltyservice.client.VeenguIdentityClient.Unavailable u -> {
+                    // FAIL CLOSED, but retryably: no answer from Veengu is not
+                    // a verdict on the token, so it must not be the opaque 401
+                    // (the FE would tell the customer they were refused) and it
+                    // must NEVER register anything.
+                    log.warn("Veengu session registration upstream unavailable: {}", u.reason());
+                    metrics.incPartnerRegistrationRejected("veengu_unavailable");
+                    throw LoyaltyException.serviceUnavailable("REGISTRATION_UPSTREAM_UNAVAILABLE",
+                            "Registration could not be verified right now. Please try again.");
+                }
+            }
+        } else if ("innbucks".equals(authMode)) {
             // The caller CLAIMS a phone and proves it by holding a session the
             // middleware will let read that phone's account. Unlike the other
             // modes the phone does come from the body — and that is sound here
@@ -321,7 +368,7 @@ public class PartnerRegistrationController {
     public record PartnerRegistrationRequest(
             @Schema(description = "Signed registration assertion (compact JWS). Required in `assertion` mode.")
             String assertion,
-            @Schema(description = "E.164 phone. Read in `key` mode, and in `innbucks` mode as the CLAIM to be proved against the caller's user token. Ignored in `assertion` mode, where the phone comes from the signed `sub`.",
+            @Schema(description = "E.164 phone. Read in `key` mode, and in `innbucks` mode as the CLAIM to be proved against the caller's user token. Ignored in `assertion` mode (phone comes from the signed `sub`) and in `veengu` mode (phone comes from Veengu's answer).",
                     example = "+263771234567")
             String phoneNumber,
             @Schema(description = "Opaque identifier for the account at the partner, stored for traceability.",

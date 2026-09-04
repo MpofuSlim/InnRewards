@@ -72,8 +72,11 @@ class PartnerRegistrationControllerInnbucksModeTest {
 
     private PartnerRegistrationController controller(boolean enabled) {
         return new PartnerRegistrationController(
-                userService, mock(RegistrationAssertionVerifier.class), innbucksClient,
-                notifier, mock(LoyaltyMetrics.class),
+                userService, mock(RegistrationAssertionVerifier.class),
+                // The veengu client is wired but must never be touched in this
+                // mode — a strict mock would fail the moment it were.
+                mock(com.innbucks.loyaltyservice.client.VeenguIdentityClient.class),
+                innbucksClient, notifier, mock(LoyaltyMetrics.class),
                 enabled, "innbucks", "");
     }
 
@@ -91,7 +94,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
                 .thenReturn(new UserService.RegistrationResult(true, 2, false));
 
         ResponseEntity<ApiResult<Map<String, Object>>> response =
-                controller.register(null, USER_TOKEN, body(RAW_PHONE));
+                controller.register(null, null, USER_TOKEN, body(RAW_PHONE));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().getData())
@@ -111,7 +114,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
         when(userService.registerPhone(anyString(), any(), any(), any(), any()))
                 .thenReturn(new UserService.RegistrationResult(true, 1, false));
 
-        controller.register(null, USER_TOKEN, body(RAW_PHONE));
+        controller.register(null, null, USER_TOKEN, body(RAW_PHONE));
 
         verify(innbucksClient).verifyOwnership(USER_TOKEN, E164);
         verify(innbucksClient, never()).verifyOwnership(USER_TOKEN, RAW_PHONE);
@@ -126,7 +129,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
         when(innbucksClient.verifyOwnership(USER_TOKEN, E164))
                 .thenReturn(new InnbucksSessionClient.Rejected("code_02"));
 
-        assertThatThrownBy(() -> controller.register(null, USER_TOKEN, body(RAW_PHONE)))
+        assertThatThrownBy(() -> controller.register(null, null, USER_TOKEN, body(RAW_PHONE)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -147,7 +150,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
         when(innbucksClient.verifyOwnership(USER_TOKEN, E164))
                 .thenReturn(new InnbucksSessionClient.Unavailable("io_error"));
 
-        assertThatThrownBy(() -> controller.register(null, USER_TOKEN, body(RAW_PHONE)))
+        assertThatThrownBy(() -> controller.register(null, null, USER_TOKEN, body(RAW_PHONE)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -163,7 +166,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
         when(innbucksClient.verifyOwnership(isNull(), eq(E164)))
                 .thenReturn(new InnbucksSessionClient.Rejected("blank_token"));
 
-        assertThatThrownBy(() -> controller.register(null, null, body(RAW_PHONE)))
+        assertThatThrownBy(() -> controller.register(null, null, null, body(RAW_PHONE)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
                         .isEqualTo(HttpStatus.UNAUTHORIZED));
@@ -173,7 +176,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
     @Test
     @DisplayName("a missing phone is a 400 and never probes")
     void missingPhone_is400() {
-        assertThatThrownBy(() -> controller.register(null, USER_TOKEN, body(null)))
+        assertThatThrownBy(() -> controller.register(null, null, USER_TOKEN, body(null)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -185,7 +188,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
     @Test
     @DisplayName("an entirely missing body is a 400, not an NPE")
     void missingBody_is400() {
-        assertThatThrownBy(() -> controller.register(null, USER_TOKEN, null))
+        assertThatThrownBy(() -> controller.register(null, null, USER_TOKEN, null))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
                         .isEqualTo(HttpStatus.BAD_REQUEST));
@@ -202,7 +205,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
         when(userService.registerPhone(anyString(), any(), any(), any(), any()))
                 .thenReturn(new UserService.RegistrationResult(false, 0, false));
 
-        controller.register(null, USER_TOKEN, body(RAW_PHONE));
+        controller.register(null, null, USER_TOKEN, body(RAW_PHONE));
 
         verifyNoInteractions(notifier);
     }
@@ -212,7 +215,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
     void unconfigured_is503() {
         when(innbucksClient.isConfigured()).thenReturn(false);
 
-        assertThatThrownBy(() -> controller.register(null, USER_TOKEN, body(RAW_PHONE)))
+        assertThatThrownBy(() -> controller.register(null, null, USER_TOKEN, body(RAW_PHONE)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -226,7 +229,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
     void disabled_is404() {
         PartnerRegistrationController off = controller(false);
 
-        assertThatThrownBy(() -> off.register(null, USER_TOKEN, body(RAW_PHONE)))
+        assertThatThrownBy(() -> off.register(null, null, USER_TOKEN, body(RAW_PHONE)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND));
@@ -241,7 +244,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
         when(innbucksClient.verifyOwnership(USER_TOKEN, E164))
                 .thenReturn(new InnbucksSessionClient.Rejected("code_02"));
 
-        assertThatThrownBy(() -> controller.register("some-partner-key", USER_TOKEN, body(RAW_PHONE)))
+        assertThatThrownBy(() -> controller.register("some-partner-key", null, USER_TOKEN, body(RAW_PHONE)))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
                         .isEqualTo(HttpStatus.UNAUTHORIZED));

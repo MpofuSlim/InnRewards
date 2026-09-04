@@ -384,8 +384,12 @@ public class VoucherController {
     @Operation(summary = "Redeem a voucher at a merchant",
             description = "Validates the code's signature, expiry, status, and merchant scope; checks the " +
                           "device fingerprint / IP against velocity limits; and decrements `usesRemaining`. " +
-                          "Failed attempts are recorded in `fraud_attempts` and may auto-block the user via " +
-                          "FraudService when the velocity threshold is exceeded.")
+                          "Failed attempts are recorded in `fraud_attempts`. When the velocity threshold is " +
+                          "exceeded FraudService may auto-block the ACCOUNT OF THE AUTHENTICATED CALLER — " +
+                          "never the `userId` sent in the body, which is recorded as a claim only. A " +
+                          "staff-operated or service-to-service call blocks nobody: the velocity signal is " +
+                          "keyed by device, and at a till the device is the shop's while the person " +
+                          "presenting codes is a customer.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",

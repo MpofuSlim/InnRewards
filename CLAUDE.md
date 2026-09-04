@@ -132,7 +132,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V40**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V41**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -170,24 +170,67 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   distinguishes them. The operator query is documented in the migration for
   whoever decides that population is worth registering anyway. Existing ACTIVE
   rows keep spending — the ACTIVE branch is untouched.
-- **The partner endpoint is off by default** (`404`), and enabled-without-key is
-  `503` plus a boot HALF-PROVISIONED error. Two auth modes:
+- **The partner endpoint is off by default** (`404`), and enabled-but-unprovisioned
+  is `503` plus a boot HALF-PROVISIONED error. Three auth modes:
   `assertion` (default — RS/ES-signed, phone in the signed `sub`, bounded TTL,
-  monotonic replay guard; loyalty holds only the public key) and `key`
-  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign.
-  **Shared-key mode means whoever holds the key can register ANY phone** — it
-  logs a boot WARN, is guarded by `ProductionSecretsGuard`, and must never reach
-  a mobile client.
+  monotonic replay guard; loyalty holds only the public key), `key`
+  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign, and
+  `innbucks` (V41). **Shared-key mode means whoever holds the key can register
+  ANY phone** — it logs a boot WARN, is guarded by `ProductionSecretsGuard`, and
+  must never reach a mobile client.
+
+### `innbucks` mode — the ONLY mode a mobile client may call (V41)
+
+The app authenticates its customers against the InnBucks Client Service API
+(`POST /auth/client-service/user/login`, username + PIN block → a user token),
+not against our fleet. That token is a possession proof we cannot read — the
+API exposes **no identity endpoint** (confirmed by reading all 89 request
+definitions in the partner's Postman collections). So the question is asked
+backwards: the caller sends `X-Innbucks-User-Token` **and the phone it claims**,
+and `InnbucksSessionClient` asks the middleware to read *that* msisdn under
+*that* token. The middleware binds a user token to its own msisdn, so an answer
+IS the proof.
+
+- **`/auth/client-service/msisdn/{msisdn}/validate` is NOT the proof and must
+  never become the probe path.** It is authorized by the APP's own credentials
+  and answers success for **every real InnBucks customer**, so it proves the
+  number EXISTS, never that the caller holds it — registering on it would let
+  anyone name any customer's number and then spend their points, the exact thing
+  PENDING exists to prevent. It stays useful to the FE as an onboarding
+  pre-check (name, `pinSet`); it is simply never the proof. `probe-path` is
+  configurable, so `PartnerRegistrationProvisioningCheck` logs a boot ERROR if
+  it is ever pointed at a `/validate` endpoint.
+- **A 2xx is not automatically a yes.** The platform reports business failures
+  with HTTP 200 and a non-success `responseCode` (`"00"`/`"000"`/`0` succeed).
+  Reading a bare 2xx as proof would accept the very cross-customer refusal this
+  mode detects. Pinned by
+  `InnbucksSessionClientContractTest.verify_2xxWithFailureCode_isRejected`;
+  removing the code check fails exactly that test and nothing else.
+- **Rejected vs Unavailable is load-bearing.** 401/403/404 or a 2xx with a
+  failure code = the middleware answered and said no → opaque `401`. Connect
+  failure, 5xx, an unexpected 4xx, or a 2xx that is not a JSON object (the
+  EcoCash WAF-block-page lesson) = no answer → retryable
+  `503 REGISTRATION_UPSTREAM_UNAVAILABLE`. Neither ever registers.
+- **Normalise before probing.** The controller canonicalises through
+  `UserService.normalizePhone` and probes *that* value, so the spelling proved
+  is the spelling stored; the client strips the `+` for the platform's bare
+  msisdn format.
+- **Known limitation:** the collections contain an AGENT-role lookup
+  (`Get User Cards (Agent Lookup)`) that reads *other* customers. If an
+  agent-role token were ever used here, it could register numbers it does not
+  own. This mode is for ordinary customer tokens only.
+- **The safety of this mode rests on the middleware's binding.** If InnBucks
+  ever relaxes it, our proof silently weakens with no error on our side — which
+  is why `INNBUCKS_SESSION` is its own source value, revocable as a batch.
 - **Never add an activation path under `/loyalty/public/**`.** Those endpoints
   are unauthenticated; activation there would let anyone who guesses a phone
   number activate and then drain it, which is precisely what PENDING exists to
   prevent.
-- **The gateway route lives in `ticketing-system`** and is NOT yet added.
-  Until it is, `/loyalty/partner/**` falls through to the `/loyalty/**` catch-all
-  and rides the bearer-keyed (caller-controlled, fail-open) limiter instead of an
-  IP-keyed fail-safe one. Add `loyalty-partner-route` before
-  `loyalty-service-route`, pinned in `GatewayRouteTableTest`, before enabling
-  this on any host.
+- **The gateway route lives in `ticketing-system`** and IS added (ticketing
+  PR #543): `loyalty-partner-registration-route`, POST-only, IP-keyed fail-safe
+  limiter, ordered before `loyalty-service-route` and pinned in
+  `GatewayRouteTableTest`. In `innbucks` mode the callers are mobile clients on
+  customer IPs, which is exactly what an IP-keyed limiter is shaped for.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
 

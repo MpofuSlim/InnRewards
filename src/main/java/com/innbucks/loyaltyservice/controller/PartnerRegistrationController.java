@@ -39,7 +39,7 @@ import java.util.Map;
  * spend. This endpoint is the missing edge, callable from outside the cluster by
  * the party that actually performed the phone verification.
  *
- * <h2>Two auth modes, and why the default is the signed one</h2>
+ * <h2>Three auth modes, and why the default is the signed one</h2>
  * <ul>
  *   <li>{@code assertion} (default) — the caller sends a short-lived,
  *       phone-scoped token signed with a private key it alone holds. Loyalty
@@ -49,7 +49,22 @@ import java.util.Map;
  *       that cannot sign. Honest about its weakness: whoever holds the key can
  *       register ANY phone, so it is opt-in, never the default, and the key must
  *       never reach a mobile client.</li>
+ *   <li>{@code innbucks} — the customer's OWN InnBucks Client Service session is
+ *       the proof. The app sends its {@code X-Innbucks-User-Token} and the phone
+ *       it claims; loyalty asks the middleware to read THAT msisdn under THAT
+ *       token, and registers only if it answers. The one mode a mobile client
+ *       may call directly: it carries no credential of ours, and a stolen user
+ *       token can only register the phone it was stolen from.</li>
  * </ul>
+ *
+ * <h2>Why {@code innbucks} mode does not use the /validate endpoint</h2>
+ * {@code /auth/client-service/msisdn/{msisdn}/validate} is authorized by the
+ * APP's own credentials and answers success for EVERY real InnBucks customer,
+ * so it proves a number EXISTS, never that the caller holds it. Registering on
+ * it would let anyone name any customer's number and then spend their points —
+ * exactly what PENDING exists to prevent. It remains useful to the FE as an
+ * onboarding pre-check ("is this a customer, is their PIN set"); it is simply
+ * never the proof. See {@code InnbucksSessionClient} for the full reasoning.
  *
  * <h2>Fail-closed</h2>
  * Disabled (the default) answers 404 — indistinguishable from no such route.
@@ -68,6 +83,7 @@ public class PartnerRegistrationController {
 
     private final UserService userService;
     private final RegistrationAssertionVerifier verifier;
+    private final com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient;
     private final MemberActivityNotifier memberNotifier;
     private final LoyaltyMetrics metrics;
     private final boolean enabled;
@@ -77,6 +93,7 @@ public class PartnerRegistrationController {
     public PartnerRegistrationController(
             UserService userService,
             RegistrationAssertionVerifier verifier,
+            com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient,
             MemberActivityNotifier memberNotifier,
             LoyaltyMetrics metrics,
             @Value("${loyalty.registration.partner.enabled:false}") boolean enabled,
@@ -84,6 +101,7 @@ public class PartnerRegistrationController {
             @Value("${loyalty.registration.partner.key:}") String partnerKey) {
         this.userService = userService;
         this.verifier = verifier;
+        this.innbucksClient = innbucksClient;
         this.memberNotifier = memberNotifier;
         this.metrics = metrics;
         this.enabled = enabled;
@@ -92,15 +110,19 @@ public class PartnerRegistrationController {
     }
 
     @PostMapping("/registrations")
-    @Operation(summary = "(S2S) Record that a phone's owner has proven they hold it",
+    @Operation(summary = "Record that a phone's owner has proven they hold it",
             description = """
-                    Called by a trusted partner backend — the middleware fronting the customer app's \
-                    authentication — when a customer completes phone verification. Recording the proof \
-                    activates every loyalty projection of that phone, now and in future.
+                    Records the proof that activates every loyalty projection of a phone, now and in \
+                    future. Who calls it depends on the cell's auth mode: a trusted partner backend \
+                    (`assertion` / `key`), or the customer app itself (`innbucks` — it sends its own \
+                    `X-Innbucks-User-Token` plus the phone it claims, and loyalty registers only if \
+                    the InnBucks middleware lets that token read that number's account).
 
                     Idempotent and safe to call on every login: a repeat is a no-op that reports \
-                    `projectionsPromoted: 0`. In `assertion` mode the phone is taken ONLY from the \
-                    signed `sub` claim; there is no unsigned phone field.""")
+                    `projectionsPromoted: 0`. The body `phoneNumber` is read in `key` and `innbucks` \
+                    modes only — in `assertion` mode the phone comes solely from the signed `sub`. \
+                    In `innbucks` mode a claimed number is never believed on its own: it is the thing \
+                    being proved, so naming someone else's number is refused with a 401.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registration recorded (or already present)",
                     content = @Content(mediaType = "application/json",
@@ -157,18 +179,27 @@ public class PartnerRegistrationController {
                                       "message": "Partner registration is not enabled on this deployment not found",
                                       "data": null
                                     }"""))),
-            @ApiResponse(responseCode = "503", description = "REGISTRATION_UNCONFIGURED — enabled but no key material provisioned (half-provisioned cell)",
+            @ApiResponse(responseCode = "503", description = "REGISTRATION_UNCONFIGURED — enabled but not provisioned (half-provisioned cell); "
+                    + "or REGISTRATION_UPSTREAM_UNAVAILABLE — `innbucks` mode could not reach the middleware. RETRYABLE: nothing was registered and the claim was not refused.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = """
-                                    {
-                                      "code": "REGISTRATION_UNCONFIGURED",
-                                      "message": "Partner registration is enabled but no credential is configured.",
-                                      "data": null
-                                    }""")))
+                            examples = {
+                                    @ExampleObject(name = "Half-provisioned", value = """
+                                            {
+                                              "code": "REGISTRATION_UNCONFIGURED",
+                                              "message": "Partner registration is enabled but no credential is configured.",
+                                              "data": null
+                                            }"""),
+                                    @ExampleObject(name = "Middleware unreachable (retry)", value = """
+                                            {
+                                              "code": "REGISTRATION_UPSTREAM_UNAVAILABLE",
+                                              "message": "Registration could not be verified right now. Please try again.",
+                                              "data": null
+                                            }""")}))
     })
     public ResponseEntity<ApiResult<Map<String, Object>>> register(
             @RequestHeader(value = "X-Partner-Key", required = false) String presentedKey,
+            @RequestHeader(value = "X-Innbucks-User-Token", required = false) String innbucksUserToken,
             @RequestBody(required = false) PartnerRegistrationRequest body) {
 
         if (!enabled) {
@@ -180,7 +211,52 @@ public class PartnerRegistrationController {
         String jti = null;
         PhoneRegistration.Source source;
 
-        if ("key".equals(authMode)) {
+        if ("innbucks".equals(authMode)) {
+            // The caller CLAIMS a phone and proves it by holding a session the
+            // middleware will let read that phone's account. Unlike the other
+            // modes the phone does come from the body — and that is sound here
+            // precisely because it is the thing being proved: the probe asks
+            // "can this token reach THIS number?", so a caller who names
+            // someone else's number is refused rather than believed.
+            if (!innbucksClient.isConfigured()) {
+                metrics.incPartnerRegistrationRejected("unconfigured");
+                throw unconfigured();
+            }
+            if (body == null || body.phoneNumber() == null || body.phoneNumber().isBlank()) {
+                metrics.incPartnerRegistrationRejected("bad_phone");
+                throw LoyaltyException.badRequest("BAD_PHONE", "Please provide a phone number.");
+            }
+            // Normalise BEFORE the probe so the number we prove is character-
+            // identical to the number we register — proving one spelling and
+            // storing another would register something unproven.
+            String claimed = userService.normalizePhone(body.phoneNumber());
+            switch (innbucksClient.verifyOwnership(innbucksUserToken, claimed)) {
+                case com.innbucks.loyaltyservice.client.InnbucksSessionClient.Verified ignored -> {
+                    phone = claimed;
+                    source = PhoneRegistration.Source.INNBUCKS_SESSION;
+                }
+                case com.innbucks.loyaltyservice.client.InnbucksSessionClient.Rejected r -> {
+                    // Logged with the reason, answered without it — the caller
+                    // must not learn whether the number exists, whether their
+                    // token is dead, or which check failed.
+                    log.warn("InnBucks session registration rejected phone={} reason={}",
+                            MsisdnMasking.mask(claimed), r.reason());
+                    metrics.incPartnerRegistrationRejected("innbucks_rejected");
+                    throw unauthorized();
+                }
+                case com.innbucks.loyaltyservice.client.InnbucksSessionClient.Unavailable u -> {
+                    // FAIL CLOSED but retryably: no answer from the middleware is
+                    // not a verdict on the claim, so it must not be the opaque
+                    // 401 (the FE would tell the customer they were refused) and
+                    // must NEVER register.
+                    log.warn("InnBucks session registration upstream unavailable phone={} reason={}",
+                            MsisdnMasking.mask(claimed), u.reason());
+                    metrics.incPartnerRegistrationRejected("innbucks_unavailable");
+                    throw LoyaltyException.serviceUnavailable("REGISTRATION_UPSTREAM_UNAVAILABLE",
+                            "Registration could not be verified right now. Please try again.");
+                }
+            }
+        } else if ("key".equals(authMode)) {
             if (partnerKey == null || partnerKey.isBlank()) {
                 metrics.incPartnerRegistrationRejected("unconfigured");
                 throw unconfigured();
@@ -245,7 +321,7 @@ public class PartnerRegistrationController {
     public record PartnerRegistrationRequest(
             @Schema(description = "Signed registration assertion (compact JWS). Required in `assertion` mode.")
             String assertion,
-            @Schema(description = "E.164 phone. Read ONLY in `key` mode; ignored in `assertion` mode, where the phone comes from the signed `sub`.",
+            @Schema(description = "E.164 phone. Read in `key` mode, and in `innbucks` mode as the CLAIM to be proved against the caller's user token. Ignored in `assertion` mode, where the phone comes from the signed `sub`.",
                     example = "+263771234567")
             String phoneNumber,
             @Schema(description = "Opaque identifier for the account at the partner, stored for traceability.",

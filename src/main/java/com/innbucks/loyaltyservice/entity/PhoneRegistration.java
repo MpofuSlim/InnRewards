@@ -80,7 +80,12 @@ public class PhoneRegistration {
         /** A signed, phone-scoped assertion from the app's backend. */
         PARTNER_ASSERTION,
         /** The same endpoint in shared-key mode, for a caller that cannot sign. */
-        PARTNER_KEY
+        PARTNER_KEY,
+        /** The customer's own InnBucks Client Service session, proved by asking
+         *  the middleware to read the CLAIMED msisdn under the caller's user
+         *  token — it binds a token to its own msisdn, so an answer is the
+         *  ownership proof (V41). */
+        INNBUCKS_SESSION
     }
 
     /** Live = not revoked. A revoked row is history, never a grant. */

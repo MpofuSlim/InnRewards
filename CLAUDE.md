@@ -268,6 +268,43 @@ second authentication the whole mode exists to remove.
   false` means the phone was already proved, not that the app holds a live
   token; withholding one would strand a returning customer.
 
+### …and `GET /loyalty/users/me` turns that session into something spendable
+
+A phone-scoped session authenticates the caller but does not tell them **who
+they are in loyalty's own tables**, and the spend endpoints are addressed by
+account UUID: `POST /loyalty/transfer` takes a `@NotNull fromUserId`,
+`POST /loyalty/redeem` a `@NotNull userId`, and every tenant-scoped call needs
+an `X-Tenant-Id`. An app holding a phone and a token has none of those, so the
+authenticated surface was documented but **not actually callable** — which is
+why the customer app was still on `/loyalty/public/**`. This endpoint closes
+that, returning one row per tenant the caller has transacted with:
+`{ userId, tenantId, merchantId, status }`.
+
+- **It needs no ownership check, and that is a property of its shape, not an
+  exemption.** The phone comes from the token; there is no path variable, body
+  or filter. With no caller-supplied input there is nothing to bind against and
+  nothing to point at another customer, which is what
+  `MeAccountsTest.lookupUsesTheTokenPhoneOnly` pins. Do **not** add a
+  `?phoneNumber=` or `/{id}` variant later without the ownership check the
+  CUSTOMER rule above demands — that would turn a safe self-lookup into a
+  directory of everyone's account ids.
+- **PENDING rows are RETURNED, not filtered out.** The status is the reason a
+  redeem gets refused, so hiding the row leaves the app unable to explain the
+  refusal — it would show "no accounts" to a customer who plainly has one.
+  Report the status; let the client decide what to say.
+- **An empty list is a normal 200.** A customer who proved their phone but has
+  never transacted has no projection anywhere. Points and vouchers are still
+  readable via `/loyalty/users/me/wallet`, which is keyed by phone, not by
+  projection — the two endpoints answer different questions and an empty
+  `accounts` does not imply an empty wallet.
+- A token with no `phoneNumber` claim (any staff token) is a `400
+  NO_PHONE_CLAIM` rather than an empty list, so a mis-aimed caller is told the
+  endpoint isn't for them instead of being shown a plausible "you have nothing".
+- No gateway change was needed: the existing `loyalty-service-route`
+  (`Path=/loyalty/**`) already covers it. There is no mapping conflict with
+  `/loyalty/users/{userId}/unblock` (POST) or `/loyalty/users/{id}/transactions`
+  (a deeper path).
+
 ### `innbucks` mode — the ONLY mode a mobile client may call (V42)
 
 The app authenticates its customers against the InnBucks Client Service API

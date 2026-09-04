@@ -293,6 +293,13 @@ public class UserService {
                     "This account is not blocked (status " + u.getStatus() + ").");
         }
         u.setStatus(LoyaltyUser.Status.ACTIVE);
+        // Clear the reason too. FraudService blocks any row that is not already
+        // BLOCKED — including one sitting at INACTIVE/OPERATOR — so a hold can be
+        // stamped over a deactivation, and lifting it without clearing would
+        // leave an ACTIVE row still claiming an operator deactivated it. Nothing
+        // reads statusReason on an ACTIVE row today, which is exactly why a stale
+        // one would survive long enough to mislead whoever reads it first.
+        u.setStatusReason(null);
         return u;
     }
 

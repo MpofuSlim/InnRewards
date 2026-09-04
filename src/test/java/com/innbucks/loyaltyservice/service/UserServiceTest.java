@@ -406,6 +406,39 @@ class UserServiceTest {
     }
 
     @Test
+    void unblock_clearsTheStatusReason_soAnActiveRowMakesNoStaleClaim() {
+        // Only visible where the two changes meet. FraudService blocks any row
+        // that is not already BLOCKED — including one sitting at
+        // INACTIVE/OPERATOR — so a hold can be stamped over a deactivation.
+        // Lifting it without clearing the reason would leave an ACTIVE row still
+        // claiming an operator deactivated it. Nothing reads statusReason on an
+        // ACTIVE row, which is precisely why a stale one would survive.
+        LoyaltyUser u = withStatus(LoyaltyUser.Status.BLOCKED);
+        u.setStatusReason(LoyaltyUser.StatusReason.OPERATOR);
+        UUID id = u.getId();
+        when(users.findById(id)).thenReturn(Optional.of(u));
+
+        service.unblock(TENANT, id);
+
+        assertThat(u.getStatus()).isEqualTo(LoyaltyUser.Status.ACTIVE);
+        assertThat(u.getStatusReason()).isNull();
+    }
+
+    @Test
+    void unblock_refusesAnAccountThatIsNotBlocked() {
+        // Must not become a general make-it-active lever: PENDING is unproven
+        // and INACTIVE was aged out or deactivated, and neither is a fraud hold.
+        LoyaltyUser u = withStatus(LoyaltyUser.Status.PENDING);
+        UUID id = u.getId();
+        when(users.findById(id)).thenReturn(Optional.of(u));
+
+        assertThatThrownBy(() -> service.unblock(TENANT, id))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("USER_NOT_BLOCKED"));
+        assertThat(u.getStatus()).isEqualTo(LoyaltyUser.Status.PENDING);
+    }
+
+    @Test
     void deactivate_stampsOperator_soRegistrationCannotUndoIt() {
         LoyaltyUser u = withStatus(LoyaltyUser.Status.ACTIVE);
         UUID id = u.getId();

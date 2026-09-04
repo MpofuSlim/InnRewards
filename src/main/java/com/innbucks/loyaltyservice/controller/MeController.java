@@ -141,4 +141,104 @@ public class MeController {
     }
 
     public record MeWalletResponse(String phoneNumber, BigDecimal totalPoints, long totalVouchers) {}
+
+    @GetMapping
+    @PreAuthorize("isAuthenticated()")
+    @Operation(
+            summary = "Get the caller's own loyalty accounts",
+            description = """
+                    Returns every loyalty account belonging to the caller's phone, one per tenant they \
+                    have transacted with.
+
+                    **This is what makes the authenticated spend endpoints callable.** \
+                    `POST /loyalty/transfer` needs a `fromUserId` and `POST /loyalty/redeem` a `userId` — \
+                    both loyalty account UUIDs — and every tenant-scoped call needs an `X-Tenant-Id`. \
+                    A customer app holds a phone number and a token, not either of those. This one call \
+                    supplies both.
+
+                    Resolved entirely from the JWT's `phoneNumber` claim, so it can only ever return the \
+                    caller's own rows — there is no path variable or filter to point at somebody else.
+
+                    An empty `accounts` list is a normal answer: the customer has proved their phone but \
+                    has not yet transacted anywhere, so no projection exists. Points and vouchers are \
+                    still readable via `/loyalty/users/me/wallet`."""
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Accounts retrieved",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Transacted with two tenants", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Accounts retrieved",
+                                              "data": {
+                                                "phoneNumber": "+263771234567",
+                                                "accounts": [
+                                                  {
+                                                    "userId": "11111111-2222-3333-4444-555555555555",
+                                                    "tenantId": "0a571c1c-7c75-4000-a000-000000000001",
+                                                    "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                                    "status": "ACTIVE"
+                                                  },
+                                                  {
+                                                    "userId": "99999999-8888-7777-6666-555555555555",
+                                                    "tenantId": "0a571c1c-7c75-4000-a000-000000000002",
+                                                    "merchantId": null,
+                                                    "status": "ACTIVE"
+                                                  }
+                                                ]
+                                              }
+                                            }"""),
+                                    @ExampleObject(name = "Registered but not yet transacted", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Accounts retrieved",
+                                              "data": {
+                                                "phoneNumber": "+263771234567",
+                                                "accounts": []
+                                              }
+                                            }""")})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "NO_PHONE_CLAIM — the JWT carries no phoneNumber",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "NO_PHONE_CLAIM",
+                                      "message": "/me endpoints require a JWT with a phoneNumber claim",
+                                      "data": null
+                                    }""")))
+    })
+    public ResponseEntity<ApiResult<MeAccountsResponse>> accounts() {
+        // The caller's identity comes from the token, never from the request.
+        // That is the whole reason this endpoint can be `isAuthenticated()`
+        // rather than carrying an ownership check: there is no input to bind
+        // against, so there is nothing to point at another customer.
+        String phone = CallerDetails.currentPhoneNumber();
+        if (phone == null || phone.isBlank()) {
+            throw LoyaltyException.badRequest("NO_PHONE_CLAIM",
+                    "/me endpoints require a JWT with a phoneNumber claim");
+        }
+
+        List<MeAccount> accounts = users.findByPhoneNumber(phone).stream()
+                .map(u -> new MeAccount(u.getId(), u.getTenantId(), u.getMerchantId(),
+                        u.getStatus() == null ? null : u.getStatus().name()))
+                .toList();
+
+        // Deliberately NOT filtered to ACTIVE. A PENDING row is exactly the one
+        // a customer needs to see explained ("you can earn but not spend yet"),
+        // and hiding it would leave the app unable to say why a redeem was
+        // refused. The status is reported so the client can decide.
+        return ResponseEntity.ok(ApiResult.ok("Accounts retrieved",
+                new MeAccountsResponse(phone, accounts)));
+    }
+
+    /**
+     * One loyalty account. {@code userId} is what the spend endpoints want as
+     * {@code fromUserId} / {@code userId}; {@code tenantId} is what belongs in
+     * the {@code X-Tenant-Id} header on the same call.
+     */
+    public record MeAccount(UUID userId, UUID tenantId, UUID merchantId, String status) {}
+
+    public record MeAccountsResponse(String phoneNumber, List<MeAccount> accounts) {}
 }

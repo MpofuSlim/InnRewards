@@ -56,6 +56,7 @@ class PartnerRegistrationControllerVeenguModeTest {
     private UserService userService;
     private VeenguIdentityClient veenguClient;
     private MemberActivityNotifier notifier;
+    private com.innbucks.loyaltyservice.security.LoyaltySessionIssuer sessionIssuer;
     private PartnerRegistrationController controller;
 
     @BeforeEach
@@ -63,6 +64,9 @@ class PartnerRegistrationControllerVeenguModeTest {
         userService = mock(UserService.class);
         veenguClient = mock(VeenguIdentityClient.class);
         notifier = mock(MemberActivityNotifier.class);
+        sessionIssuer = mock(com.innbucks.loyaltyservice.security.LoyaltySessionIssuer.class);
+        when(sessionIssuer.issue(anyString())).thenReturn("minted.session.token");
+        when(sessionIssuer.ttlSeconds()).thenReturn(43200L);
         controller = controller(true);
         when(veenguClient.isConfigured()).thenReturn(true);
     }
@@ -72,7 +76,7 @@ class PartnerRegistrationControllerVeenguModeTest {
                 userService, mock(RegistrationAssertionVerifier.class), veenguClient,
                 // Wired but unused in veengu mode.
                 mock(com.innbucks.loyaltyservice.client.InnbucksSessionClient.class),
-                notifier, mock(LoyaltyMetrics.class),
+                sessionIssuer, notifier, mock(LoyaltyMetrics.class),
                 enabled, "veengu", "");
     }
 

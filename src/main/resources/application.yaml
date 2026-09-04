@@ -102,6 +102,16 @@ loyalty:
     # customers who eventually register. Raise it (or set it very high) while a
     # registration integration is still being rolled out.
     ttl-days: ${LOYALTY_PENDING_TTL_DAYS:90}
+  session:
+    # Lifetime of the loyalty session token handed back by
+    # POST /loyalty/partner/registrations in the SELF-SERVICE modes (innbucks,
+    # veengu) — the modes whose caller is the customer's own device. Matches
+    # user-service's OTP session so the app sees one lifetime either way.
+    #
+    # This TTL IS the revocation story: the token carries no userId, so the
+    # fleet's tokenVersion denylist (keyed by user UUID) cannot reach it.
+    # Shorten to reduce the value of a stolen session; lengthen deliberately.
+    ttl-seconds: ${LOYALTY_SESSION_TTL_SECONDS:43200}
   registration:
     partner:
       # The channel by which a trusted partner backend tells loyalty that a

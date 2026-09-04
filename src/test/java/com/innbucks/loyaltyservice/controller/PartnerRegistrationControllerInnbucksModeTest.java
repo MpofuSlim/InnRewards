@@ -55,6 +55,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
     private UserService userService;
     private InnbucksSessionClient innbucksClient;
     private MemberActivityNotifier notifier;
+    private com.innbucks.loyaltyservice.security.LoyaltySessionIssuer sessionIssuer;
     private PartnerRegistrationController controller;
 
     @BeforeEach
@@ -62,6 +63,9 @@ class PartnerRegistrationControllerInnbucksModeTest {
         userService = mock(UserService.class);
         innbucksClient = mock(InnbucksSessionClient.class);
         notifier = mock(MemberActivityNotifier.class);
+        sessionIssuer = mock(com.innbucks.loyaltyservice.security.LoyaltySessionIssuer.class);
+        when(sessionIssuer.issue(anyString())).thenReturn("minted.session.token");
+        when(sessionIssuer.ttlSeconds()).thenReturn(43200L);
         controller = controller(true);
         when(innbucksClient.isConfigured()).thenReturn(true);
         // The service canonicalises; the controller must use that value for BOTH
@@ -76,7 +80,7 @@ class PartnerRegistrationControllerInnbucksModeTest {
                 // The veengu client is wired but must never be touched in this
                 // mode — a strict mock would fail the moment it were.
                 mock(com.innbucks.loyaltyservice.client.VeenguIdentityClient.class),
-                innbucksClient, notifier, mock(LoyaltyMetrics.class),
+                innbucksClient, sessionIssuer, notifier, mock(LoyaltyMetrics.class),
                 enabled, "innbucks", "");
     }
 
@@ -100,8 +104,34 @@ class PartnerRegistrationControllerInnbucksModeTest {
         assertThat(response.getBody().getData())
                 .containsEntry("phoneNumber", E164)
                 .containsEntry("newlyRegistered", true)
-                .containsEntry("projectionsPromoted", 2);
+                .containsEntry("projectionsPromoted", 2)
+                // The session comes back with the registration: this mode's
+                // caller IS the customer's device, and without the token they
+                // would have had to receive an SMS to spend a phone they just
+                // proved — the second authentication this mode exists to remove.
+                .containsEntry("loyaltyToken", "minted.session.token")
+                .containsEntry("expiresInSeconds", 43200L);
+        // Scoped to the PROVED phone, never the raw body value.
+        verify(sessionIssuer).issue(E164);
         verify(notifier).notifyPointsUnlocked(E164);
+    }
+
+    @Test
+    @DisplayName("a repeat registration still returns a fresh session")
+    void repeat_stillIssuesASession() {
+        // The app calls this on every login. `newlyRegistered: false` means the
+        // phone was already proved — it does NOT mean the app has a live token,
+        // so withholding one here would strand a returning customer.
+        when(innbucksClient.verifyOwnership(USER_TOKEN, E164))
+                .thenReturn(new InnbucksSessionClient.Verified("000"));
+        when(userService.registerPhone(anyString(), any(), any(), any(), any()))
+                .thenReturn(new UserService.RegistrationResult(false, 0, false));
+
+        var response = controller.register(null, null, USER_TOKEN, body(RAW_PHONE));
+
+        assertThat(response.getBody().getData())
+                .containsEntry("newlyRegistered", false)
+                .containsEntry("loyaltyToken", "minted.session.token");
     }
 
     @Test

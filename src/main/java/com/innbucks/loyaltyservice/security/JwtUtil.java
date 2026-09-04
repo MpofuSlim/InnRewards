@@ -95,6 +95,55 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * Mints a roles-empty, phone-scoped customer session — the ONLY token this
+     * service ever creates. Everything else here verifies.
+     *
+     * <h2>Why loyalty mints at all</h2>
+     * The partner registration endpoint proves a phone from the caller's own
+     * InnBucks session. Having proved it, the natural thing to hand back is a
+     * session for the endpoints that proof unlocks. Routing that through
+     * user-service would mean a new internal endpoint, a network hop on the
+     * registration path, and a failure mode where the phone is registered but
+     * the token mint fails — for a token this service is the only consumer of.
+     *
+     * <h2>Why that is not a new power</h2>
+     * loyalty already holds the shared HS256 {@code jwt.secret} (it must, to
+     * verify), so this adds a use, not a capability. What bounds it is the
+     * SHAPE: an empty roles list and a single scope marker. Every other service
+     * in the fleet gates customer endpoints on {@code hasRole('CUSTOMER')},
+     * which a roles-empty token fails, so this is inert everywhere but here.
+     *
+     * <p><b>The empty roles list is the safety property.</b> Minting with
+     * {@code roles: [CUSTOMER]} would turn a phone-ownership proof into a
+     * fleet-wide passwordless login — booking, payment, event and seat would all
+     * accept it. Never add roles here.
+     *
+     * <p>Claims are deliberately minimal and mirror user-service's
+     * {@code generateScopedPhoneToken} exactly, because {@code JwtFilter} must
+     * treat both mints identically: no tier, no verified, and above all no
+     * {@code userId} — an ownership proof of a phone is not an identity in
+     * anyone's user table, and loyalty's checks compare the phone.
+     *
+     * @param phoneNumber the E.164 phone just PROVED — never one a caller
+     *                    merely supplied alongside the proof.
+     * @param scope       the {@code services} marker {@code JwtFilter} accepts.
+     */
+    public String generateLoyaltySessionToken(String phoneNumber, String scope, long ttlMillis) {
+        return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(phoneNumber)
+                .claim("roles", List.of())
+                .claim("services", List.of(scope))
+                .claim("phoneNumber", phoneNumber)
+                .issuer(TOKEN_ISSUER)
+                .audience().add(TOKEN_AUDIENCE).and()
+                .issuedAt(new java.util.Date())
+                .expiration(new java.util.Date(System.currentTimeMillis() + ttlMillis))
+                .signWith(getSigningKey())
+                .compact();
+    }
+
     public String extractEmail(String token) {
         return getClaims(token).getSubject();
     }

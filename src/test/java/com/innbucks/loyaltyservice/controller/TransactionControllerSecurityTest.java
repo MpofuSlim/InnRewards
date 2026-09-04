@@ -131,14 +131,50 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
     void admin_who_is_not_member_of_tenant_returns_403() throws Exception {
         // /transfer is one of the endpoints that goes through tenantContext.requireTenant(),
         // which is where the membership check actually runs.
+        //
+        // The caller here must be STAFF. This case used to authenticate as
+        // CUSTOMER despite its name, and passed only because membership refused
+        // customers outright — see the companion test below for why that is no
+        // longer the behaviour. A MERCHANT_ADMIN is what the name always meant
+        // and is still walled at a tenant it has no row in.
         UUID otherTenant = newTenant("txn-cross");
-        String stranger = jwt("stranger@test.local", "CUSTOMER");
+        String stranger = jwt("stranger@test.local", "MERCHANT_ADMIN");
         mockMvc.perform(post("/loyalty/transfer")
                         .header("Authorization", bearer(stranger))
                         .header("X-Tenant-Id", otherTenant.toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_TRANSFER_BODY))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void customer_who_is_not_member_of_tenant_clears_the_membership_gate() throws Exception {
+        // The counterpart to the case above, and the behaviour change itself: a
+        // plain customer no longer needs a tenant_members row, because nothing
+        // could ever create one for them (no POST /{id}/members exists; the two
+        // writers attach a tenant's creator and its owner email). Membership was
+        // a permanent wall for customers, not a gate.
+        //
+        // This asserts only that the request gets PAST TenantContext and into
+        // the service with the named tenant. What stops a customer moving
+        // someone else's points is TransferService.users.requireCallerOwns — the
+        // strict variant with no admin bypass — pinned by TransferAuthzTest
+        // (directTransferEnforcesStrictOwnership), which exercises the real
+        // service rather than the mock stubbed here.
+        UUID otherTenant = newTenant("txn-cust-cross");
+        when(transferService.transfer(any(), any())).thenReturn(new java.math.BigDecimal("750.00"));
+
+        String customer = jwt("stranger@test.local", "CUSTOMER");
+        mockMvc.perform(post("/loyalty/transfer")
+                        .header("Authorization", bearer(customer))
+                        .header("X-Tenant-Id", otherTenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_TRANSFER_BODY))
+                .andExpect(status().isOk());
+
+        // The tenant the customer named is the tenant the service acts in.
+        org.mockito.Mockito.verify(transferService)
+                .transfer(org.mockito.ArgumentMatchers.eq(otherTenant), any());
     }
 
     // GET /users/{id}/transactions — IDOR / cross-customer leak guards.

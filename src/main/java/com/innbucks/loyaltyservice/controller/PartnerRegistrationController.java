@@ -94,6 +94,7 @@ public class PartnerRegistrationController {
     private final RegistrationAssertionVerifier verifier;
     private final com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient;
     private final com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient;
+    private final com.innbucks.loyaltyservice.security.LoyaltySessionIssuer sessionIssuer;
     private final MemberActivityNotifier memberNotifier;
     private final LoyaltyMetrics metrics;
     private final boolean enabled;
@@ -105,6 +106,7 @@ public class PartnerRegistrationController {
             RegistrationAssertionVerifier verifier,
             com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient,
             com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient,
+            com.innbucks.loyaltyservice.security.LoyaltySessionIssuer sessionIssuer,
             MemberActivityNotifier memberNotifier,
             LoyaltyMetrics metrics,
             @Value("${loyalty.registration.partner.enabled:false}") boolean enabled,
@@ -114,6 +116,7 @@ public class PartnerRegistrationController {
         this.verifier = verifier;
         this.veenguClient = veenguClient;
         this.innbucksClient = innbucksClient;
+        this.sessionIssuer = sessionIssuer;
         this.memberNotifier = memberNotifier;
         this.metrics = metrics;
         this.enabled = enabled;
@@ -142,7 +145,7 @@ public class PartnerRegistrationController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
-                                    @ExampleObject(name = "First registration", value = """
+                                    @ExampleObject(name = "First registration (self-service mode)", value = """
                                             {
                                               "code": "200 OK",
                                               "message": "Phone registration recorded",
@@ -151,7 +154,9 @@ public class PartnerRegistrationController {
                                                 "registered": true,
                                                 "newlyRegistered": true,
                                                 "projectionsPromoted": 2,
-                                                "replay": false
+                                                "replay": false,
+                                                "loyaltyToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3In0.sig",
+                                                "expiresInSeconds": 43200
                                               }
                                             }"""),
                                     @ExampleObject(name = "Repeat login (no-op)", value = """
@@ -357,6 +362,26 @@ public class PartnerRegistrationController {
         data.put("newlyRegistered", result.newlyRegistered());
         data.put("projectionsPromoted", result.projectionsPromoted());
         data.put("replay", result.replay());
+
+        // A session, but ONLY where the caller is the customer's own device.
+        //
+        // In `innbucks` and `veengu` the proof IS the customer's own live
+        // session with their bank, so handing back a loyalty session simply
+        // continues what they already established — and without it a customer
+        // who just proved their phone would still have to receive an SMS before
+        // they could spend, which is the second authentication this whole mode
+        // exists to remove.
+        //
+        // In `assertion` and `key` the caller is a partner's BACKEND proving a
+        // phone on someone's behalf. Giving that backend a live customer
+        // session would let it act AS every customer it registers — a different
+        // and much larger power than the one it was granted. Registering for
+        // someone is legitimate; becoming them is not. So the token is withheld,
+        // and those callers get exactly the response they got before.
+        if (selfServiceMode()) {
+            data.put("loyaltyToken", sessionIssuer.issue(phone));
+            data.put("expiresInSeconds", sessionIssuer.ttlSeconds());
+        }
         return ResponseEntity.ok(ApiResult.ok("Phone registration recorded", data));
     }
 
@@ -384,6 +409,20 @@ public class PartnerRegistrationController {
         return MessageDigest.isEqual(
                 partnerKey.getBytes(StandardCharsets.UTF_8),
                 presented.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * True in the modes whose caller is the CUSTOMER'S OWN DEVICE, proving a
+     * phone with a session they already hold — the only callers that should be
+     * handed a loyalty session in return.
+     *
+     * <p>An allow-list, not a deny-list of today's partner modes: a mode added
+     * later gets no session until someone decides it should, which is the safe
+     * direction to fail. Withholding a token only costs that caller an extra
+     * step; issuing one to a partner backend hands it every customer it touches.
+     */
+    private boolean selfServiceMode() {
+        return "innbucks".equals(authMode) || "veengu".equals(authMode);
     }
 
     private static LoyaltyException unauthorized() {

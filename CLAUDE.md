@@ -226,6 +226,48 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   is not what the app holds. The mode is left in place because V41 is applied
   history and an idle mode costs nothing; `innbucks` is what the mobile app uses.
 
+### Registration hands back a SESSION — but only to the customer's own device
+
+A proof is worth nothing to the app if it cannot then act on it. The
+self-service modes therefore return `loyaltyToken` + `expiresInSeconds`
+alongside the registration, minted by `LoyaltySessionIssuer` and accepted by
+`JwtFilter` — so one call both registers the phone and yields the bearer for
+loyalty's authenticated transfer/redeem endpoints. Without it a customer who
+had just proved their phone still needed an SMS to spend it, which is the
+second authentication the whole mode exists to remove.
+
+- **`innbucks` / `veengu` get a session; `assertion` / `key` NEVER do**, and
+  `selfServiceMode()` is an allow-list so a mode added later fails closed. The
+  partner modes' caller is a BACKEND proving a phone on someone's behalf:
+  handing it a live customer session would let it act AS every customer it
+  registers. Registering for someone is a legitimate partner power; becoming
+  them is not. Widening this would be a SILENT escalation — nothing errors, the
+  partner simply starts receiving tokens that spend other people's points —
+  which is why `PartnerRegistrationSessionScopingTest` pins both directions,
+  including that the `key` response shape is byte-for-byte what it was before
+  sessions existed.
+- **The token's safety is its SHAPE: an empty roles list.** Every other service
+  gates customer endpoints on `hasRole('CUSTOMER')`, so a roles-empty token is
+  inert fleet-wide and loyalty alone grants the role for it. Minting with
+  `roles: [CUSTOMER]` would turn a phone proof into a passwordless login for the
+  whole platform. `LoyaltySessionIssuerTest` pins the empty list first.
+- **loyalty minting is a new USE, not a new capability** — it already holds the
+  shared HS256 `jwt.secret` to verify. Routing this through user-service would
+  add an internal endpoint, a network hop on the registration path, and a state
+  where the phone is registered but the token mint failed, for a token loyalty
+  is the only consumer of.
+- **Two scope markers, both accepted**: user-service's `loyalty-otp` and this
+  service's `loyalty-session`. They grant the same role and differ only in
+  recording HOW the phone was proved, so an incident on one proof channel can be
+  scoped to the tokens it minted. `loyalty-otp` is cross-repo and drift-prone;
+  `loyalty-session` is read straight from `LoyaltySessionIssuer`.
+- **The TTL IS the revocation story** (`LOYALTY_SESSION_TTL_SECONDS`, 12h to
+  match user-service). No `userId` claim means the fleet's tokenVersion denylist
+  — keyed by user UUID — cannot reach these tokens. There is no refresh path.
+- **A repeat registration still returns a fresh session.** `newlyRegistered:
+  false` means the phone was already proved, not that the app holds a live
+  token; withholding one would strand a returning customer.
+
 ### `innbucks` mode — the ONLY mode a mobile client may call (V42)
 
 The app authenticates its customers against the InnBucks Client Service API

@@ -56,6 +56,20 @@ public class JwtFilter extends OncePerRequestFilter {
      */
     static final String LOYALTY_OTP_SCOPE = "loyalty-otp";
 
+    /**
+     * The second accepted marker: a session THIS service minted, after a proof
+     * the customer performed themselves (the InnBucks / Veengu registration
+     * modes). Read straight from {@link LoyaltySessionIssuer}, so unlike the
+     * constant above there is no cross-repo drift to worry about.
+     *
+     * <p>Two markers rather than one reused value because they record different
+     * proofs: an SMS code, versus a session with the customer's own bank. Both
+     * mean exactly "phone-scoped, loyalty-only", which is why both grant the
+     * same role — but if one channel ever has to be revoked in an incident, the
+     * tokens it minted are identifiable.
+     */
+    static final String LOYALTY_SESSION_SCOPE = LoyaltySessionIssuer.LOYALTY_SESSION_SCOPE;
+
     private static final List<String> EXCLUDED_PATHS = List.of(
             "/swagger-ui",
             "/v3/api-docs",
@@ -212,8 +226,17 @@ public class JwtFilter extends OncePerRequestFilter {
             //                       the caller's phone. Granting the role
             //                       without one would produce a customer who
             //                       owns nothing and matches nothing.
+            //
+            // EITHER marker qualifies: user-service's OTP-proved session, or a
+            // session this service minted after the customer proved the phone
+            // with their own InnBucks login. The proofs differ; what the token
+            // GRANTS is identical, so widening this to an OR grants nothing new
+            // — the same role, on the same three conditions, to a token of the
+            // same shape.
+            boolean phoneScopedSession =
+                    services.contains(LOYALTY_OTP_SCOPE) || services.contains(LOYALTY_SESSION_SCOPE);
             if (roles.isEmpty()
-                    && services.contains(LOYALTY_OTP_SCOPE)
+                    && phoneScopedSession
                     && phoneNumber != null && !phoneNumber.isBlank()) {
                 authorities.add(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
             }

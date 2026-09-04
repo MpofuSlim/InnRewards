@@ -270,6 +270,32 @@ public class UserService {
         return u;
     }
 
+    /**
+     * Lifts a fraud hold, returning the account to ACTIVE.
+     *
+     * <p>Until this existed, nothing in the service ever transitioned a row OUT
+     * of BLOCKED — {@code FraudService}'s velocity rule could set it and there
+     * was no way back except hand-written SQL against production. That was
+     * survivable only while the block was believed to be self-inflicted; it was
+     * not (any caller could block any account by naming its id), so a remedy is
+     * part of fixing that, not a separate feature.
+     *
+     * <p>Refuses anything that is not actually blocked, rather than silently
+     * flipping it to ACTIVE: a PENDING account is unproven and an INACTIVE one
+     * was aged out or deactivated, and neither is a fraud hold to lift. Turning
+     * this into a general "make the account active" lever is exactly how it
+     * would end up used to bypass those.
+     */
+    public LoyaltyUser unblock(UUID tenantId, UUID userId) {
+        LoyaltyUser u = require(tenantId, userId);
+        if (u.getStatus() != LoyaltyUser.Status.BLOCKED) {
+            throw LoyaltyException.conflict("USER_NOT_BLOCKED",
+                    "This account is not blocked (status " + u.getStatus() + ").");
+        }
+        u.setStatus(LoyaltyUser.Status.ACTIVE);
+        return u;
+    }
+
     public LoyaltyUser require(UUID tenantId, UUID userId) {
         LoyaltyUser u = users.findById(userId)
                 .orElseThrow(() -> LoyaltyException.notFound("user"));

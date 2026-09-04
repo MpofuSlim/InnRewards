@@ -94,6 +94,35 @@ bodies using the project's `ApiResult` envelope (`{ "code", "message", "data" }`
 (400/401/403/404) with real messages thrown by the service code. `MerchantController`
 and `ShopController` are the canonical shape.
 
+## The fraud auto-block may only ever act on the CALLER
+
+`FraudService.record` writes an evidence row and, past the velocity threshold,
+can set `LoyaltyUser.status = BLOCKED`. Two rules, both learned the hard way:
+
+- **The block subject is resolved from the security context, never from a
+  parameter.** It used to block the `userId` argument, which on the voucher
+  path is `req.userId()` — a raw body field passed in on the FIRST branch of
+  `VoucherService.doRedeem`, before the voucher is known to exist and before any
+  ownership check. Five malformed redeems naming a victim's UUID blocked that
+  victim, in any tenant. Only a plain `ROLE_CUSTOMER` caller whose `userId` claim
+  resolves to a row matching their `phoneNumber` claim can be blocked, and only
+  ever themselves.
+- **`fraud_attempts.user_id` is a CLAIM, not an attribution.** Several callers
+  store an unvalidated body field there, so the row may name someone with no
+  connection to the attempt. Never block an account on the strength of one.
+
+Consequences worth knowing: a **staff-operated till and every S2S path now block
+nobody** — the velocity signal is keyed by device, and at a till the device is
+the shop's while the person presenting bad codes is a customer, so the old
+behaviour let any customer disable a cashier. Attempts are still recorded and
+still counted (`fraud_attempts`, `loyalty.fraud.rejected`); only the automatic
+punishment is withheld where it cannot be aimed.
+
+`POST /loyalty/users/{userId}/unblock` (SUPER_ADMIN / MERCHANT_ADMIN,
+tenant-scoped) is the **only** way out of BLOCKED — nothing else in the service
+clears it. It refuses a non-BLOCKED account rather than becoming a general
+make-it-active lever that bypasses PENDING/INACTIVE.
+
 ## Timestamps — UTC
 
 Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass

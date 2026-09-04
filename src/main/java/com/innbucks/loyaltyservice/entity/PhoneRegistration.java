@@ -83,8 +83,16 @@ public class PhoneRegistration {
         PARTNER_KEY,
         /** The customer's own Veengu session, validated server-side against
          *  Veengu's GET /auth/identity — the phone comes from Veengu's answer,
-         *  never from the caller (V41). */
-        VEENGU_SESSION
+         *  never from the caller (V41). Superseded in practice by
+         *  {@link #INNBUCKS_SESSION}: the app authenticates against the InnBucks
+         *  Client Service API, not Veengu directly. Kept because V41 is applied
+         *  history and an unused value costs nothing. */
+        VEENGU_SESSION,
+        /** The customer's own InnBucks Client Service session, proved by asking
+         *  the middleware to read the CLAIMED msisdn under the caller's user
+         *  token — it binds a token to its own msisdn, so an answer is the
+         *  ownership proof (V42). This is the mode the mobile app uses. */
+        INNBUCKS_SESSION
     }
 
     /** Live = not revoked. A revoked row is history, never a grant. */

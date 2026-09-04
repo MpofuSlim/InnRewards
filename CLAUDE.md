@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V41**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V42**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -212,34 +212,72 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   whoever decides that population is worth registering anyway. Existing ACTIVE
   rows keep spending — the ACTIVE branch is untouched.
 - **The partner endpoint is off by default** (`404`), and enabled-but-unprovisioned
-  is `503` plus a boot HALF-PROVISIONED error. Three auth modes:
+  is `503` plus a boot HALF-PROVISIONED error. Four auth modes:
   `assertion` (default — RS/ES-signed, phone in the signed `sub`, bounded TTL,
   monotonic replay guard; loyalty holds only the public key), `key`
-  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign, and
-  `veengu` (V41 — the FE forwards the customer's own Veengu access token in
-  `X-Veengu-Access-Token`; `VeenguIdentityClient` validates it against Veengu's
-  `GET /auth/identity` with server-configured `v-tenant`, and the phone
-  registered is the one **Veengu's answer** names, never a caller-supplied one).
-  **Shared-key mode means whoever holds the key can register ANY phone** — it
-  logs a boot WARN, is guarded by `ProductionSecretsGuard`, and must never reach
-  a mobile client. `veengu` is the ONE mode a mobile client may call directly:
-  it holds no credential, and a stolen session token can only register the phone
-  of the account it was stolen from. Its upstream mapping is load-bearing:
-  Veengu-unreachable (5xx, connect failure, a 2xx that is not a JSON object —
-  the WAF-block-page lesson from EcoCash) answers a retryable `503
-  REGISTRATION_UPSTREAM_UNAVAILABLE`, never the opaque 401 and never a
-  registration; only 401/403/404 from Veengu (positive refusals) map to the 401.
-  Pinned by `VeenguIdentityClientContractTest` and
-  `PartnerRegistrationControllerVeenguModeTest`.
+  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign,
+  `veengu` (V41 — validates the customer's Veengu access token against Veengu's
+  `GET /auth/identity`), and `innbucks` (V42). **Shared-key mode means whoever
+  holds the key can register ANY phone** — it logs a boot WARN, is guarded by
+  `ProductionSecretsGuard`, and must never reach a mobile client.
+- **`veengu` shipped first and is SUPERSEDED — do not build on it.** The
+  partner's own Postman collections showed the app authenticates against the
+  InnBucks **Client Service** API, not Veengu directly, so a Veengu access token
+  is not what the app holds. The mode is left in place because V41 is applied
+  history and an idle mode costs nothing; `innbucks` is what the mobile app uses.
+
+### `innbucks` mode — the ONLY mode a mobile client may call (V42)
+
+The app authenticates its customers against the InnBucks Client Service API
+(`POST /auth/client-service/user/login`, username + PIN block → a user token),
+not against our fleet. That token is a possession proof we cannot read — the
+API exposes **no identity endpoint** (confirmed by reading all 89 request
+definitions in the partner's Postman collections). So the question is asked
+backwards: the caller sends `X-Innbucks-User-Token` **and the phone it claims**,
+and `InnbucksSessionClient` asks the middleware to read *that* msisdn under
+*that* token. The middleware binds a user token to its own msisdn, so an answer
+IS the proof.
+
+- **`/auth/client-service/msisdn/{msisdn}/validate` is NOT the proof and must
+  never become the probe path.** It is authorized by the APP's own credentials
+  and answers success for **every real InnBucks customer**, so it proves the
+  number EXISTS, never that the caller holds it — registering on it would let
+  anyone name any customer's number and then spend their points, the exact thing
+  PENDING exists to prevent. It stays useful to the FE as an onboarding
+  pre-check (name, `pinSet`); it is simply never the proof. `probe-path` is
+  configurable, so `PartnerRegistrationProvisioningCheck` logs a boot ERROR if
+  it is ever pointed at a `/validate` endpoint.
+- **A 2xx is not automatically a yes.** The platform reports business failures
+  with HTTP 200 and a non-success `responseCode` (`"00"`/`"000"`/`0` succeed).
+  Reading a bare 2xx as proof would accept the very cross-customer refusal this
+  mode detects. Pinned by
+  `InnbucksSessionClientContractTest.verify_2xxWithFailureCode_isRejected`;
+  removing the code check fails exactly that test and nothing else.
+- **Rejected vs Unavailable is load-bearing.** 401/403/404 or a 2xx with a
+  failure code = the middleware answered and said no → opaque `401`. Connect
+  failure, 5xx, an unexpected 4xx, or a 2xx that is not a JSON object (the
+  EcoCash WAF-block-page lesson) = no answer → retryable
+  `503 REGISTRATION_UPSTREAM_UNAVAILABLE`. Neither ever registers.
+- **Normalise before probing.** The controller canonicalises through
+  `UserService.normalizePhone` and probes *that* value, so the spelling proved
+  is the spelling stored; the client strips the `+` for the platform's bare
+  msisdn format.
+- **Known limitation:** the collections contain an AGENT-role lookup
+  (`Get User Cards (Agent Lookup)`) that reads *other* customers. If an
+  agent-role token were ever used here, it could register numbers it does not
+  own. This mode is for ordinary customer tokens only.
+- **The safety of this mode rests on the middleware's binding.** If InnBucks
+  ever relaxes it, our proof silently weakens with no error on our side — which
+  is why `INNBUCKS_SESSION` is its own source value, revocable as a batch.
 - **Never add an activation path under `/loyalty/public/**`.** Those endpoints
   are unauthenticated; activation there would let anyone who guesses a phone
   number activate and then drain it, which is precisely what PENDING exists to
   prevent.
-- **The gateway route lives in `ticketing-system`** and IS added (ticketing PR
-  #543): `loyalty-partner-registration-route`, POST-only, IP-keyed fail-safe
-  limiter, before `loyalty-service-route`, pinned in `GatewayRouteTableTest`.
-  In `veengu` mode this endpoint is called by mobile clients from customer IPs,
-  which is exactly what the IP-keyed limiter is shaped for.
+- **The gateway route lives in `ticketing-system`** and IS added (ticketing
+  PR #543): `loyalty-partner-registration-route`, POST-only, IP-keyed fail-safe
+  limiter, ordered before `loyalty-service-route` and pinned in
+  `GatewayRouteTableTest`. In `innbucks` mode the callers are mobile clients on
+  customer IPs, which is exactly what an IP-keyed limiter is shaped for.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
 

@@ -70,6 +70,8 @@ class PartnerRegistrationControllerVeenguModeTest {
     private PartnerRegistrationController controller(boolean enabled) {
         return new PartnerRegistrationController(
                 userService, mock(RegistrationAssertionVerifier.class), veenguClient,
+                // Wired but unused in veengu mode.
+                mock(com.innbucks.loyaltyservice.client.InnbucksSessionClient.class),
                 notifier, mock(LoyaltyMetrics.class),
                 enabled, "veengu", "");
     }
@@ -83,7 +85,7 @@ class PartnerRegistrationControllerVeenguModeTest {
                 .thenReturn(new UserService.RegistrationResult(true, 2, false));
 
         ResponseEntity<ApiResult<Map<String, Object>>> response =
-                controller.register(null, TOKEN, null);
+                controller.register(null, TOKEN, null, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().getData())
@@ -104,7 +106,7 @@ class PartnerRegistrationControllerVeenguModeTest {
 
         var body = new PartnerRegistrationController.PartnerRegistrationRequest(
                 null, "+263779999999", "veengu-user-42");
-        controller.register(null, TOKEN, body);
+        controller.register(null, TOKEN, null, body);
 
         verify(userService).registerPhone(eq(VEENGU_PHONE),
                 eq(PhoneRegistration.Source.VEENGU_SESSION), eq("veengu-user-42"), isNull(), isNull());
@@ -118,7 +120,7 @@ class PartnerRegistrationControllerVeenguModeTest {
         when(userService.registerPhone(anyString(), any(), any(), any(), any()))
                 .thenReturn(new UserService.RegistrationResult(false, 0, false));
 
-        controller.register(null, TOKEN, null);
+        controller.register(null, TOKEN, null, null);
 
         verifyNoInteractions(notifier);
     }
@@ -128,7 +130,7 @@ class PartnerRegistrationControllerVeenguModeTest {
     void rejected_isOpaque401() {
         when(veenguClient.identify(TOKEN)).thenReturn(new VeenguIdentityClient.Rejected("http_401"));
 
-        assertThatThrownBy(() -> controller.register(null, TOKEN, null))
+        assertThatThrownBy(() -> controller.register(null, TOKEN, null, null))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -147,7 +149,7 @@ class PartnerRegistrationControllerVeenguModeTest {
         // refused; registering anyway would be a self-service activation path.
         when(veenguClient.identify(TOKEN)).thenReturn(new VeenguIdentityClient.Unavailable("io_error"));
 
-        assertThatThrownBy(() -> controller.register(null, TOKEN, null))
+        assertThatThrownBy(() -> controller.register(null, TOKEN, null, null))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -161,7 +163,7 @@ class PartnerRegistrationControllerVeenguModeTest {
     void missingToken_is401() {
         when(veenguClient.identify(null)).thenReturn(new VeenguIdentityClient.Rejected("blank_token"));
 
-        assertThatThrownBy(() -> controller.register(null, null, null))
+        assertThatThrownBy(() -> controller.register(null, null, null, null))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
                         .isEqualTo(HttpStatus.UNAUTHORIZED));
@@ -173,7 +175,7 @@ class PartnerRegistrationControllerVeenguModeTest {
     void unconfigured_is503() {
         when(veenguClient.isConfigured()).thenReturn(false);
 
-        assertThatThrownBy(() -> controller.register(null, TOKEN, null))
+        assertThatThrownBy(() -> controller.register(null, TOKEN, null, null))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> {
                     assertThat(((LoyaltyException) e).getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -187,7 +189,7 @@ class PartnerRegistrationControllerVeenguModeTest {
     void disabled_is404() {
         PartnerRegistrationController off = controller(false);
 
-        assertThatThrownBy(() -> off.register(null, TOKEN, null))
+        assertThatThrownBy(() -> off.register(null, TOKEN, null, null))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(e -> assertThat(((LoyaltyException) e).getStatus())
                         .isEqualTo(HttpStatus.NOT_FOUND));

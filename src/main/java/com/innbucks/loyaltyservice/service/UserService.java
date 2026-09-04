@@ -451,8 +451,13 @@ public class UserService {
      * passes through here, so the loyalty projection keys off the exact E.164
      * form user-service stores. Blank or unparseable is rejected 400 rather
      * than creating a wallet/user under a spelling nothing else will match.
+     *
+     * <p>Public because a caller that PROVES a phone before registering it must
+     * prove the same spelling it stores — {@code PartnerRegistrationController}'s
+     * innbucks mode canonicalises first, then probes ownership of that exact
+     * value, so it cannot prove one spelling and register another.
      */
-    private String normalizePhone(String raw) {
+    public String normalizePhone(String raw) {
         if (raw == null || raw.isBlank()) {
             throw LoyaltyException.badRequest("BAD_PHONE", "Please provide a phone number.");
         }

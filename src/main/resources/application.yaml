@@ -113,7 +113,7 @@ loyalty:
       # cell, so a flag set there turns the endpoint on everywhere. Disabled =
       # 404, indistinguishable from no such route.
       enabled: ${LOYALTY_PARTNER_REGISTRATION_ENABLED:false}
-      # assertion (default) | key | veengu
+      # assertion (default) | key | veengu | innbucks
       #
       # assertion: the caller sends a short-lived, phone-scoped token signed with
       #   a private key only it holds; loyalty stores only the public key, so
@@ -127,6 +127,12 @@ loyalty:
       #   GET /auth/identity on the instance below and registers the phone
       #   VEENGU'S ANSWER names — never one the caller typed. The one mode a
       #   mobile client may call directly: there is no credential in it to steal.
+      # innbucks: the customer's OWN InnBucks Client Service session is the proof.
+      #   The app sends X-Innbucks-User-Token plus the phone it claims, and
+      #   loyalty asks the middleware to read THAT msisdn under THAT token —
+      #   which it allows only for the token's own number. The one mode a mobile
+      #   client may call directly: it carries no credential of ours, and a
+      #   stolen user token registers only the phone it was stolen from.
       auth-mode: ${LOYALTY_PARTNER_REGISTRATION_AUTH_MODE:assertion}
       veengu:
         # Veengu Frontend API base URL for this instance (sandbox:
@@ -140,6 +146,32 @@ loyalty:
         tenant: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_TENANT:}
         connect-timeout-ms: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_CONNECT_TIMEOUT_MS:3000}
         read-timeout-ms: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_READ_TIMEOUT_MS:6000}
+      innbucks:
+        # Base URL of the InnBucks Client Service API (the same host the fleet's
+        # BANK_API_URL points at, e.g. https://staging.innbucks.co.zw). Blank
+        # fails SAFE: innbucks mode enabled without it answers 503 and logs a
+        # HALF-PROVISIONED boot error.
+        base-url: ${LOYALTY_PARTNER_REGISTRATION_INNBUCKS_BASE_URL:}
+        # Platform API key sent as X-Api-Key. Same credential as the fleet's
+        # BANK_API_KEY; a secret, so per-host in the gitignored env file.
+        api-key: ${LOYALTY_PARTNER_REGISTRATION_INNBUCKS_API_KEY:}
+        # The msisdn-SCOPED probe. {msisdn} is substituted with the claimed
+        # number in the platform's bare format (no leading '+').
+        #
+        # It MUST be an endpoint the CUSTOMER's user token authorizes. Never
+        # point this at /auth/client-service/msisdn/{msisdn}/validate: that one
+        # is authorized by the APP and answers success for every real InnBucks
+        # customer, so it proves the number EXISTS, not that the caller holds
+        # it — and registering on it would let anyone name any customer's
+        # number and then spend their points.
+        probe-path: ${LOYALTY_PARTNER_REGISTRATION_INNBUCKS_PROBE_PATH:/api/v1/account/msisdn/{msisdn}/details?currency=USD}
+        # Platform success codes. It reports business failures with HTTP 200 and
+        # a non-success code, so the code is checked as well as the status —
+        # otherwise a refusal would read as a pass. "00" and "000" are both in
+        # use across endpoints; 0 appears as a number on the code endpoints.
+        success-codes: ${LOYALTY_PARTNER_REGISTRATION_INNBUCKS_SUCCESS_CODES:00,000,0}
+        connect-timeout-ms: ${LOYALTY_PARTNER_REGISTRATION_INNBUCKS_CONNECT_TIMEOUT_MS:3000}
+        read-timeout-ms: ${LOYALTY_PARTNER_REGISTRATION_INNBUCKS_READ_TIMEOUT_MS:6000}
       # Verification key for assertion mode: the partner's PUBLIC key, X.509 /
       # SubjectPublicKeyInfo PEM. Blank fails SAFE — enabled with no key means
       # every call is refused 503 and a HALF-PROVISIONED error is logged at boot,

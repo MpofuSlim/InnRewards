@@ -376,10 +376,15 @@ public class VoucherService {
                         req.deviceFingerprint(), req.ipAddress());
                 throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
             }
-            // PENDING means the recipient hasn't registered yet — they can hold
-            // the voucher but not redeem it. The "promote" webhook flips them
-            // to ACTIVE the moment user-service confirms signup.
-            if (u != null && u.getStatus() == LoyaltyUser.Status.PENDING) {
+            // The recipient hasn't proven they own the number — they can hold
+            // the voucher but not redeem it.
+            //
+            // Asks userService.isRegistrationPending rather than reading the
+            // status directly: since V40 a PENDING row is only a cache of the
+            // phone-level registration fact, so a registered customer can hold a
+            // PENDING projection (minted under a new merchant, or predating
+            // their proof) and must not be refused at the till for it.
+            if (u != null && userService.isRegistrationPending(u)) {
                 recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "user pending registration");
                 // Customer-safe prose: VoucherController's 403 documentation
                 // promises callers that `message` can be shown as-is, and a

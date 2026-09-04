@@ -132,8 +132,62 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V39**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V40**; never edit an applied
 migration — add the next version.
+
+## Registration is a property of the PHONE (V40)
+
+**`phone_registrations` is the source of truth for "the owner of this number has
+proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
+
+- **Why it moved.** A `LoyaltyUser` is a per-tenant projection, so storing "is
+  registered" on it re-asks the question every time the customer touches a new
+  merchant, and answers it wrongly: a customer promoted last year got a fresh
+  PENDING row at a new merchant and was refused at that till. Registration is a
+  fact about the human holding the SIM.
+- **Never gate a spend on `status == PENDING`.** Ask
+  `UserService.isRegistrationPending(u)`, which consults the phone-level fact.
+  Both spend gates do (`requireSpendable`, and `VoucherService.redeem`'s own
+  branch); a third gate added elsewhere must too, or registered customers get
+  refused there and nowhere else.
+- **`registerPhone` is the ONLY writer.** Both proofs route through it —
+  ticketing's OTP webhook (`promoteByPhone` is now a one-line delegate,
+  `source = TICKETING_OTP`, wire contract unchanged) and
+  `POST /loyalty/partner/registrations`. It promotes PENDING and revives
+  INACTIVE/`PENDING_EXPIRED`, and **never touches BLOCKED or
+  INACTIVE/`OPERATOR`** — a fraud hold and a deliberate deactivation are not
+  things a customer logging in may undo. That is what `status_reason` exists
+  for; `deactivate()` stamps `OPERATOR`.
+- **The sweeper has two arms** and only ages out phones with **no** registration
+  (`findStaleUnregistered`, `NOT EXISTS`). Don't revert it to
+  `findByStatusAndCreatedAtBefore`: that selects on status and age alone and
+  would sweep a proven customer into a state the old promote refused to recover.
+  The heal arm converges rows the spend gate hasn't touched.
+  `loyalty.pending.ttl-days` is finally env-bound (`LOYALTY_PENDING_TTL_DAYS`).
+- **V40 does NOT backfill registrations from `status`.** V1 created
+  `loyalty_users` with `status DEFAULT 'ACTIVE'` and PENDING only appears in V6,
+  so pre-V6 ACTIVE rows are a database default, not a proof, and nothing
+  distinguishes them. The operator query is documented in the migration for
+  whoever decides that population is worth registering anyway. Existing ACTIVE
+  rows keep spending — the ACTIVE branch is untouched.
+- **The partner endpoint is off by default** (`404`), and enabled-without-key is
+  `503` plus a boot HALF-PROVISIONED error. Two auth modes:
+  `assertion` (default — RS/ES-signed, phone in the signed `sub`, bounded TTL,
+  monotonic replay guard; loyalty holds only the public key) and `key`
+  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign.
+  **Shared-key mode means whoever holds the key can register ANY phone** — it
+  logs a boot WARN, is guarded by `ProductionSecretsGuard`, and must never reach
+  a mobile client.
+- **Never add an activation path under `/loyalty/public/**`.** Those endpoints
+  are unauthenticated; activation there would let anyone who guesses a phone
+  number activate and then drain it, which is precisely what PENDING exists to
+  prevent.
+- **The gateway route lives in `ticketing-system`** and is NOT yet added.
+  Until it is, `/loyalty/partner/**` falls through to the `/loyalty/**` catch-all
+  and rides the bearer-keyed (caller-controlled, fail-open) limiter instead of an
+  IP-keyed fail-safe one. Add `loyalty-partner-route` before
+  `loyalty-service-route`, pinned in `GatewayRouteTableTest`, before enabling
+  this on any host.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
 

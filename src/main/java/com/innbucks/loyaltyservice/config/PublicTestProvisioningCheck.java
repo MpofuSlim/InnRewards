@@ -38,8 +38,14 @@ public class PublicTestProvisioningCheck {
     private final String configuredTenantId;
 
     public PublicTestProvisioningCheck(
-            @Value("${loyalty.public.test.enabled:false}") boolean enabled,
-            @Value("${loyalty.public.test.tenant-id:}") String configuredTenantId) {
+            // These bound `loyalty.public.test.*` while PublicTestController and
+            // application.yaml use `loyalty.public-test.*`. The two agreed only
+            // because both resolve from the same LOYALTY_PUBLIC_TEST_* environment
+            // variable through relaxed binding — a YAML or @TestPropertySource
+            // override of one silently left the other unset, so the check could
+            // report on a configuration the controller was not running.
+            @Value("${loyalty.public-test.enabled:false}") boolean enabled,
+            @Value("${loyalty.public-test.tenant-id:}") String configuredTenantId) {
         this.enabled = enabled;
         this.configuredTenantId = configuredTenantId;
     }

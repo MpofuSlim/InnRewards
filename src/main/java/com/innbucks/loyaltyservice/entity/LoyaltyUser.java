@@ -46,6 +46,20 @@ public class LoyaltyUser {
     @Column(nullable = false, length = 20)
     private Status status = Status.ACTIVE;
 
+    /**
+     * Why this row is in a terminal status. NULL for ACTIVE/PENDING rows and for
+     * every row written before V40.
+     *
+     * <p>Exists because {@code INACTIVE} conflates two different events with
+     * opposite remedies: the expiry sweeper ageing out a phone nobody ever
+     * proved ({@code PENDING_EXPIRED}, recoverable the moment a registration
+     * arrives) and a human deliberately taking an account out of the programme
+     * ({@code OPERATOR}, which a registration must NOT undo).
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status_reason", length = 30)
+    private StatusReason statusReason;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
@@ -56,9 +70,22 @@ public class LoyaltyUser {
     // user's account status in user-service.
     //
     // PENDING is the "phone-keyed wallet" state: a sender (merchant, friend)
-    // issued points/voucher to a phone that has not yet registered in
-    // user-service. Accrual works; redemption is blocked until user-service
-    // confirms the phone has signed up — at which point the row is flipped to
-    // ACTIVE by POST /loyalty/internal/users/promote.
+    // issued points/voucher to a phone whose owner has not yet proven they hold
+    // it. Accrual works; spending is refused.
+    //
+    // SINCE V40 this column is a per-projection CACHE of a phone-level fact, not
+    // the fact itself: `phone_registrations` is the source of truth for "the
+    // owner of this number proved it". A projection is minted ACTIVE when the
+    // phone is already registered, and a stale PENDING row heals at the spend
+    // gate. Read UserService.isRegistrationPending, not this field, when the
+    // question is "may this person spend".
     public enum Status { ACTIVE, BLOCKED, INACTIVE, PENDING }
+
+    /** @see #getStatusReason() */
+    public enum StatusReason {
+        /** Aged out of PENDING by PendingUserExpirySweeper. Recoverable. */
+        PENDING_EXPIRED,
+        /** Deactivated deliberately by an operator. A registration must not revive this. */
+        OPERATOR
+    }
 }

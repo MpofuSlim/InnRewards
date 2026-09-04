@@ -4,15 +4,18 @@ import com.innbucks.loyaltyservice.client.UserServiceClient;
 import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
+import com.innbucks.loyaltyservice.entity.PhoneRegistration;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
+import com.innbucks.loyaltyservice.repository.PhoneRegistrationRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
 import com.innbucks.loyaltyservice.util.MsisdnValidator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,9 +23,19 @@ import java.util.UUID;
 // Manages the loyalty-side projection of a user. Identity (name, email,
 // nationalId) lives in user-service — this service only stores foreign
 // references plus loyalty-specific state. There is intentionally no public
-// "create user" endpoint: callers (TransactionService, VoucherService, QR
-// flows) reach a user via {@link #findOrEnrol(UUID, String, UUID)} which
-// validates the phone number against user-service first.
+// "create user" endpoint.
+//
+// Callers (TransactionService, VoucherService, TransferService, shop checkout,
+// ticketing) reach a user via findOrCreatePending, which mints a projection for
+// any phone whether or not anyone has proven they own it. findOrEnrol — which
+// verifies against ticketing's user-service before minting ACTIVE — has no
+// callers in src/main and must not be given one without deciding first whether
+// ticketing is still the right identity authority; it is not, for customers who
+// authenticate elsewhere.
+//
+// Whether a phone's owner has PROVEN they hold it is a phone-level fact in
+// `phone_registrations` (V40), written only by registerPhone. LoyaltyUser.status
+// caches it per projection.
 @Service
 @Transactional
 public class UserService {
@@ -31,6 +44,7 @@ public class UserService {
     private final WalletRepository wallets;
     private final UserServiceClient userServiceClient;
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
+    private final PhoneRegistrationRepository registrations;
 
     /** This cell's country pin (ISO-3166-1 alpha-2) — region hint for
      *  normalising an inbound phone to E.164. Defaults to ZW so plain-`new`
@@ -41,11 +55,13 @@ public class UserService {
     public UserService(LoyaltyUserRepository users,
                        WalletRepository wallets,
                        UserServiceClient userServiceClient,
-                       com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics) {
+                       com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
+                       PhoneRegistrationRepository registrations) {
         this.users = users;
         this.wallets = wallets;
         this.userServiceClient = userServiceClient;
         this.metrics = metrics;
+        this.registrations = registrations;
     }
 
     // Idempotent enrolment: returns the existing LoyaltyUser for the
@@ -82,7 +98,40 @@ public class UserService {
         if (existing.isPresent()) {
             return existing.get();
         }
-        return createWithWallet(tenantId, phoneNumber, merchantId, LoyaltyUser.Status.PENDING);
+        // V40: PENDING means "nobody has proven this number", and that is a fact
+        // about the PHONE. If it is already registered, a projection under a new
+        // tenant is born ACTIVE — otherwise a customer who registered a year ago
+        // is handed a fresh PENDING row the first time they shop at a new
+        // merchant, and is refused at that till as though unregistered.
+        LoyaltyUser.Status status = isPhoneRegistered(phoneNumber)
+                ? LoyaltyUser.Status.ACTIVE
+                : LoyaltyUser.Status.PENDING;
+        return createWithWallet(tenantId, phoneNumber, merchantId, status);
+    }
+
+    /**
+     * Has the owner of this phone proven they hold it? The single question the
+     * spend gate and every projection-create asks (V40).
+     *
+     * <p>Expects an already-normalised E.164 phone — every caller inside this
+     * service passes one through {@link #normalizePhone}.
+     */
+    public boolean isPhoneRegistered(String e164Phone) {
+        return registrations.existsByPhoneNumberAndRevokedAtIsNull(e164Phone);
+    }
+
+    /**
+     * True when this projection is PENDING <em>and</em> its phone is genuinely
+     * unregistered — i.e. the customer really cannot spend.
+     *
+     * <p>The distinction matters because a PENDING row is no longer proof of
+     * anything on its own: it may simply pre-date the registration, or have been
+     * minted by a race. Callers gating a spend must ask this, never
+     * {@code status == PENDING}.
+     */
+    public boolean isRegistrationPending(LoyaltyUser u) {
+        return u.getStatus() == LoyaltyUser.Status.PENDING
+                && !isPhoneRegistered(u.getPhoneNumber());
     }
 
     private LoyaltyUser createWithWallet(UUID tenantId, String phoneNumber, UUID merchantId,
@@ -123,19 +172,30 @@ public class UserService {
     public void requireSpendable(LoyaltyUser u) {
         switch (u.getStatus()) {
             case ACTIVE -> { /* ok */ }
-            // Names NO customer action, deliberately. The previous wording told
-            // the holder to "finish signing up", which was accurate only while
-            // every customer reached us through ticketing's OTP registration —
-            // that flow is what calls the promote webhook
-            // (user-service OtpService:363, :378 -> POST /loyalty/internal/users/promote).
-            // The customer app now authenticates against a different system and
-            // never walks that path, so there is no signup screen for these
-            // customers to finish. Copy must not send someone looking for a door
-            // that does not exist; until the new auth source calls promote, the
-            // only honest statement is that setup is incomplete on our side.
-            case PENDING -> throw LoyaltyException.forbidden("USER_PENDING",
-                    "Your rewards account is still being set up, so these points can't be spent "
-                            + "yet. You'll keep earning in the meantime.");
+            // V40: PENDING is now a CACHE of a phone-level fact, so this branch
+            // consults the fact before refusing. When the phone is registered
+            // the row is stale — heal it here and let the spend through.
+            //
+            // Healing inside the caller's transaction means it rolls back with a
+            // failed spend (INSUFFICIENT_FUNDS, say). That is deliberate: the
+            // heal is an optimisation, not the mechanism. The sweeper's heal arm
+            // converges anything left behind, and the next attempt re-heals.
+            //
+            // The copy names NO customer action, deliberately. It told the holder
+            // to "finish signing up", which was accurate only while every customer
+            // reached us through ticketing's OTP registration. Customers who
+            // authenticate elsewhere have no such screen, and until their proof
+            // reaches us the only honest statement is that setup is incomplete on
+            // our side.
+            case PENDING -> {
+                if (!isPhoneRegistered(u.getPhoneNumber())) {
+                    throw LoyaltyException.forbidden("USER_PENDING",
+                            "Your rewards account is still being set up, so these points can't be spent "
+                                    + "yet. You'll keep earning in the meantime.");
+                }
+                u.setStatus(LoyaltyUser.Status.ACTIVE);
+                metrics.incPendingPromoted(1);
+            }
             case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
             case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "Your account is inactive. Please contact support to reactivate it.");
         }
@@ -197,6 +257,10 @@ public class UserService {
     public LoyaltyUser deactivate(UUID tenantId, UUID userId) {
         LoyaltyUser u = require(tenantId, userId);
         u.setStatus(LoyaltyUser.Status.INACTIVE);
+        // Stamped so registerPhone can tell this apart from a sweeper age-out
+        // and leave it alone: a deliberate deactivation must not be undone by
+        // the customer simply logging in again.
+        u.setStatusReason(LoyaltyUser.StatusReason.OPERATOR);
         return u;
     }
 
@@ -229,6 +293,13 @@ public class UserService {
                     "This account is not blocked (status " + u.getStatus() + ").");
         }
         u.setStatus(LoyaltyUser.Status.ACTIVE);
+        // Clear the reason too. FraudService blocks any row that is not already
+        // BLOCKED — including one sitting at INACTIVE/OPERATOR — so a hold can be
+        // stamped over a deactivation, and lifting it without clearing would
+        // leave an ACTIVE row still claiming an operator deactivated it. Nothing
+        // reads statusReason on an ACTIVE row today, which is exactly why a stale
+        // one would survive long enough to mislead whoever reads it first.
+        u.setStatusReason(null);
         return u;
     }
 
@@ -270,17 +341,107 @@ public class UserService {
      * @return count of rows promoted in this call.
      */
     public int promoteByPhone(String phoneNumber) {
+        return registerPhone(phoneNumber, PhoneRegistration.Source.TICKETING_OTP, null, null, null)
+                .projectionsPromoted();
+    }
+
+    /**
+     * Outcome of {@link #registerPhone}. {@code newlyRegistered} is false on a
+     * replay or a second proof for a phone already registered;
+     * {@code projectionsPromoted} counts rows whose status actually changed, so
+     * a caller can stay silent on a no-op instead of re-notifying a customer
+     * every time they log in.
+     */
+    public record RegistrationResult(boolean newlyRegistered, int projectionsPromoted, boolean replay) {}
+
+    /**
+     * Records that the owner of {@code phoneNumber} has PROVEN they hold it, and
+     * brings every projection of that phone into line (V40).
+     *
+     * <p>This is the one write path for the phone-level fact. Both proofs go
+     * through it — ticketing's OTP webhook via {@link #promoteByPhone}, and the
+     * partner endpoint the app's middleware calls — so there is a single place
+     * where "what counts as proven" is decided, and a single place to audit.
+     *
+     * <p>What it moves, and what it deliberately does not:
+     * <ul>
+     *   <li>PENDING → ACTIVE. The whole point.</li>
+     *   <li>INACTIVE + {@code PENDING_EXPIRED} → ACTIVE. An age-out is the
+     *       sweeper saying "nobody ever proved this"; a proof answers exactly
+     *       that. Without this an app customer who waited 90 days for a signal
+     *       that did not exist stays unspendable forever.</li>
+     *   <li><b>BLOCKED is never touched.</b> That is a fraud hold, and proving
+     *       you own a number says nothing about the hold.</li>
+     *   <li><b>INACTIVE + {@code OPERATOR} is never touched.</b> A human took
+     *       this account out of the programme on purpose; a login must not
+     *       silently undo them.</li>
+     * </ul>
+     *
+     * <p>Replay: {@code assertedAt} is monotonic per phone. An assertion not
+     * strictly newer than the last one recorded is a replay — the caller
+     * retried, or an old token was re-sent — and returns without side effects.
+     * Callers passing null (the ticketing webhook, which has no such token)
+     * always proceed; the row-level work is idempotent anyway.
+     */
+    public RegistrationResult registerPhone(String phoneNumber,
+                                            PhoneRegistration.Source source,
+                                            String sourceRef,
+                                            Instant assertedAt,
+                                            String assertionJti) {
         String phone = normalizePhone(phoneNumber);
-        List<LoyaltyUser> matches = users.findByPhoneNumber(phone);
+
+        // Serialise concurrent proofs for one phone (two devices logging in, or
+        // an app assertion racing ticketing's webhook) so they cannot both
+        // insert. A row that appears between this lock and the insert surfaces
+        // as a PK violation, which means someone else won the race — the same
+        // outcome we wanted.
+        Optional<PhoneRegistration> existing = registrations.lockByPhoneNumber(phone);
+        boolean newlyRegistered = existing.isEmpty();
+
+        PhoneRegistration reg = existing.orElseGet(() -> {
+            PhoneRegistration fresh = new PhoneRegistration();
+            fresh.setPhoneNumber(phone);
+            fresh.setRegisteredAt(Instant.now());
+            return fresh;
+        });
+
+        if (!newlyRegistered && assertedAt != null
+                && reg.getLastAssertedAt() != null
+                && !assertedAt.isAfter(reg.getLastAssertedAt())) {
+            return new RegistrationResult(false, 0, true);
+        }
+
+        reg.setSource(source);
+        if (sourceRef != null && !sourceRef.isBlank()) {
+            reg.setSourceRef(sourceRef);
+        }
+        if (assertedAt != null) {
+            reg.setLastAssertedAt(assertedAt);
+            reg.setLastAssertionJti(assertionJti);
+        }
+        // A fresh proof reinstates a revoked registration. Revocation answers a
+        // compromised credential, not a bad customer, so the customer proving
+        // themselves again through a sound channel is the intended recovery.
+        reg.setRevokedAt(null);
+        reg.setRevokedReason(null);
+        registrations.save(reg);
+
         int promoted = 0;
-        for (LoyaltyUser u : matches) {
+        for (LoyaltyUser u : users.findByPhoneNumber(phone)) {
             if (u.getStatus() == LoyaltyUser.Status.PENDING) {
                 u.setStatus(LoyaltyUser.Status.ACTIVE);
+                u.setStatusReason(null);
+                promoted++;
+            } else if (u.getStatus() == LoyaltyUser.Status.INACTIVE
+                    && u.getStatusReason() == LoyaltyUser.StatusReason.PENDING_EXPIRED) {
+                u.setStatus(LoyaltyUser.Status.ACTIVE);
+                u.setStatusReason(null);
                 promoted++;
             }
         }
         metrics.incPendingPromoted(promoted);
-        return promoted;
+        metrics.incPhoneRegistered(source.name());
+        return new RegistrationResult(newlyRegistered, promoted, false);
     }
 
     /**

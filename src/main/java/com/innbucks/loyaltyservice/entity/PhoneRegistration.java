@@ -80,7 +80,11 @@ public class PhoneRegistration {
         /** A signed, phone-scoped assertion from the app's backend. */
         PARTNER_ASSERTION,
         /** The same endpoint in shared-key mode, for a caller that cannot sign. */
-        PARTNER_KEY
+        PARTNER_KEY,
+        /** The customer's own Veengu session, validated server-side against
+         *  Veengu's GET /auth/identity — the phone comes from Veengu's answer,
+         *  never from the caller (V41). */
+        VEENGU_SESSION
     }
 
     /** Live = not revoked. A revoked row is history, never a grant. */

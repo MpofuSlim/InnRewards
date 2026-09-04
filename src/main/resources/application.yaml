@@ -113,7 +113,7 @@ loyalty:
       # cell, so a flag set there turns the endpoint on everywhere. Disabled =
       # 404, indistinguishable from no such route.
       enabled: ${LOYALTY_PARTNER_REGISTRATION_ENABLED:false}
-      # assertion (default) | key
+      # assertion (default) | key | veengu
       #
       # assertion: the caller sends a short-lived, phone-scoped token signed with
       #   a private key only it holds; loyalty stores only the public key, so
@@ -122,7 +122,24 @@ loyalty:
       # key: a shared secret in X-Partner-Key, for a partner that cannot sign.
       #   Weaker and honestly so — whoever holds the key can register ANY phone.
       #   Never ship it to a mobile client.
+      # veengu: the customer's OWN Veengu session is the proof. The FE forwards
+      #   its access token in X-Veengu-Access-Token; loyalty validates it against
+      #   GET /auth/identity on the instance below and registers the phone
+      #   VEENGU'S ANSWER names — never one the caller typed. The one mode a
+      #   mobile client may call directly: there is no credential in it to steal.
       auth-mode: ${LOYALTY_PARTNER_REGISTRATION_AUTH_MODE:assertion}
+      veengu:
+        # Veengu Frontend API base URL for this instance (sandbox:
+        # https://demo.veengu.cloud/api — production is the instance URL the
+        # platform tenant provides). Blank fails SAFE: veengu mode enabled with
+        # no URL answers 503 and logs a HALF-PROVISIONED boot error.
+        base-url: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_BASE_URL:}
+        # Tenant code sent as v-tenant. Not a secret, but configured SERVER-side
+        # on purpose: a caller must not be able to point validation at a
+        # different Veengu tenant where they happen to hold a valid session.
+        tenant: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_TENANT:}
+        connect-timeout-ms: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_CONNECT_TIMEOUT_MS:3000}
+        read-timeout-ms: ${LOYALTY_PARTNER_REGISTRATION_VEENGU_READ_TIMEOUT_MS:6000}
       # Verification key for assertion mode: the partner's PUBLIC key, X.509 /
       # SubjectPublicKeyInfo PEM. Blank fails SAFE — enabled with no key means
       # every call is refused 503 and a HALF-PROVISIONED error is logged at boot,

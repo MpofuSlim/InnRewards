@@ -39,7 +39,7 @@ import java.util.Map;
  * spend. This endpoint is the missing edge, callable from outside the cluster by
  * the party that actually performed the phone verification.
  *
- * <h2>Two auth modes, and why the default is the signed one</h2>
+ * <h2>Three auth modes, and why the default is the signed one</h2>
  * <ul>
  *   <li>{@code assertion} (default) — the caller sends a short-lived,
  *       phone-scoped token signed with a private key it alone holds. Loyalty
@@ -49,6 +49,15 @@ import java.util.Map;
  *       that cannot sign. Honest about its weakness: whoever holds the key can
  *       register ANY phone, so it is opt-in, never the default, and the key must
  *       never reach a mobile client.</li>
+ *   <li>{@code veengu} — the customer's OWN session is the proof. The FE
+ *       forwards its Veengu access token in {@code X-Veengu-Access-Token};
+ *       loyalty validates it against Veengu's {@code GET /auth/identity} and
+ *       registers the phone <b>Veengu's answer</b> names. The one mode a mobile
+ *       client may call directly: there is no credential in it to steal, and a
+ *       stolen session token can only register the phone of the account it was
+ *       stolen from — no escalation beyond the theft itself. Fail-closed: if
+ *       Veengu cannot be reached, nothing is registered and the caller gets a
+ *       retryable 503, never a default-to-registered.</li>
  * </ul>
  *
  * <h2>Fail-closed</h2>
@@ -68,6 +77,7 @@ public class PartnerRegistrationController {
 
     private final UserService userService;
     private final RegistrationAssertionVerifier verifier;
+    private final com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient;
     private final MemberActivityNotifier memberNotifier;
     private final LoyaltyMetrics metrics;
     private final boolean enabled;
@@ -77,6 +87,7 @@ public class PartnerRegistrationController {
     public PartnerRegistrationController(
             UserService userService,
             RegistrationAssertionVerifier verifier,
+            com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient,
             MemberActivityNotifier memberNotifier,
             LoyaltyMetrics metrics,
             @Value("${loyalty.registration.partner.enabled:false}") boolean enabled,
@@ -84,6 +95,7 @@ public class PartnerRegistrationController {
             @Value("${loyalty.registration.partner.key:}") String partnerKey) {
         this.userService = userService;
         this.verifier = verifier;
+        this.veenguClient = veenguClient;
         this.memberNotifier = memberNotifier;
         this.metrics = metrics;
         this.enabled = enabled;
@@ -92,15 +104,19 @@ public class PartnerRegistrationController {
     }
 
     @PostMapping("/registrations")
-    @Operation(summary = "(S2S) Record that a phone's owner has proven they hold it",
+    @Operation(summary = "Record that a phone's owner has proven they hold it",
             description = """
-                    Called by a trusted partner backend — the middleware fronting the customer app's \
-                    authentication — when a customer completes phone verification. Recording the proof \
-                    activates every loyalty projection of that phone, now and in future.
+                    Records the proof that activates every loyalty projection of a phone, now and in \
+                    future. Who calls it depends on the cell's auth mode: a trusted partner backend \
+                    (`assertion` / `key` modes), or the customer app itself (`veengu` mode — the FE \
+                    forwards its own Veengu access token in `X-Veengu-Access-Token`, loyalty validates \
+                    it against Veengu's `GET /auth/identity`, and the phone registered is the one \
+                    VEENGU's answer names, never one the caller typed).
 
                     Idempotent and safe to call on every login: a repeat is a no-op that reports \
                     `projectionsPromoted: 0`. In `assertion` mode the phone is taken ONLY from the \
-                    signed `sub` claim; there is no unsigned phone field.""")
+                    signed `sub` claim; in `veengu` mode ONLY from Veengu's answer. The body \
+                    `phoneNumber` is read in `key` mode alone.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registration recorded (or already present)",
                     content = @Content(mediaType = "application/json",
@@ -157,18 +173,27 @@ public class PartnerRegistrationController {
                                       "message": "Partner registration is not enabled on this deployment not found",
                                       "data": null
                                     }"""))),
-            @ApiResponse(responseCode = "503", description = "REGISTRATION_UNCONFIGURED — enabled but no key material provisioned (half-provisioned cell)",
+            @ApiResponse(responseCode = "503", description = "REGISTRATION_UNCONFIGURED — enabled but not provisioned (half-provisioned cell); "
+                    + "or REGISTRATION_UPSTREAM_UNAVAILABLE — `veengu` mode could not reach Veengu, retry",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = """
-                                    {
-                                      "code": "REGISTRATION_UNCONFIGURED",
-                                      "message": "Partner registration is enabled but no credential is configured.",
-                                      "data": null
-                                    }""")))
+                            examples = {
+                                    @ExampleObject(name = "Half-provisioned", value = """
+                                            {
+                                              "code": "REGISTRATION_UNCONFIGURED",
+                                              "message": "Partner registration is enabled but no credential is configured.",
+                                              "data": null
+                                            }"""),
+                                    @ExampleObject(name = "Veengu unreachable (retryable)", value = """
+                                            {
+                                              "code": "REGISTRATION_UPSTREAM_UNAVAILABLE",
+                                              "message": "Registration could not be verified right now. Please try again.",
+                                              "data": null
+                                            }""")}))
     })
     public ResponseEntity<ApiResult<Map<String, Object>>> register(
             @RequestHeader(value = "X-Partner-Key", required = false) String presentedKey,
+            @RequestHeader(value = "X-Veengu-Access-Token", required = false) String veenguToken,
             @RequestBody(required = false) PartnerRegistrationRequest body) {
 
         if (!enabled) {
@@ -180,7 +205,39 @@ public class PartnerRegistrationController {
         String jti = null;
         PhoneRegistration.Source source;
 
-        if ("key".equals(authMode)) {
+        if ("veengu".equals(authMode)) {
+            // The customer's own session is the proof. The phone comes ONLY
+            // from Veengu's answer — a body phoneNumber is ignored here for the
+            // same reason assertion mode ignores it: pairing a valid credential
+            // with someone ELSE'S number must be impossible by construction.
+            if (!veenguClient.isConfigured()) {
+                metrics.incPartnerRegistrationRejected("unconfigured");
+                throw unconfigured();
+            }
+            switch (veenguClient.identify(veenguToken)) {
+                case com.innbucks.loyaltyservice.client.VeenguIdentityClient.Verified v -> {
+                    phone = v.phoneNumber();
+                    source = PhoneRegistration.Source.VEENGU_SESSION;
+                }
+                case com.innbucks.loyaltyservice.client.VeenguIdentityClient.Rejected r -> {
+                    // Logged with the reason, answered without it — same opaque
+                    // 401 as the other modes.
+                    log.warn("Veengu session registration rejected: {}", r.reason());
+                    metrics.incPartnerRegistrationRejected("veengu_rejected");
+                    throw unauthorized();
+                }
+                case com.innbucks.loyaltyservice.client.VeenguIdentityClient.Unavailable u -> {
+                    // FAIL CLOSED, but retryably: no answer from Veengu is not
+                    // a verdict on the token, so it must not be the opaque 401
+                    // (the FE would tell the customer they were refused) and it
+                    // must NEVER register anything.
+                    log.warn("Veengu session registration upstream unavailable: {}", u.reason());
+                    metrics.incPartnerRegistrationRejected("veengu_unavailable");
+                    throw LoyaltyException.serviceUnavailable("REGISTRATION_UPSTREAM_UNAVAILABLE",
+                            "Registration could not be verified right now. Please try again.");
+                }
+            }
+        } else if ("key".equals(authMode)) {
             if (partnerKey == null || partnerKey.isBlank()) {
                 metrics.incPartnerRegistrationRejected("unconfigured");
                 throw unconfigured();
@@ -245,7 +302,7 @@ public class PartnerRegistrationController {
     public record PartnerRegistrationRequest(
             @Schema(description = "Signed registration assertion (compact JWS). Required in `assertion` mode.")
             String assertion,
-            @Schema(description = "E.164 phone. Read ONLY in `key` mode; ignored in `assertion` mode, where the phone comes from the signed `sub`.",
+            @Schema(description = "E.164 phone. Read ONLY in `key` mode; ignored in `assertion` mode (phone comes from the signed `sub`) and in `veengu` mode (phone comes from Veengu's answer).",
                     example = "+263771234567")
             String phoneNumber,
             @Schema(description = "Opaque identifier for the account at the partner, stored for traceability.",

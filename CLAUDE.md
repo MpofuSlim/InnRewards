@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V40**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V41**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -211,24 +211,35 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   distinguishes them. The operator query is documented in the migration for
   whoever decides that population is worth registering anyway. Existing ACTIVE
   rows keep spending — the ACTIVE branch is untouched.
-- **The partner endpoint is off by default** (`404`), and enabled-without-key is
-  `503` plus a boot HALF-PROVISIONED error. Two auth modes:
+- **The partner endpoint is off by default** (`404`), and enabled-but-unprovisioned
+  is `503` plus a boot HALF-PROVISIONED error. Three auth modes:
   `assertion` (default — RS/ES-signed, phone in the signed `sub`, bounded TTL,
-  monotonic replay guard; loyalty holds only the public key) and `key`
-  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign.
+  monotonic replay guard; loyalty holds only the public key), `key`
+  (`X-Partner-Key`, constant-time compare) for a partner that cannot sign, and
+  `veengu` (V41 — the FE forwards the customer's own Veengu access token in
+  `X-Veengu-Access-Token`; `VeenguIdentityClient` validates it against Veengu's
+  `GET /auth/identity` with server-configured `v-tenant`, and the phone
+  registered is the one **Veengu's answer** names, never a caller-supplied one).
   **Shared-key mode means whoever holds the key can register ANY phone** — it
   logs a boot WARN, is guarded by `ProductionSecretsGuard`, and must never reach
-  a mobile client.
+  a mobile client. `veengu` is the ONE mode a mobile client may call directly:
+  it holds no credential, and a stolen session token can only register the phone
+  of the account it was stolen from. Its upstream mapping is load-bearing:
+  Veengu-unreachable (5xx, connect failure, a 2xx that is not a JSON object —
+  the WAF-block-page lesson from EcoCash) answers a retryable `503
+  REGISTRATION_UPSTREAM_UNAVAILABLE`, never the opaque 401 and never a
+  registration; only 401/403/404 from Veengu (positive refusals) map to the 401.
+  Pinned by `VeenguIdentityClientContractTest` and
+  `PartnerRegistrationControllerVeenguModeTest`.
 - **Never add an activation path under `/loyalty/public/**`.** Those endpoints
   are unauthenticated; activation there would let anyone who guesses a phone
   number activate and then drain it, which is precisely what PENDING exists to
   prevent.
-- **The gateway route lives in `ticketing-system`** and is NOT yet added.
-  Until it is, `/loyalty/partner/**` falls through to the `/loyalty/**` catch-all
-  and rides the bearer-keyed (caller-controlled, fail-open) limiter instead of an
-  IP-keyed fail-safe one. Add `loyalty-partner-route` before
-  `loyalty-service-route`, pinned in `GatewayRouteTableTest`, before enabling
-  this on any host.
+- **The gateway route lives in `ticketing-system`** and IS added (ticketing PR
+  #543): `loyalty-partner-registration-route`, POST-only, IP-keyed fail-safe
+  limiter, before `loyalty-service-route`, pinned in `GatewayRouteTableTest`.
+  In `veengu` mode this endpoint is called by mobile clients from customer IPs,
+  which is exactly what the IP-keyed limiter is shaped for.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
 

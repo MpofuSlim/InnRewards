@@ -46,6 +46,16 @@ public class JwtFilter extends OncePerRequestFilter {
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry;
 
+    /**
+     * The {@code services} marker on a token minted by user-service's
+     * {@code LoyaltySessionTokenIssuer} — an OTP-proved, phone-scoped customer
+     * session. Must stay character-identical to
+     * {@code LoyaltySessionTokenIssuer.LOYALTY_OTP_SCOPE}; the two live in
+     * different repositories, so nothing but this comment couples them, and a
+     * drift presents as every app customer silently losing loyalty access.
+     */
+    static final String LOYALTY_OTP_SCOPE = "loyalty-otp";
+
     private static final List<String> EXCLUDED_PATHS = List.of(
             "/swagger-ui",
             "/v3/api-docs",
@@ -173,6 +183,40 @@ public class JwtFilter extends OncePerRequestFilter {
             UUID shopId = jwtUtil.extractShopId(token);
             String phoneNumber = jwtUtil.extractPhoneNumber(token);
             UUID userId = jwtUtil.extractUserId(token);
+
+            // The OTP-proved, phone-scoped customer session (user-service's
+            // LoyaltySessionTokenIssuer). The customer app authenticates
+            // against InnBucks, not against our fleet, so its customers have no
+            // user row and no password to log in with — an OTP is the strongest
+            // phone-ownership proof available to us, and this is where that
+            // proof becomes a loyalty caller.
+            //
+            // user-service mints it with NO roles precisely so it is inert in
+            // every other service (they all gate on hasRole('CUSTOMER')), and
+            // loyalty is the one place that grants a role for it. That
+            // asymmetry is the safety property, so the three conditions below
+            // are all load-bearing:
+            //
+            //   roles.isEmpty()   — can only ever GRANT, never elevate. A token
+            //                       that already carries roles is untouched, so
+            //                       this can never widen a staff caller.
+            //                       (Note it is roles, not authorities: the
+            //                       services loop above has already added
+            //                       SERVICE_LOYALTY-OTP, so authorities is
+            //                       never empty here.)
+            //   the scope marker  — a purpose-minted token, not any token that
+            //                       happens to list "loyalty" among its
+            //                       services.
+            //   phoneNumber       — every ownership check downstream
+            //                       (requireCallerOwns and friends) compares
+            //                       the caller's phone. Granting the role
+            //                       without one would produce a customer who
+            //                       owns nothing and matches nothing.
+            if (roles.isEmpty()
+                    && services.contains(LOYALTY_OTP_SCOPE)
+                    && phoneNumber != null && !phoneNumber.isBlank()) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
+            }
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
             auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber, userId));

@@ -47,7 +47,15 @@ CREATE TABLE loyalty_refresh_tokens (
     -- a lookup is by this column and a duplicate would be a hash collision or a
     -- generator fault — either way something to fail loudly on, not to resolve
     -- by picking a row.
-    token_hash     CHAR(64)     NOT NULL UNIQUE,
+    --
+    -- VARCHAR, not CHAR, even though the width is genuinely fixed: Postgres
+    -- reports CHAR(n) as `bpchar`, which `ddl-auto: validate` rejects against a
+    -- @Column(length = 64) String ("found [bpchar (Types#CHAR)], but expecting
+    -- [varchar(64)]") and takes the whole service down at boot. CHAR would also
+    -- blank-pad on read, so a hash compared against a trimmed value would
+    -- silently stop matching. Every other fixed-width text column in this schema
+    -- is VARCHAR for the same reason.
+    token_hash     VARCHAR(64)  NOT NULL UNIQUE,
 
     -- E.164 with the leading '+', the same spelling phone_registrations keys on
     -- and loyalty_users.phone_number stores. Every writer normalises through

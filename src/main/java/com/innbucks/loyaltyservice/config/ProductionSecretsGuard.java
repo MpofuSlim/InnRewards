@@ -38,7 +38,14 @@ public class ProductionSecretsGuard {
             "innbucks.internal-api-token",
             "loyalty.voucher.secret",
             "loyalty.qr.secret",
-            "whatsapp.api-key"
+            "whatsapp.api-key",
+            // Shared key for POST /loyalty/partner/registrations in key mode.
+            // BLANK is legitimate and means the mode is unusable (503) — that is
+            // the fail-safe state, and blank contains no placeholder marker, so
+            // it passes here. What must never boot is a placeholder value, which
+            // is non-blank and would make the endpoint believe itself
+            // provisioned while accepting a secret that is in the repo.
+            "loyalty.registration.partner.key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -49,6 +56,11 @@ public class ProductionSecretsGuard {
     // HS256 requires a >= 32-byte key (Keys.hmacShaKeyFor throws below that);
     // fail fast at boot rather than at the first token sign.
     private static final int MIN_JWT_SECRET_LENGTH = 32;
+
+    // The partner registration key is a bearer credential for "register any
+    // phone". 32 chars matches the JWT floor and what `openssl rand -base64 48`
+    // produces comfortably.
+    private static final int MIN_PARTNER_KEY_LENGTH = 32;
 
     private final Environment env;
 
@@ -92,6 +104,16 @@ public class ProductionSecretsGuard {
         String redisPassword = env.getProperty("spring.data.redis.password");
         if (redisPassword != null && redisPassword.isBlank()) {
             offenders.add("spring.data.redis.password (blank — Redis AUTH required under deployment)");
+        }
+        // A short partner key is the whole security of key mode: hold it and you
+        // can register any phone number on the platform. Blank stays allowed —
+        // that is the feature switched off — but a token someone could guess
+        // must not reach production.
+        String partnerKey = env.getProperty("loyalty.registration.partner.key");
+        if (partnerKey != null && !partnerKey.isBlank() && partnerKey.length() < MIN_PARTNER_KEY_LENGTH
+                && !offenders.contains("loyalty.registration.partner.key")) {
+            offenders.add("loyalty.registration.partner.key (too short: needs >= "
+                    + MIN_PARTNER_KEY_LENGTH + " chars)");
         }
         if (!offenders.isEmpty()) {
             throw new IllegalStateException(

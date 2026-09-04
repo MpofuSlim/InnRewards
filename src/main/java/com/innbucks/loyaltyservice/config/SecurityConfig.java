@@ -61,6 +61,24 @@ public class SecurityConfig {
                         // rather than the user JWT. The JwtFilter also skips this
                         // path so no Authentication is required.
                         .requestMatchers("/loyalty/internal/**").permitAll()
+                        // Partner registration (V40). Same posture as the
+                        // internal endpoints: the controller authenticates its
+                        // own caller — a signed assertion, or a shared key
+                        // compared in constant time — so Spring Security must
+                        // not 401 the call before that check ever runs.
+                        //
+                        // Scoped to the exact method + path, not the /loyalty/partner
+                        // prefix, so anything else added under that prefix later
+                        // falls through to .anyRequest().authenticated() and is
+                        // closed by default rather than open by inheritance.
+                        //
+                        // Unlike /loyalty/internal/**, this one is MEANT to be
+                        // reachable from the public edge — the asserting party
+                        // runs outside the cluster. It is inert until
+                        // loyalty.registration.partner.enabled is true (404), and
+                        // refuses every call until key material is provisioned
+                        // (503).
+                        .requestMatchers(HttpMethod.POST, "/loyalty/partner/registrations").permitAll()
                         // TEST-ONLY unauthenticated endpoints (PublicTestController).
                         // Deliberately anonymous so a frontend can be built against
                         // real data before its auth flow exists. The controller

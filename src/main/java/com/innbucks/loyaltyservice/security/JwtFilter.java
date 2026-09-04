@@ -53,6 +53,13 @@ public class JwtFilter extends OncePerRequestFilter {
             "/h2-console",
             "/actuator",
             "/loyalty/internal",
+            // Partner registration (V40) authenticates its caller with a signed
+            // assertion or a shared key, never a fleet JWT. Skipped outright so a
+            // stale Authorization header left on the partner's HTTP client can't
+            // 401 a call whose credential lives elsewhere — the same reasoning as
+            // /loyalty/internal above. Nothing under this prefix reads the
+            // caller's identity from the security context.
+            "/loyalty/partner",
             // TEST-ONLY unauthenticated reads (PublicTestController). Skipped
             // outright rather than merely permitted, so a stale/rotated token
             // left in a test client's storage can't 401 an endpoint whose whole

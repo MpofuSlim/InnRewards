@@ -89,6 +89,61 @@ loyalty:
     # (FX_RATE_OUT_OF_BAND) unless force=true is sent WITH a note. Guards a
     # fat-fingered ZWG rate; non-positive disables the band.
     max-change-percent: ${LOYALTY_FX_MAX_CHANGE_PERCENT:25}
+  pending:
+    # Days a PENDING projection may sit before the expiry sweeper ages it out to
+    # INACTIVE. Previously a code-only default with no env binding, so an
+    # operator had no way to change it — which mattered once it emerged that the
+    # registration signal these accounts were waiting for did not exist for the
+    # customer app, and every one of them was on a 90-day clock to a state
+    # nothing recovered.
+    #
+    # Since V40 the sweeper only ages out phones with NO registration, and a
+    # later proof revives an aged-out row, so this is no longer a deadline for
+    # customers who eventually register. Raise it (or set it very high) while a
+    # registration integration is still being rolled out.
+    ttl-days: ${LOYALTY_PENDING_TTL_DAYS:90}
+  registration:
+    partner:
+      # The channel by which a trusted partner backend tells loyalty that a
+      # phone's owner has proven they hold it (POST /loyalty/partner/registrations).
+      #
+      # FALSE by default and it must stay false in any shared/committed file.
+      # Enable it per HOST in that host's gitignored cell.<iso>.local.env,
+      # alongside the credential — the ConfigMap is shared by every host in the
+      # cell, so a flag set there turns the endpoint on everywhere. Disabled =
+      # 404, indistinguishable from no such route.
+      enabled: ${LOYALTY_PARTNER_REGISTRATION_ENABLED:false}
+      # assertion (default) | key
+      #
+      # assertion: the caller sends a short-lived, phone-scoped token signed with
+      #   a private key only it holds; loyalty stores only the public key, so
+      #   there is no credential here worth stealing and a captured assertion
+      #   names one already-registered phone.
+      # key: a shared secret in X-Partner-Key, for a partner that cannot sign.
+      #   Weaker and honestly so — whoever holds the key can register ANY phone.
+      #   Never ship it to a mobile client.
+      auth-mode: ${LOYALTY_PARTNER_REGISTRATION_AUTH_MODE:assertion}
+      # Verification key for assertion mode: the partner's PUBLIC key, X.509 /
+      # SubjectPublicKeyInfo PEM. Blank fails SAFE — enabled with no key means
+      # every call is refused 503 and a HALF-PROVISIONED error is logged at boot,
+      # rather than the endpoint quietly accepting anything.
+      public-key: ${LOYALTY_PARTNER_REGISTRATION_PUBLIC_KEY:}
+      # Second accepted key, so rotating is an overlap rather than a cliff:
+      # publish the new key here-and-current, cut the partner over, then clear.
+      previous-public-key: ${LOYALTY_PARTNER_REGISTRATION_PREVIOUS_PUBLIC_KEY:}
+      # Required iss / aud on the assertion. A token minted for some other relying
+      # party — including a fleet JWT from a compromised sibling service — must
+      # not double as a registration proof.
+      issuer: ${LOYALTY_PARTNER_REGISTRATION_ISSUER:innbucks-app}
+      audience: ${LOYALTY_PARTNER_REGISTRATION_AUDIENCE:innbucks-loyalty}
+      # Ceiling on the assertion's own lifetime (exp - iat). Bounds the window in
+      # which a captured assertion is worth anything; without it a partner could
+      # mint one that never expires.
+      max-ttl-seconds: ${LOYALTY_PARTNER_REGISTRATION_MAX_TTL_SECONDS:300}
+      # Shared secret for key mode. Blank = the mode is unusable (503), which is
+      # the right failure: a blank string must never compare equal to a missing
+      # header. Real value belongs only in the gitignored per-host env file.
+      key: ${LOYALTY_PARTNER_REGISTRATION_KEY:}
   points:
     # 0 (the default) = points NEVER expire: every credit opens a lot with a
     # NULL expires_at, which no expiry query matches, so nothing is released as
@@ -188,12 +243,17 @@ loyalty:
     # host. loyalty-service logs a boot WARN whenever it comes up enabled.
     enabled: ${LOYALTY_PUBLIC_TEST_ENABLED:false}
     # Optional pins for the points writes, which need one tenant (and a
-    # merchant) named up front. Leave blank and they resolve automatically when
-    # unambiguous — the phone's only projection, the tenant's only merchant —
-    # which is the usual case on a single-tenant test cell. Set them when the
-    # cell has several and the phone alone cannot say which was meant; the
-    # endpoints refuse with AMBIGUOUS_TENANT / AMBIGUOUS_MERCHANT rather than
-    # guessing, because guessing would move points in a tenant nobody chose.
+    # merchant) named up front.
+    #
+    # tenant-id: leave blank and the acting projection is resolved per request
+    # (ACTIVE first, then oldest). It no longer refuses a phone that spans
+    # tenants — wallets are global per phone, so the choice changes only ledger
+    # attribution. Set it to force one tenant; a phone with no projection there
+    # then 404s.
+    #
+    # merchant-id: still refused with AMBIGUOUS_MERCHANT when the tenant has
+    # several and the request names none, because which merchant is paid does
+    # change the outcome.
     tenant-id: ${LOYALTY_PUBLIC_TEST_TENANT_ID:}
     merchant-id: ${LOYALTY_PUBLIC_TEST_MERCHANT_ID:}
 

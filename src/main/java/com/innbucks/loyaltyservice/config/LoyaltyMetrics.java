@@ -118,6 +118,36 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * Phones registered (their owner proved they hold the number), tagged by
+     * which proof did it — TICKETING_OTP / PARTNER_ASSERTION / PARTNER_KEY.
+     *
+     * <p>Worth alerting on: a sustained rise in
+     * {@code loyalty_phone_registered_total{source="PARTNER_ASSERTION"}} well
+     * above the app's real signup + login rate is what a leaked signing key
+     * looks like from here.
+     */
+    public void incPhoneRegistered(String source) {
+        Counter.builder("loyalty.phone.registered")
+                .description("Phones recorded as registered, grouped by the proof that registered them")
+                .tag("source", source)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Rejections at the partner registration endpoint, grouped by reason
+     * (bad_key, bad_assertion, unconfigured, bad_phone). Brute-force attempts
+     * against the shared key show up here before they show up anywhere else.
+     */
+    public void incPartnerRegistrationRejected(String reason) {
+        Counter.builder("loyalty.partner.registration.rejected")
+                .description("Partner registration calls rejected, grouped by reason")
+                .tag("reason", reason)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Counter for fraud rejections grouped by reason. Spike alerts on this
      * (e.g. rate(loyalty_fraud_rejected_total{reason="BAD_SIGNATURE"}[5m]) > 1)
      * are the cheapest possible early-warning for attacks.

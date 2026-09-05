@@ -148,6 +148,40 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * Loyalty session lifecycle events (V43), tagged by outcome — {@code started}
+     * (a refresh chain opened), {@code refreshed} (a rotation), {@code signed_out},
+     * {@code revoked}.
+     *
+     * <p>{@code refreshed} is the load-bearing one for capacity: it is the
+     * number of SMS OTPs the refresh path SAVED, since every refresh is a
+     * re-proof that did not have to happen.
+     */
+    public void incLoyaltySession(String outcome) {
+        Counter.builder("loyalty.session.event")
+                .description("Loyalty session lifecycle events, grouped by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Refused refresh attempts, grouped by reason (unknown, revoked, expired,
+     * registration_revoked, reuse_detected).
+     *
+     * <p><b>Alert on {@code reuse_detected}.</b> It means two parties presented
+     * credentials from one chain — a stolen refresh token being used alongside
+     * the customer's own device. It should be zero; anything above a trickle is
+     * an incident, not noise. The others are ordinary lapsed sessions.
+     */
+    public void incLoyaltySessionRejected(String reason) {
+        Counter.builder("loyalty.session.rejected")
+                .description("Loyalty session refresh attempts refused, grouped by reason")
+                .tag("reason", reason)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Counter for fraud rejections grouped by reason. Spike alerts on this
      * (e.g. rate(loyalty_fraud_rejected_total{reason="BAD_SIGNATURE"}[5m]) > 1)
      * are the cheapest possible early-warning for attacks.

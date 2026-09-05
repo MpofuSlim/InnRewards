@@ -84,6 +84,20 @@ public class JwtFilter extends OncePerRequestFilter {
             // /loyalty/internal above. Nothing under this prefix reads the
             // caller's identity from the security context.
             "/loyalty/partner",
+            // Session renewal (V43). The credential on these two is the refresh
+            // token in the BODY, and the access token they exist to replace is
+            // normally expired by the time they are called — so an app whose
+            // HTTP client attaches the stored bearer to every request would be
+            // 401'd out of the very call that would have fixed it, which is the
+            // one failure this endpoint must not have. Same reasoning as
+            // /loyalty/partner above: nothing under these paths reads the
+            // caller's identity from the security context.
+            //
+            // The exact paths, NOT the /loyalty/session prefix: the sibling
+            // /loyalty/session/exchange authenticates with a real bearer and
+            // MUST keep running through this filter.
+            "/loyalty/session/refresh",
+            "/loyalty/session/logout",
             // TEST-ONLY unauthenticated reads (PublicTestController). Skipped
             // outright rather than merely permitted, so a stale/rotated token
             // left in a test client's storage can't 401 an endpoint whose whole

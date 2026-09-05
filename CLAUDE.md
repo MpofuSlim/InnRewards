@@ -220,11 +220,19 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   `GET /auth/identity`), and `innbucks` (V42). **Shared-key mode means whoever
   holds the key can register ANY phone** — it logs a boot WARN, is guarded by
   `ProductionSecretsGuard`, and must never reach a mobile client.
-- **`veengu` shipped first and is SUPERSEDED — do not build on it.** The
-  partner's own Postman collections showed the app authenticates against the
-  InnBucks **Client Service** API, not Veengu directly, so a Veengu access token
-  is not what the app holds. The mode is left in place because V41 is applied
-  history and an idle mode costs nothing; `innbucks` is what the mobile app uses.
+- **`veengu` (V41) and `innbucks` (V42) are BOTH dead — do not build on either,
+  and never enable them.** `veengu` was superseded when the partner's Postman
+  collections showed the app authenticates against the InnBucks **Client
+  Service** API, not Veengu, so a Veengu access token is not what the app holds.
+  `innbucks` replaced it and then failed on measurement: its proof assumed the
+  platform binds a user token to its own msisdn, and it does not (see the
+  `innbucks` section below for the evidence). Both are left in place only
+  because V41/V42 are applied history; both stay off.
+- **The ONLY live registration path is ticketing's OTP webhook**
+  (`source = TICKETING_OTP`), which reaches `registerPhone` through
+  `promoteByPhone`. `assertion` and `key` remain available for a partner
+  *backend* registering on a customer's behalf, but no mobile client may call
+  them — and neither ever returns a session.
 
 ### Registration hands back a SESSION — but only to the customer's own device
 
@@ -232,9 +240,18 @@ A proof is worth nothing to the app if it cannot then act on it. The
 self-service modes therefore return `loyaltyToken` + `expiresInSeconds`
 alongside the registration, minted by `LoyaltySessionIssuer` and accepted by
 `JwtFilter` — so one call both registers the phone and yields the bearer for
-loyalty's authenticated transfer/redeem endpoints. Without it a customer who
-had just proved their phone still needed an SMS to spend it, which is the
-second authentication the whole mode exists to remove.
+loyalty's authenticated transfer/redeem endpoints.
+
+> [!IMPORTANT]
+> **The session machinery is sound and is the keeper; the proof channel it was
+> built for is not.** Both self-service modes (`innbucks`, `veengu`) are
+> disabled, so in practice the only thing minting a loyalty session today is
+> **ticketing's OTP verify** (PR #545), which carries the `loyalty-otp` scope.
+> Everything below about token shape, scope markers and revocation applies
+> unchanged to that path — `JwtFilter` accepts either marker. Note this makes
+> `selfServiceMode()` currently unreachable in production: keep it and its tests,
+> because it is the guard that stops a future mode leaking sessions to partner
+> backends.
 
 - **`innbucks` / `veengu` get a session; `assertion` / `key` NEVER do**, and
   `selfServiceMode()` is an allow-list so a mode added later fails closed. The
@@ -305,17 +322,85 @@ that, returning one row per tenant the caller has transacted with:
   `/loyalty/users/{userId}/unblock` (POST) or `/loyalty/users/{id}/transactions`
   (a deeper path).
 
-### `innbucks` mode — the ONLY mode a mobile client may call (V42)
+### `innbucks` mode is UNSOUND and must stay disabled (V42)
 
-The app authenticates its customers against the InnBucks Client Service API
-(`POST /auth/client-service/user/login`, username + PIN block → a user token),
-not against our fleet. That token is a possession proof we cannot read — the
-API exposes **no identity endpoint** (confirmed by reading all 89 request
-definitions in the partner's Postman collections). So the question is asked
+> [!CAUTION]
+> **Never set `LOYALTY_PARTNER_REGISTRATION_AUTH_MODE=innbucks`.** The mode's
+> proof does not hold. Enabling it would let anyone holding *any* InnBucks
+> customer token register *any* other customer's phone — and, because
+> `innbucks` is a `selfServiceMode()`, receive a live `loyaltyToken` for it and
+> spend that customer's points. It is off by default (`..._ENABLED=false`);
+> leave it off. The code is retained only because V42 is applied history.
+
+**The design.** The app authenticates its customers against the InnBucks Client
+Service API (`POST /auth/client-service/user/login`, username + PIN block → a
+user token), not against our fleet. That token is a possession proof we cannot
+read — the API exposes **no identity endpoint**. So the question was asked
 backwards: the caller sends `X-Innbucks-User-Token` **and the phone it claims**,
-and `InnbucksSessionClient` asks the middleware to read *that* msisdn under
-*that* token. The middleware binds a user token to its own msisdn, so an answer
-IS the proof.
+and `InnbucksSessionClient` asks the platform to read *that* msisdn under *that*
+token, treating an answer as proof.
+
+**Why it fails.** That is sound only if the platform refuses when the token does
+not own the msisdn. It does not. Measured against `staging.innbucks.co.zw` with
+an **app/merchant** bearer minted from our own `BANK_API_*` credentials — i.e.
+credentials that prove nothing about any customer:
+
+| Call | Result |
+|---|---|
+| `GET /api/v1/account/msisdn/{any}/details` | `200` `responseCode 000` + that customer's **name and account numbers** |
+| `POST /bank/api/account/balance` `{accountNumber}` | `200` + that customer's **balance** |
+| `POST /bank/api/account/mini-statement` `{accountNumber}` | `403` — the *only* refusal observed |
+
+The probe endpoint is a **directory lookup**, not a token-bound read. Its
+sibling `GET /api/account/msisdn/{msisdn}` is step 1 of the collection's own
+**P2P recipient lookup** — cross-customer by design, which is what a directory
+is for.
+
+**The one contrary signal, and why it does not rescue the mode.** The
+mini-statement `403` proves the platform does per-**client-type**
+authorization (the merchant client lacks that permission). It does **not** show
+per-**object** authorization (a token restricted to its own accounts). Those are
+different checks. Mini-statement was evaluated as a replacement probe and
+rejected: it takes a caller-supplied `accountNumber`, which an attacker harvests
+from the open `/details` lookup given only the victim's phone number — and its
+structural twin `POST /bank/api/account/balance` (same prefix, same body shape,
+same `{{user_token}}` auth) provably returns `200` for an arbitrary account.
+
+**All 88 request definitions across both partner collections were inventoried
+looking for any endpoint that could serve as an ownership proof. There is none**
+— no `/me`, no token introspection, nothing self-scoped. Every customer-token
+read either takes a caller-supplied `msisdn`/`accountNumber` (aimable at anyone)
+or is a global reference catalogue carrying no customer data. `GET /api/card/{msisdn}`
+is not an exception: its "Agent Lookup" twin is the same path against the
+collection's own demo number under the same `{{user_token}}`, and a card *list*
+could not work as a proof anyway because its negative case is a `200` empty
+array, indistinguishable from a legitimate owner who has linked no card.
+
+**The durable lesson.** This mode was built, reviewed, documented and declared
+complete on the strength of one sentence — *"the middleware binds a user token to
+its own msisdn"* — that came from the frontend team and was never tested. It read
+as a fact in this file for weeks. **A security property of someone else's
+platform is an assumption until you have measured it**; write it down as an
+assumption and test it before anything depends on it.
+
+**What replaces it: SMS OTP, which is cheaper than it sounds.** Registration is a
+permanent *phone-level* fact (V40, above), so an OTP costs **one SMS per customer
+for life**, not one per session — and ticketing PR #545 already wires OTP verify →
+`registerPhone` → `loyaltyToken`. The remaining gap is a refresh path so the 12h
+session TTL never forces a second SMS.
+
+**What would make an InnBucks-token proof viable** (only these; do not improvise):
+1. InnBucks exposes a token-introspection endpoint authorized **solely** by the
+   `user_token`, with no caller-supplied identifier in path, query or body,
+   returning the msisdn bound to that token; **or**
+2. InnBucks confirms in writing that a specific read endpoint performs
+   object-level authorization, *and* a two-customer test confirms it: customer
+   A's token addressing customer B's identifier must be refused, with a control
+   proving B's account is real and readable by B.
+
+The notes below record the engineering that is still correct in itself — the
+`/validate` prohibition, the responseCode handling, the Rejected/Unavailable
+split. They describe a client that must not be switched on.
 
 - **`/auth/client-service/msisdn/{msisdn}/validate` is NOT the proof and must
   never become the probe path.** It is authorized by the APP's own credentials
@@ -341,13 +426,16 @@ IS the proof.
   `UserService.normalizePhone` and probes *that* value, so the spelling proved
   is the spelling stored; the client strips the `+` for the platform's bare
   msisdn format.
-- **Known limitation:** the collections contain an AGENT-role lookup
-  (`Get User Cards (Agent Lookup)`) that reads *other* customers. If an
-  agent-role token were ever used here, it could register numbers it does not
-  own. This mode is for ordinary customer tokens only.
-- **The safety of this mode rests on the middleware's binding.** If InnBucks
-  ever relaxes it, our proof silently weakens with no error on our side — which
-  is why `INNBUCKS_SESSION` is its own source value, revocable as a batch.
+- **The probe path is configurable, and no value of it makes the mode safe.**
+  `PartnerRegistrationProvisioningCheck` still refuses a `/validate` path, but
+  that guard now protects a mode that must not run at all — do not read a clean
+  boot log as a green light. Every candidate replacement path was inventoried
+  and rejected (above).
+- **`INNBUCKS_SESSION` is its own `phone_registrations.source` value**, which is
+  what makes any rows it ever wrote revocable as a batch:
+  `SELECT * FROM phone_registrations WHERE source = 'INNBUCKS_SESSION'` should
+  return **zero rows** — the mode has never been enabled on any cell. If it ever
+  returns rows, treat every one as an unproven registration and revoke it.
 - **Never add an activation path under `/loyalty/public/**`.** Those endpoints
   are unauthenticated; activation there would let anyone who guesses a phone
   number activate and then drain it, which is precisely what PENDING exists to
@@ -355,8 +443,11 @@ IS the proof.
 - **The gateway route lives in `ticketing-system`** and IS added (ticketing
   PR #543): `loyalty-partner-registration-route`, POST-only, IP-keyed fail-safe
   limiter, ordered before `loyalty-service-route` and pinned in
-  `GatewayRouteTableTest`. In `innbucks` mode the callers are mobile clients on
-  customer IPs, which is exactly what an IP-keyed limiter is shaped for.
+  `GatewayRouteTableTest`. The route stays: `assertion` / `key` still reach the
+  endpoint from outside the cluster, and the IP-keyed fail-safe limiter is what
+  caps brute-forcing the shared key. It was also shaped for the mobile-client
+  traffic `innbucks` would have carried; with that mode dead, no mobile client
+  calls this path at all.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
 

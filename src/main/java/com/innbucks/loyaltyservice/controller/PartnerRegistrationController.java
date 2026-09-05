@@ -49,31 +49,40 @@ import java.util.Map;
  *       that cannot sign. Honest about its weakness: whoever holds the key can
  *       register ANY phone, so it is opt-in, never the default, and the key must
  *       never reach a mobile client.</li>
- *   <li>{@code veengu} — the customer's OWN Veengu session, validated against
- *       Veengu's {@code GET /auth/identity}. Built before the partner's Postman
- *       collections showed the app authenticates against the InnBucks Client
- *       Service API rather than Veengu directly, so in practice
- *       {@code innbucks} supersedes it; kept because it is merged and costs
- *       nothing idle.</li>
- *   <li>{@code innbucks} — the customer's OWN InnBucks Client Service session is
- *       the proof, and the mode the mobile app actually uses. The app sends its
- *       {@code X-Innbucks-User-Token} and the phone it claims; loyalty asks the
- *       middleware to read THAT msisdn under THAT token, and registers only if
- *       it answers. Safe for a mobile client to call directly: it carries no
- *       credential of ours, and a stolen user token can only register the phone
- *       it was stolen from. Fail-closed — if the middleware cannot be reached,
- *       nothing is registered and the caller gets a retryable 503, never a
- *       default-to-registered.</li>
+ *   <li>{@code veengu} — <b>DEAD, never enable.</b> The customer's OWN Veengu
+ *       session, validated against Veengu's {@code GET /auth/identity}. It was
+ *       superseded once the partner's Postman collections showed the app
+ *       authenticates against the InnBucks Client Service API rather than Veengu
+ *       directly, so a Veengu access token is not what the app holds. Kept only
+ *       because V41 is applied history.</li>
+ *   <li>{@code innbucks} — <b>DEAD AND UNSOUND, never enable.</b> It sent the
+ *       customer's {@code X-Innbucks-User-Token} plus a CLAIMED phone and asked
+ *       the middleware to read that msisdn under that token, treating an answer
+ *       as proof. That holds only if the platform refuses when the token does
+ *       not own the number, and measurement showed it does not — the probe is a
+ *       directory lookup that answers for any customer. Enabling it would let
+ *       anyone holding any customer token register any other customer's phone
+ *       and, since this is a {@link #selfServiceMode()}, receive a live loyalty
+ *       session for it. See the CAUTION in {@code CLAUDE.md} and the
+ *       {@code InnbucksSessionClient} javadoc for the evidence.</li>
  * </ul>
  *
- * <h2>Why {@code innbucks} mode does not use the /validate endpoint</h2>
+ * <p><b>The only live registration path is ticketing's OTP webhook</b>
+ * ({@code source = TICKETING_OTP}), which reaches {@code registerPhone} through
+ * {@code promoteByPhone}. {@code assertion} and {@code key} remain available for
+ * a partner BACKEND registering on a customer's behalf; no mobile client may
+ * call any mode here.
+ *
+ * <h2>Why no mode may use the /validate endpoint</h2>
  * {@code /auth/client-service/msisdn/{msisdn}/validate} is authorized by the
  * APP's own credentials and answers success for EVERY real InnBucks customer,
  * so it proves a number EXISTS, never that the caller holds it. Registering on
  * it would let anyone name any customer's number and then spend their points —
  * exactly what PENDING exists to prevent. It remains useful to the FE as an
  * onboarding pre-check ("is this a customer, is their PIN set"); it is simply
- * never the proof. See {@code InnbucksSessionClient} for the full reasoning.
+ * never the proof. The provisioning check still refuses a {@code /validate}
+ * probe path, but that guard now protects a mode that must not run at all — see
+ * {@code InnbucksSessionClient} for why no path makes it safe.
  *
  * <h2>Fail-closed</h2>
  * Disabled (the default) answers 404 — indistinguishable from no such route.
@@ -128,18 +137,19 @@ public class PartnerRegistrationController {
     @Operation(summary = "Record that a phone's owner has proven they hold it",
             description = """
                     Records the proof that activates every loyalty projection of a phone, now and in \
-                    future. Who calls it depends on the cell's auth mode: a trusted partner backend \
-                    (`assertion` / `key`), or the customer app itself (`innbucks` — it sends its own \
-                    `X-Innbucks-User-Token` plus the phone it claims, and loyalty registers only if \
-                    the InnBucks middleware lets that token read that number's account; `veengu` is \
-                    the earlier equivalent against Veengu's own API).
+                    future. The caller is a trusted partner BACKEND registering on a customer's \
+                    behalf, in one of two modes: `assertion` (default — a short-lived phone-scoped \
+                    token it signed) or `key` (a shared secret in `X-Partner-Key`).
+
+                    **No mobile client may call this endpoint.** The two self-service modes that \
+                    once accepted one — `innbucks` and `veengu` — are both dead and disabled, and \
+                    neither returns a session. The customer app obtains its loyalty session from \
+                    ticketing's OTP verify instead.
 
                     Idempotent and safe to call on every login: a repeat is a no-op that reports \
-                    `projectionsPromoted: 0`. The body `phoneNumber` is read in `key` and `innbucks` \
-                    modes only — in `assertion` mode the phone comes solely from the signed `sub`, \
-                    and in `veengu` mode solely from Veengu's answer. In `innbucks` mode a claimed \
-                    number is never believed on its own: it is the thing being proved, so naming \
-                    someone else's number is refused with a 401.""")
+                    `projectionsPromoted: 0`. The body `phoneNumber` is read in `key` mode only — \
+                    in `assertion` mode the phone comes solely from the signed `sub`, so a caller \
+                    cannot pair a valid assertion for its own number with someone else's.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registration recorded (or already present)",
                     content = @Content(mediaType = "application/json",
@@ -264,12 +274,14 @@ public class PartnerRegistrationController {
                 }
             }
         } else if ("innbucks".equals(authMode)) {
-            // The caller CLAIMS a phone and proves it by holding a session the
-            // middleware will let read that phone's account. Unlike the other
-            // modes the phone does come from the body — and that is sound here
-            // precisely because it is the thing being proved: the probe asks
-            // "can this token reach THIS number?", so a caller who names
-            // someone else's number is refused rather than believed.
+            // DEAD BRANCH — unreachable unless someone sets auth-mode=innbucks,
+            // which they must not. It reads a CLAIMED phone from the body and
+            // "proves" it by asking whether the caller's token can reach that
+            // number's account. That reasoning assumed the platform refuses a
+            // token addressing a number it does not own; measurement showed it
+            // answers for any customer, so the claim is believed on the strength
+            // of a directory lookup. Retained only because V42 is applied
+            // history — see CLAUDE.md and InnbucksSessionClient.
             if (!innbucksClient.isConfigured()) {
                 metrics.incPartnerRegistrationRejected("unconfigured");
                 throw unconfigured();

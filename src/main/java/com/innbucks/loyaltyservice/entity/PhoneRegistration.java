@@ -88,10 +88,18 @@ public class PhoneRegistration {
          *  Client Service API, not Veengu directly. Kept because V41 is applied
          *  history and an unused value costs nothing. */
         VEENGU_SESSION,
-        /** The customer's own InnBucks Client Service session, proved by asking
-         *  the middleware to read the CLAIMED msisdn under the caller's user
-         *  token — it binds a token to its own msisdn, so an answer is the
-         *  ownership proof (V42). This is the mode the mobile app uses. */
+        /** <b>UNSOUND — the mode is disabled and must stay that way (V42).</b>
+         *
+         *  <p>It asked the middleware to read a CLAIMED msisdn under the caller's
+         *  user token and treated an answer as the ownership proof. That holds
+         *  only if the platform refuses when the token does not own the number,
+         *  and measurement showed it does not: the probe is a directory lookup
+         *  that answers for any customer. See {@code CLAUDE.md} for the evidence.
+         *
+         *  <p>The value is retained because V42 is applied history, and it is its
+         *  own source so anything it ever wrote is revocable as a batch —
+         *  {@code SELECT * FROM phone_registrations WHERE source =
+         *  'INNBUCKS_SESSION'} should return zero rows on every cell. */
         INNBUCKS_SESSION
     }
 

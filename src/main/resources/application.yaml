@@ -132,17 +132,24 @@ loyalty:
       # key: a shared secret in X-Partner-Key, for a partner that cannot sign.
       #   Weaker and honestly so — whoever holds the key can register ANY phone.
       #   Never ship it to a mobile client.
-      # veengu: the customer's OWN Veengu session is the proof. The FE forwards
-      #   its access token in X-Veengu-Access-Token; loyalty validates it against
-      #   GET /auth/identity on the instance below and registers the phone
-      #   VEENGU'S ANSWER names — never one the caller typed. The one mode a
-      #   mobile client may call directly: there is no credential in it to steal.
-      # innbucks: the customer's OWN InnBucks Client Service session is the proof.
-      #   The app sends X-Innbucks-User-Token plus the phone it claims, and
-      #   loyalty asks the middleware to read THAT msisdn under THAT token —
-      #   which it allows only for the token's own number. The one mode a mobile
-      #   client may call directly: it carries no credential of ours, and a
-      #   stolen user token registers only the phone it was stolen from.
+      #
+      # The two self-service modes below are BOTH DEAD. Neither may be enabled,
+      # and no mobile client calls this endpoint at all — the customer app gets
+      # its loyalty session from ticketing's OTP verify.
+      #
+      # veengu: DEAD. Validated the customer's own Veengu access token against
+      #   GET /auth/identity. Superseded once the partner's collections showed
+      #   the app authenticates against the InnBucks Client Service API, not
+      #   Veengu, so a Veengu token is not what the app holds. Kept because V41
+      #   is applied history.
+      # innbucks: DEAD AND UNSOUND — never set this. It sent
+      #   X-Innbucks-User-Token plus a CLAIMED phone and asked the middleware to
+      #   read that msisdn under that token, treating an answer as proof. That
+      #   holds only if the platform refuses a token addressing a number it does
+      #   not own, and measurement showed it does not: the probe is a directory
+      #   lookup that answers for any customer. Enabling it would let anyone
+      #   holding any customer token register any other customer's phone and
+      #   receive a live loyalty session for it. See CLAUDE.md for the evidence.
       auth-mode: ${LOYALTY_PARTNER_REGISTRATION_AUTH_MODE:assertion}
       veengu:
         # Veengu Frontend API base URL for this instance (sandbox:

@@ -15,28 +15,48 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * Proves that the holder of an InnBucks Client Service <b>user token</b> owns a
- * CLAIMED phone number, by asking the middleware to read that number's account
- * under that token.
+ * <b>UNSOUND. This client backs a registration mode that must never be enabled
+ * — see the CAUTION in {@code CLAUDE.md} before touching anything here.</b>
  *
- * <h2>Why this shape, and not "ask who the token belongs to"</h2>
+ * <p>It was built to prove that the holder of an InnBucks Client Service
+ * <b>user token</b> owns a CLAIMED phone number, by asking the middleware to
+ * read that number's account under that token.
+ *
+ * <h2>Why this shape, and why it does not work</h2>
  * The Client Service API exposes no identity endpoint — nothing takes a token
- * and returns its holder (confirmed by reading all 89 request definitions in
- * the partner's own Postman collections). So the question is asked backwards:
- * the caller names a phone, and we check whether their token can reach it. The
- * middleware binds a user token to its own msisdn, so an answer IS the proof.
+ * and returns its holder (confirmed by inventorying all 88 request definitions
+ * across the partner's own Postman collections). So the question was asked
+ * backwards: the caller names a phone, and we check whether their token can
+ * reach it.
  *
- * <h2>The endpoint choice is load-bearing — and it is NOT /validate</h2>
+ * <p>That is a proof only if the platform REFUSES when the token does not own
+ * the number. It does not. Measured against {@code staging.innbucks.co.zw} with
+ * an app/merchant bearer — a credential proving nothing about any customer —
+ * the probe returned another customer's name and account numbers, and its
+ * sibling balance endpoint returned that customer's balance. The probe is a
+ * <b>directory lookup</b>, not a token-bound read; its twin is step one of the
+ * collection's own P2P recipient lookup, which is cross-customer by design.
+ *
+ * <p>Enabling this would therefore let anyone holding any customer token
+ * register any other customer's phone — and, since {@code innbucks} is a
+ * self-service mode, receive a live loyalty session for it. Every candidate
+ * replacement probe path was inventoried and rejected; {@code CLAUDE.md} records
+ * the two conditions under which such a proof could ever become viable.
+ *
+ * <h2>Still true: the path is NOT /validate</h2>
  * <ul>
  *   <li>{@code GET /auth/client-service/msisdn/{msisdn}/validate} is authorized
  *       by the APP's own client-service token and answers "00" for every real
- *       InnBucks customer. It proves a number EXISTS. Registering on it would
- *       let anyone name any customer's number and then spend their points.</li>
- *   <li>The msisdn-scoped account endpoint used here is authorized by the
- *       CUSTOMER's user token. It proves the caller HOLDS the number.</li>
+ *       InnBucks customer. It proves a number EXISTS.</li>
+ *   <li>The msisdn-scoped account endpoint used here is at least addressed with
+ *       the CUSTOMER's user token — which is why it looked like a proof.</li>
  * </ul>
- * Only the second can register anything. If this client is ever repointed, the
- * replacement path must be one the customer's token authorizes, never the app's.
+ * Neither can register anything. No value of {@code probe-path} makes this mode
+ * safe, so a clean boot log is not a green light.
+ *
+ * <p>The notes below describe engineering that remains correct in itself — the
+ * responseCode handling and the Rejected/Unavailable split. They describe a
+ * client that must not be switched on.
  *
  * <h2>A 2xx is not automatically a yes</h2>
  * The platform answers business failures with HTTP 200 and a non-success

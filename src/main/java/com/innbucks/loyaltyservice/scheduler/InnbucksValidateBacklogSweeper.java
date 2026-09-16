@@ -25,12 +25,12 @@ import java.util.List;
  * <p>Each run takes a bounded RANDOM sample of NEVER-registered backlog phones
  * (PENDING projections plus {@code PENDING_EXPIRED} age-outs, which
  * {@code registerPhone} recovers), asks the validate client about each, and
- * registers the confirmed customers. A phone with a REVOKED registration is
- * never sampled: {@code registerPhone} reinstates a revoked row on any fresh
- * proof, so re-sampling would quietly undo an operator's revocation on the
- * next pass — see {@code sampleUnregisteredBacklogPhones}. Random sampling is what makes coverage
- * converge — see {@code sampleUnregisteredBacklogPhones}. Non-customers are
- * left exactly as they were: still PENDING, still ageing out on the normal
+ * registers the confirmed customers. Random sampling is what makes coverage
+ * converge, and a phone with a REVOKED registration is never sampled:
+ * {@code registerPhone} reinstates a revoked row on any fresh proof, so
+ * re-sampling would quietly undo an operator's revocation on the next pass —
+ * both are properties of {@code sampleUnregisteredBacklogPhones}. Non-customers
+ * are left exactly as they were: still PENDING, still ageing out on the normal
  * clock, re-checked only when a later sample happens to pick them (they may
  * have become customers by then).
  *

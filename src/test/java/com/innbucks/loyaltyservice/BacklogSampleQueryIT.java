@@ -2,8 +2,10 @@ package com.innbucks.loyaltyservice;
 
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.PhoneRegistration;
+import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.PhoneRegistrationRepository;
+import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,10 +34,20 @@ class BacklogSampleQueryIT extends PostgresIntegrationTestBase {
 
     @Autowired LoyaltyUserRepository users;
     @Autowired PhoneRegistrationRepository registrations;
+    @Autowired TenantRepository tenants;
 
-    private void projection(String phone, LoyaltyUser.Status status, LoyaltyUser.StatusReason reason) {
+    /** loyalty_users.tenant_id has a FK to tenants, so a projection needs a real one. */
+    private UUID newTenant() {
+        Tenant t = new Tenant();
+        t.setCode("backlog-it-" + System.nanoTime());
+        t.setName("Backlog Sample IT");
+        return tenants.save(t).getId();
+    }
+
+    private void projection(UUID tenantId, String phone,
+                            LoyaltyUser.Status status, LoyaltyUser.StatusReason reason) {
         LoyaltyUser u = new LoyaltyUser();
-        u.setTenantId(UUID.randomUUID());
+        u.setTenantId(tenantId);
         u.setPhoneNumber(phone);
         u.setStatus(status);
         u.setStatusReason(reason);
@@ -56,28 +68,40 @@ class BacklogSampleQueryIT extends PostgresIntegrationTestBase {
         registrations.save(r);
     }
 
+    // A per-test unique phone prefix. The Postgres container is shared across IT
+    // classes and NOT truncated between them, so fixtures must not collide with
+    // other suites' rows (phone_registrations.phone_number is a PK), and
+    // assertions must be containment-based, not whole-table equality. A batch
+    // far larger than the whole table is used for presence checks so ORDER BY
+    // random() + LIMIT can never hide a target row behind unrelated data.
+    private static String uniquePhone(String tail) {
+        // 12 digits, distinctive '55' block, nanoTime keeps it unique per run.
+        return "+26355" + String.format("%09d", System.nanoTime() % 1_000_000_000L) + tail;
+    }
+
     @Test
-    @DisplayName("samples exactly the never-registered backlog: PENDING + PENDING_EXPIRED, and nothing else")
+    @DisplayName("samples the never-registered backlog (PENDING + PENDING_EXPIRED), excludes everything else")
     void samplesTheRightPopulation() {
-        String pending      = "+263771000001";
-        String agedOut      = "+263771000002"; // INACTIVE + PENDING_EXPIRED
-        String liveReg      = "+263771000003"; // PENDING but registered (live)
-        String revokedReg   = "+263771000004"; // PENDING but registration revoked
-        String active       = "+263771000005"; // ACTIVE — not backlog
-        String operatorGone = "+263771000006"; // INACTIVE + OPERATOR — not recoverable
+        String pending      = uniquePhone("1");
+        String agedOut      = uniquePhone("2"); // INACTIVE + PENDING_EXPIRED
+        String liveReg      = uniquePhone("3"); // PENDING but registered (live)
+        String revokedReg   = uniquePhone("4"); // PENDING but registration revoked
+        String active       = uniquePhone("5"); // ACTIVE — not backlog
+        String operatorGone = uniquePhone("6"); // INACTIVE + OPERATOR — not recoverable
 
-        projection(pending, LoyaltyUser.Status.PENDING, null);
-        projection(agedOut, LoyaltyUser.Status.INACTIVE, LoyaltyUser.StatusReason.PENDING_EXPIRED);
-        projection(liveReg, LoyaltyUser.Status.PENDING, null);
+        UUID tenant = newTenant();
+        projection(tenant, pending, LoyaltyUser.Status.PENDING, null);
+        projection(tenant, agedOut, LoyaltyUser.Status.INACTIVE, LoyaltyUser.StatusReason.PENDING_EXPIRED);
+        projection(tenant, liveReg, LoyaltyUser.Status.PENDING, null);
         registration(liveReg, false);
-        projection(revokedReg, LoyaltyUser.Status.PENDING, null);
+        projection(tenant, revokedReg, LoyaltyUser.Status.PENDING, null);
         registration(revokedReg, true);
-        projection(active, LoyaltyUser.Status.ACTIVE, null);
-        projection(operatorGone, LoyaltyUser.Status.INACTIVE, LoyaltyUser.StatusReason.OPERATOR);
+        projection(tenant, active, LoyaltyUser.Status.ACTIVE, null);
+        projection(tenant, operatorGone, LoyaltyUser.Status.INACTIVE, LoyaltyUser.StatusReason.OPERATOR);
 
-        List<String> sampled = users.sampleUnregisteredBacklogPhones(100);
+        List<String> sampled = users.sampleUnregisteredBacklogPhones(1_000_000);
 
-        assertThat(sampled).containsExactlyInAnyOrder(pending, agedOut);
+        assertThat(sampled).contains(pending, agedOut);
         // The revocation exclusion is the whole reason for this method — a
         // revoked phone stays out even though its projection is PENDING.
         assertThat(sampled).doesNotContain(revokedReg, liveReg, active, operatorGone);
@@ -86,11 +110,11 @@ class BacklogSampleQueryIT extends PostgresIntegrationTestBase {
     @Test
     @DisplayName("DISTINCT collapses a phone with projections under several tenants")
     void distinctAcrossTenants() {
-        String phone = "+263771000010";
-        projection(phone, LoyaltyUser.Status.PENDING, null);
-        projection(phone, LoyaltyUser.Status.PENDING, null); // different tenant, same phone
+        String phone = uniquePhone("0");
+        projection(newTenant(), phone, LoyaltyUser.Status.PENDING, null);
+        projection(newTenant(), phone, LoyaltyUser.Status.PENDING, null); // different tenant, same phone
 
-        List<String> sampled = users.sampleUnregisteredBacklogPhones(100);
+        List<String> sampled = users.sampleUnregisteredBacklogPhones(1_000_000);
 
         assertThat(sampled).filteredOn(phone::equals).hasSize(1);
     }
@@ -98,10 +122,12 @@ class BacklogSampleQueryIT extends PostgresIntegrationTestBase {
     @Test
     @DisplayName("the :batch bind caps the result size")
     void batchLimitBinds() {
+        UUID tenant = newTenant();
         for (int i = 0; i < 5; i++) {
-            projection("+26377100002" + i, LoyaltyUser.Status.PENDING, null);
+            projection(tenant, uniquePhone("b" + i), LoyaltyUser.Status.PENDING, null);
         }
 
+        // At least 5 backlog rows exist (these), so a batch of 3 must cap at 3.
         assertThat(users.sampleUnregisteredBacklogPhones(3)).hasSize(3);
     }
 }

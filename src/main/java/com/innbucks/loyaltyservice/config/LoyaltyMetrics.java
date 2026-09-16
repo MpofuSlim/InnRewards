@@ -148,6 +148,23 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * Backlog validate-sweep checks (V44), tagged by outcome — {@code customer}
+     * (registered), {@code not_customer} (left PENDING to age out normally),
+     * {@code unavailable} (run aborted; upstream could not answer).
+     *
+     * <p>Worth watching after any config change: a sustained run of
+     * {@code not_customer} across every phone checked is what a wrong
+     * validate-path looks like from here (the client maps an http_404 there).
+     */
+    public void incBacklogValidateChecked(String outcome) {
+        Counter.builder("loyalty.registration.backlog.checked")
+                .description("InnBucks backlog validate-sweep checks, grouped by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Loyalty session lifecycle events (V43), tagged by outcome — {@code started}
      * (a refresh chain opened), {@code refreshed} (a rotation), {@code signed_out},
      * {@code revoked}.

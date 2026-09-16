@@ -76,6 +76,7 @@ class PartnerRegistrationControllerVeenguModeTest {
                 userService, mock(RegistrationAssertionVerifier.class), veenguClient,
                 // Wired but unused in veengu mode.
                 mock(com.innbucks.loyaltyservice.client.InnbucksSessionClient.class),
+                mock(com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.class),
                 sessionIssuer, notifier, mock(LoyaltyMetrics.class),
                 enabled, "veengu", "");
     }

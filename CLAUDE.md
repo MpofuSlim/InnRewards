@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V42**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V44**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -228,11 +228,14 @@ proven they hold it". `loyalty_users.status` is a per-projection CACHE of it.**
   platform binds a user token to its own msisdn, and it does not (see the
   `innbucks` section below for the evidence). Both are left in place only
   because V41/V42 are applied history; both stay off.
-- **The ONLY live registration path is ticketing's OTP webhook**
+- **The live registration paths are ticketing's OTP webhook**
   (`source = TICKETING_OTP`), which reaches `registerPhone` through
-  `promoteByPhone`. `assertion` and `key` remain available for a partner
-  *backend* registering on a customer's behalf, but no mobile client may call
-  them — and neither ever returns a session.
+  `promoteByPhone`, **and — where a cell enables it — the `innbucks_validate`
+  eligibility mode (V44, see its own section below)**, called by the app after
+  each middleware login and by the backlog sweeper. `assertion` and `key`
+  remain available for a partner *backend* registering on a customer's behalf.
+  None of these returns a session — the customer app's session still comes
+  from ticketing's OTP verify.
 
 ### Registration hands back a SESSION — but only to the customer's own device
 
@@ -396,6 +399,58 @@ that, returning one row per tenant the caller has transacted with:
   (`Path=/loyalty/**`) already covers it. There is no mapping conflict with
   `/loyalty/users/{userId}/unblock` (POST) or `/loyalty/users/{id}/transactions`
   (a deeper path).
+
+### `innbucks_validate` (V44): ELIGIBILITY by owner decision — never identity
+
+**Platform-owner decision (2026-09, reaffirmed explicitly): every InnBucks
+customer is eligible to spend loyalty points.** Under that rule, "is this
+msisdn a real InnBucks customer" — answered by the app-authorized
+`GET /auth/client-service/msisdn/{msisdn}/validate` — is a sufficient basis to
+REGISTER a phone (`source = INNBUCKS_VALIDATE`) and promote its projections.
+This is the same endpoint the V42 post-mortem below disqualifies as an
+OWNERSHIP probe, used deliberately for a different question: it answers "00"
+for every real customer whoever asks, which is disqualifying for identity and
+exactly the point for eligibility. Do not "fix" either section to match the
+other — they answer different questions.
+
+- **Two consumers of `InnbucksCustomerValidateClient`:** the
+  `auth-mode=innbucks_validate` branch of `POST /loyalty/partner/registrations`
+  (the app calls it after each middleware phone+PIN login; anyone MAY call it —
+  the effect is only that a real customer's phone becomes spendable), and
+  `InnbucksValidateBacklogSweeper` (random bounded samples of unregistered
+  PENDING / `PENDING_EXPIRED` phones per run, so the pre-existing backlog
+  drains without waiting for logins; aborts the run on the first Unavailable;
+  sends NO customer notification — a bulk-backfill SMS campaign is a marketing
+  decision, not a side effect).
+- **The load-bearing boundary: this mode NEVER mints a session.**
+  `selfServiceMode()` excludes it and `PartnerRegistrationSessionScopingTest`
+  pins it. A session here would be a passwordless login to any customer account
+  by naming their number. Registering makes the phone's (already eligible)
+  owner spendable; it grants the caller nothing. Identity remains the OTP /
+  assertion channels' job.
+- **Accepted residual exposure, stated once:** wherever spends are bound to the
+  caller only by account status — today that is the unauthenticated
+  `/loyalty/public/**` staging surface (`.../points/send`, `.../points/redeem`,
+  live only where `loyalty.public-test.enabled=true`) — promoting every
+  InnBucks customer removes PENDING as the last per-account guard there. The
+  authenticated surface is unaffected (`requireCallerOwns*` binds the session
+  phone). The owner accepted this with the decision; the durable fix is moving
+  app spends to the authenticated twins (OTP session + refresh) or retiring the
+  public spend endpoints.
+- **Ops:** client credentials default to the fleet `BANK_API_*` set (overrides:
+  `LOYALTY_INNBUCKS_VALIDATE_*`); enable the endpoint with
+  `LOYALTY_PARTNER_REGISTRATION_ENABLED=true` +
+  `LOYALTY_PARTNER_REGISTRATION_AUTH_MODE=innbucks_validate`, the sweep with
+  `LOYALTY_INNBUCKS_VALIDATE_SWEEP_ENABLED=true` — per host, in the gitignored
+  `cell.<iso>.local.env`. Half-provisioning is a boot ERROR
+  (`PartnerRegistrationProvisioningCheck` / `InnbucksValidateProvisioningCheck`).
+  The 404→NotACustomer mapping in the client is an ASSUMPTION (unmeasured):
+  after any config change, a run of `not_customer` outcomes across every phone
+  in `loyalty.registration.backlog.checked` means the validate-path is wrong,
+  not that the backlog is empty.
+- **Reversal lever:** the registrations are batch-revocable —
+  `WHERE source = 'INNBUCKS_VALIDATE'` — then re-PENDING the projections, per
+  the V40 revocation notes.
 
 ### `innbucks` mode is UNSOUND and must stay disabled (V42)
 

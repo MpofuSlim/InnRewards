@@ -40,6 +40,7 @@ public class PartnerRegistrationProvisioningCheck {
     private final String innbucksBaseUrl;
     private final String innbucksApiKey;
     private final String innbucksProbePath;
+    private final com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient validateClient;
 
     public PartnerRegistrationProvisioningCheck(
             @Value("${loyalty.registration.partner.enabled:false}") boolean enabled,
@@ -50,7 +51,8 @@ public class PartnerRegistrationProvisioningCheck {
             @Value("${loyalty.registration.partner.veengu.tenant:}") String veenguTenant,
             @Value("${loyalty.registration.partner.innbucks.base-url:}") String innbucksBaseUrl,
             @Value("${loyalty.registration.partner.innbucks.api-key:}") String innbucksApiKey,
-            @Value("${loyalty.registration.partner.innbucks.probe-path:}") String innbucksProbePath) {
+            @Value("${loyalty.registration.partner.innbucks.probe-path:}") String innbucksProbePath,
+            com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient validateClient) {
         this.enabled = enabled;
         this.authMode = authMode == null ? "assertion" : authMode.trim().toLowerCase();
         this.partnerKey = partnerKey;
@@ -60,6 +62,7 @@ public class PartnerRegistrationProvisioningCheck {
         this.innbucksBaseUrl = innbucksBaseUrl;
         this.innbucksApiKey = innbucksApiKey;
         this.innbucksProbePath = innbucksProbePath;
+        this.validateClient = validateClient;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -67,10 +70,12 @@ public class PartnerRegistrationProvisioningCheck {
         if (!enabled) return;
 
         if (!"assertion".equals(authMode) && !"key".equals(authMode)
-                && !"veengu".equals(authMode) && !"innbucks".equals(authMode)) {
+                && !"veengu".equals(authMode) && !"innbucks".equals(authMode)
+                && !"innbucks_validate".equals(authMode)) {
             log.error("Partner registration is MISCONFIGURED: loyalty.registration.partner.auth-mode is "
-                    + "'{}', which is none of 'assertion', 'key', 'veengu' or 'innbucks'. The endpoint "
-                    + "falls back to assertion mode; set it explicitly.", authMode);
+                    + "'{}', which is none of 'assertion', 'key', 'veengu', 'innbucks' or "
+                    + "'innbucks_validate'. The endpoint falls back to assertion mode; set it "
+                    + "explicitly.", authMode);
             return;
         }
 
@@ -81,6 +86,7 @@ public class PartnerRegistrationProvisioningCheck {
             case "innbucks" -> innbucksBaseUrl != null && !innbucksBaseUrl.isBlank()
                     && innbucksApiKey != null && !innbucksApiKey.isBlank()
                     && innbucksProbePath != null && !innbucksProbePath.isBlank();
+            case "innbucks_validate" -> validateClient.isConfigured();
             default -> publicKey != null && !publicKey.isBlank();
         };
 
@@ -90,6 +96,8 @@ public class PartnerRegistrationProvisioningCheck {
                 case "veengu" -> "LOYALTY_PARTNER_REGISTRATION_VEENGU_BASE_URL and/or "
                         + "LOYALTY_PARTNER_REGISTRATION_VEENGU_TENANT";
                 case "innbucks" -> "LOYALTY_PARTNER_REGISTRATION_INNBUCKS_BASE_URL / _API_KEY / _PROBE_PATH";
+                case "innbucks_validate" -> "the BANK_API_URL / BANK_API_KEY / BANK_API_USERNAME / "
+                        + "BANK_API_PASSWORD fleet credentials (or their LOYALTY_INNBUCKS_VALIDATE_* overrides)";
                 default -> "LOYALTY_PARTNER_REGISTRATION_PUBLIC_KEY";
             };
             log.error("Partner registration is HALF-PROVISIONED: enabled in {} mode but {} is blank, so "
@@ -123,6 +131,12 @@ public class PartnerRegistrationProvisioningCheck {
                             + "authorizes.", innbucksProbePath);
                 }
             }
+            case "innbucks_validate" -> log.warn("Partner registration is enabled in INNBUCKS-VALIDATE "
+                    + "mode: a body msisdn confirmed as a real InnBucks customer by the app-authorized "
+                    + "/validate directory endpoint is registered as spendable. This is an ELIGIBILITY "
+                    + "check per the platform-owner decision that every InnBucks customer may spend "
+                    + "points — it does NOT prove the caller holds the number, so this mode never "
+                    + "returns a session, and identity remains the OTP / assertion channels' job.");
             default -> log.info("Partner registration is enabled in assertion mode (signed proofs only).");
         }
     }

@@ -65,24 +65,36 @@ import java.util.Map;
  *       and, since this is a {@link #selfServiceMode()}, receive a live loyalty
  *       session for it. See the CAUTION in {@code CLAUDE.md} and the
  *       {@code InnbucksSessionClient} javadoc for the evidence.</li>
+ *   <li>{@code innbucks_validate} (V44) — an <b>ELIGIBILITY</b> mode, distinct
+ *       in kind from every mode above: it does not claim to prove ownership at
+ *       all. The platform owner's decision (2026-09) is that every InnBucks
+ *       customer may spend loyalty points, so the body msisdn is checked
+ *       against the app-authorized {@code /validate} directory endpoint and a
+ *       confirmed customer is registered
+ *       ({@code source = INNBUCKS_VALIDATE}). Anyone can name any customer's
+ *       number here; the effect is only that the number's (already eligible)
+ *       owner becomes spendable. What keeps that bounded is that this mode
+ *       NEVER returns a session — the caller gains no power to act as the
+ *       phone it named. See the V44 migration for the decision record.</li>
  * </ul>
  *
- * <p><b>The only live registration path is ticketing's OTP webhook</b>
+ * <p><b>The live registration paths are ticketing's OTP webhook</b>
  * ({@code source = TICKETING_OTP}), which reaches {@code registerPhone} through
- * {@code promoteByPhone}. {@code assertion} and {@code key} remain available for
- * a partner BACKEND registering on a customer's behalf; no mobile client may
- * call any mode here.
+ * {@code promoteByPhone}, <b>and — where a cell enables it — the
+ * {@code innbucks_validate} mode here</b> (typically called by the app after
+ * each middleware login, and by {@code InnbucksValidateBacklogSweeper} for the
+ * pre-existing PENDING backlog). {@code assertion} and {@code key} remain
+ * available for a partner BACKEND registering on a customer's behalf.
  *
- * <h2>Why no mode may use the /validate endpoint</h2>
+ * <h2>The /validate endpoint: never an OWNERSHIP proof</h2>
  * {@code /auth/client-service/msisdn/{msisdn}/validate} is authorized by the
  * APP's own credentials and answers success for EVERY real InnBucks customer,
- * so it proves a number EXISTS, never that the caller holds it. Registering on
- * it would let anyone name any customer's number and then spend their points —
- * exactly what PENDING exists to prevent. It remains useful to the FE as an
- * onboarding pre-check ("is this a customer, is their PIN set"); it is simply
- * never the proof. The provisioning check still refuses a {@code /validate}
- * probe path, but that guard now protects a mode that must not run at all — see
- * {@code InnbucksSessionClient} for why no path makes it safe.
+ * so it proves a number EXISTS, never that the caller holds it. That is why the
+ * dead {@code innbucks} mode may never point its probe at it (the provisioning
+ * check still refuses that), and why {@code innbucks_validate} — which uses it
+ * deliberately, for eligibility — must never mint a session or feed any
+ * identity decision. The two uses differ in the question asked, not in what the
+ * endpoint answers.
  *
  * <h2>Fail-closed</h2>
  * Disabled (the default) answers 404 — indistinguishable from no such route.
@@ -103,6 +115,7 @@ public class PartnerRegistrationController {
     private final RegistrationAssertionVerifier verifier;
     private final com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient;
     private final com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient;
+    private final com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient validateClient;
     private final com.innbucks.loyaltyservice.security.LoyaltySessionIssuer sessionIssuer;
     private final MemberActivityNotifier memberNotifier;
     private final LoyaltyMetrics metrics;
@@ -115,6 +128,7 @@ public class PartnerRegistrationController {
             RegistrationAssertionVerifier verifier,
             com.innbucks.loyaltyservice.client.VeenguIdentityClient veenguClient,
             com.innbucks.loyaltyservice.client.InnbucksSessionClient innbucksClient,
+            com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient validateClient,
             com.innbucks.loyaltyservice.security.LoyaltySessionIssuer sessionIssuer,
             MemberActivityNotifier memberNotifier,
             LoyaltyMetrics metrics,
@@ -125,6 +139,7 @@ public class PartnerRegistrationController {
         this.verifier = verifier;
         this.veenguClient = veenguClient;
         this.innbucksClient = innbucksClient;
+        this.validateClient = validateClient;
         this.sessionIssuer = sessionIssuer;
         this.memberNotifier = memberNotifier;
         this.metrics = metrics;
@@ -136,20 +151,25 @@ public class PartnerRegistrationController {
     @PostMapping("/registrations")
     @Operation(summary = "Record that a phone's owner has proven they hold it",
             description = """
-                    Records the proof that activates every loyalty projection of a phone, now and in \
-                    future. The caller is a trusted partner BACKEND registering on a customer's \
-                    behalf, in one of two modes: `assertion` (default — a short-lived phone-scoped \
-                    token it signed) or `key` (a shared secret in `X-Partner-Key`).
+                    Records the fact that activates every loyalty projection of a phone, now and in \
+                    future, in one of three live modes: `assertion` (default — a short-lived \
+                    phone-scoped token a partner backend signed), `key` (a shared secret in \
+                    `X-Partner-Key`), or `innbucks_validate` (the body msisdn is confirmed as a \
+                    real InnBucks customer against the platform's own directory — an ELIGIBILITY \
+                    check per the platform-owner decision that every InnBucks customer may spend \
+                    points, not an ownership proof).
 
-                    **No mobile client may call this endpoint.** The two self-service modes that \
-                    once accepted one — `innbucks` and `veengu` — are both dead and disabled, and \
-                    neither returns a session. The customer app obtains its loyalty session from \
-                    ticketing's OTP verify instead.
+                    **No mode returns a session.** The two dead self-service modes (`innbucks`, \
+                    `veengu`) are disabled, and `innbucks_validate` deliberately mints nothing: \
+                    registering a phone makes its owner spendable but grants the caller no power \
+                    to act as them. The customer app obtains its loyalty session from ticketing's \
+                    OTP verify instead.
 
                     Idempotent and safe to call on every login: a repeat is a no-op that reports \
-                    `projectionsPromoted: 0`. The body `phoneNumber` is read in `key` mode only — \
-                    in `assertion` mode the phone comes solely from the signed `sub`, so a caller \
-                    cannot pair a valid assertion for its own number with someone else's.""")
+                    `projectionsPromoted: 0`. The body `phoneNumber` is read in `key` and \
+                    `innbucks_validate` modes — in `assertion` mode the phone comes solely from \
+                    the signed `sub`, so a caller cannot pair a valid assertion for its own \
+                    number with someone else's.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registration recorded (or already present)",
                     content = @Content(mediaType = "application/json",
@@ -320,6 +340,52 @@ public class PartnerRegistrationController {
                             "Registration could not be verified right now. Please try again.");
                 }
             }
+        } else if ("innbucks_validate".equals(authMode)) {
+            // ELIGIBILITY mode (V44). The platform owner's decision: every
+            // InnBucks customer may spend loyalty points, so "this msisdn is a
+            // real InnBucks customer" — answered by the app-authorized
+            // /validate endpoint — is the whole question. Deliberately NOT an
+            // ownership proof: anyone can name any customer's number here and
+            // cause its (already eligible) owner to become spendable. What
+            // keeps that bounded is that this mode NEVER returns a session
+            // (selfServiceMode() excludes it), so the caller gains no ability
+            // to act as the phone they named.
+            if (!validateClient.isConfigured()) {
+                metrics.incPartnerRegistrationRejected("unconfigured");
+                throw unconfigured();
+            }
+            if (body == null || body.phoneNumber() == null || body.phoneNumber().isBlank()) {
+                metrics.incPartnerRegistrationRejected("bad_phone");
+                throw LoyaltyException.badRequest("BAD_PHONE", "Please provide a phone number.");
+            }
+            // Normalise BEFORE the check so the number we validate is character-
+            // identical to the number we register.
+            String claimed = userService.normalizePhone(body.phoneNumber());
+            switch (validateClient.checkCustomer(claimed)) {
+                case com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.Customer ignored -> {
+                    phone = claimed;
+                    source = PhoneRegistration.Source.INNBUCKS_VALIDATE;
+                }
+                case com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.NotACustomer r -> {
+                    // Logged with the reason, answered without it — same opaque
+                    // 401 as every other refusal on this endpoint, so it is not
+                    // a free is-this-an-InnBucks-customer oracle.
+                    log.warn("InnBucks validate registration rejected phone={} reason={}",
+                            MsisdnMasking.mask(claimed), r.reason());
+                    metrics.incPartnerRegistrationRejected("innbucks_validate_not_customer");
+                    throw unauthorized();
+                }
+                case com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.Unavailable u -> {
+                    // FAIL CLOSED but retryably: no answer (or our own platform
+                    // credentials refused) is not a verdict on the msisdn, so it
+                    // must not be the opaque 401 and must NEVER register.
+                    log.warn("InnBucks validate registration upstream unavailable phone={} reason={}",
+                            MsisdnMasking.mask(claimed), u.reason());
+                    metrics.incPartnerRegistrationRejected("innbucks_validate_unavailable");
+                    throw LoyaltyException.serviceUnavailable("REGISTRATION_UPSTREAM_UNAVAILABLE",
+                            "Registration could not be verified right now. Please try again.");
+                }
+            }
         } else if ("key".equals(authMode)) {
             if (partnerKey == null || partnerKey.isBlank()) {
                 metrics.incPartnerRegistrationRejected("unconfigured");
@@ -405,7 +471,7 @@ public class PartnerRegistrationController {
     public record PartnerRegistrationRequest(
             @Schema(description = "Signed registration assertion (compact JWS). Required in `assertion` mode.")
             String assertion,
-            @Schema(description = "E.164 phone. Read in `key` mode, and in `innbucks` mode as the CLAIM to be proved against the caller's user token. Ignored in `assertion` mode (phone comes from the signed `sub`) and in `veengu` mode (phone comes from Veengu's answer).",
+            @Schema(description = "E.164 phone. Read in `key` mode, in `innbucks_validate` mode as the msisdn checked against the InnBucks customer directory, and in the dead `innbucks` mode as the CLAIM to be proved against the caller's user token. Ignored in `assertion` mode (phone comes from the signed `sub`) and in `veengu` mode (phone comes from Veengu's answer).",
                     example = "+263771234567")
             String phoneNumber,
             @Schema(description = "Opaque identifier for the account at the partner, stored for traceability.",
@@ -432,6 +498,13 @@ public class PartnerRegistrationController {
      * later gets no session until someone decides it should, which is the safe
      * direction to fail. Withholding a token only costs that caller an extra
      * step; issuing one to a partner backend hands it every customer it touches.
+     *
+     * <p>{@code innbucks_validate} is deliberately NOT here and never may be:
+     * its check proves a msisdn belongs to SOME InnBucks customer, not that the
+     * caller holds it, so a session for it would be a passwordless login to any
+     * customer account by naming their number. The no-session property is the
+     * entire boundary that makes the eligibility decision safe to implement —
+     * {@code PartnerRegistrationSessionScopingTest} pins it.
      */
     private boolean selfServiceMode() {
         return "innbucks".equals(authMode) || "veengu".equals(authMode);

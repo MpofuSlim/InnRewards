@@ -24,10 +24,11 @@ import static org.mockito.Mockito.when;
 
 /**
  * The backlog validate sweep at the unit level — the wire contract is pinned by
- * {@code InnbucksCustomerValidateClientContractTest}, the sampling query runs
- * against real Postgres in the integration suite. What is pinned here is the
- * decision table per phone and, above all, that an unavailable upstream ABORTS
- * the run instead of burning the rest of the batch against a dead gateway.
+ * {@code InnbucksCustomerValidateClientContractTest} and the native sampling
+ * query by {@code BacklogSampleQueryIT} against real Postgres. What is pinned
+ * here is the decision table per phone and, above all, that an unavailable
+ * upstream ABORTS the run instead of burning the rest of the batch against a
+ * dead gateway, while a per-phone error is isolated and the batch continues.
  */
 class InnbucksValidateBacklogSweeperTest {
 
@@ -109,6 +110,26 @@ class InnbucksValidateBacklogSweeperTest {
         verify(client, never()).checkCustomer(P3);
         verify(userService, never()).registerPhone(eq(P3), any(), any(), any(), any());
         verify(metrics).incBacklogValidateChecked("unavailable");
+    }
+
+    @Test
+    @DisplayName("a THROWING registerPhone isolates that phone and the batch continues")
+    void perPhoneError_isIsolated() {
+        // A lost create race (DataIntegrityViolationException) or any DB hiccup
+        // on one phone must not abort the run — unlike an Unavailable OUTCOME,
+        // which does. P2 throws; P1 and P3 must still be processed.
+        when(users.sampleUnregisteredBacklogPhones(anyInt())).thenReturn(List.of(P1, P2, P3));
+        when(client.checkCustomer(P1)).thenReturn(new InnbucksCustomerValidateClient.Customer("00"));
+        when(client.checkCustomer(P2)).thenReturn(new InnbucksCustomerValidateClient.Customer("00"));
+        when(client.checkCustomer(P3)).thenReturn(new InnbucksCustomerValidateClient.Customer("00"));
+        when(userService.registerPhone(eq(P2), any(), any(), any(), any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("phone unique index"));
+
+        sweeper(true, 100).sweep();
+
+        verify(userService).registerPhone(eq(P1), any(), any(), any(), any());
+        verify(userService).registerPhone(eq(P3), any(), any(), any(), any());
+        verify(metrics).incBacklogValidateChecked("failed");
     }
 
     @Test

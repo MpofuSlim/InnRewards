@@ -180,6 +180,37 @@ class InnbucksCustomerValidateClientContractTest {
     }
 
     @Test
+    @DisplayName("a 403 on the validate call also forces one refresh and replays (same as 401)")
+    void check_403RefreshesTokenOnceAndReplays() {
+        // 403 is the other credential-refusal the client retries — an expired or
+        // scope-narrowed bearer can present as either. Untested, this half of the
+        // contract could silently break while the 401 path stayed green.
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).inScenario("refresh403")
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"accessToken\":\"tok-stale\"}"))
+                .willSetStateTo("second-login"));
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).inScenario("refresh403")
+                .whenScenarioStateIs("second-login")
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"accessToken\":\"tok-fresh\"}")));
+        wireMock.stubFor(get(urlEqualTo(VALIDATE))
+                .withHeader("Authorization", equalTo("Bearer tok-stale"))
+                .willReturn(aResponse().withStatus(403)));
+        wireMock.stubFor(get(urlEqualTo(VALIDATE))
+                .withHeader("Authorization", equalTo("Bearer tok-fresh"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":\"00\"}")));
+
+        assertThat(client().checkCustomer(E164))
+                .isEqualTo(new InnbucksCustomerValidateClient.Customer("00"));
+        wireMock.verify(2, postRequestedFor(urlEqualTo(LOGIN)));
+    }
+
+    @Test
     @DisplayName("SECURITY: our credentials refused twice is Unavailable — an outage, never 'not a customer'")
     void check_persistentCredentialRefusal_isUnavailable() {
         stubLogin("tok-1");
@@ -187,6 +218,10 @@ class InnbucksCustomerValidateClientContractTest {
 
         assertThat(client().checkCustomer(E164))
                 .isEqualTo(new InnbucksCustomerValidateClient.Unavailable("credentials_rejected"));
+        // Refreshes EXACTLY once before giving up — never a login-retry loop that
+        // would hammer the auth endpoint on a sustained outage.
+        wireMock.verify(2, postRequestedFor(urlEqualTo(LOGIN)));
+        wireMock.verify(2, getRequestedFor(urlEqualTo(VALIDATE)));
     }
 
     @Test
@@ -328,5 +363,23 @@ class InnbucksCustomerValidateClientContractTest {
         assertThat(new InnbucksCustomerValidateClient("http://x", API_KEY, "u", "p", LOGIN, "", "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
         assertThat(client().isConfigured()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SECURITY: a validate-path with no {msisdn} placeholder fails CLOSED (unconfigured, never calls out)")
+    void isConfigured_requiresTheMsisdnPlaceholder() {
+        // A placeholder-less path makes replace("{msisdn}",...) a no-op, so every
+        // phone would probe one literal URL — a mass fail-OPEN if that URL answers
+        // a success code. Reading it as unconfigured turns that into a clean 503 /
+        // skipped sweep. This is the config analogue of the /validate footgun.
+        ObjectMapper m = new ObjectMapper();
+        InnbucksCustomerValidateClient noPlaceholder = new InnbucksCustomerValidateClient(
+                "http://localhost:" + wireMock.port(), API_KEY, "u", "p", LOGIN,
+                "/auth/client-service/validate", "00", 480, 300, 300, m);
+
+        assertThat(noPlaceholder.isConfigured()).isFalse();
+        assertThat(noPlaceholder.checkCustomer(E164))
+                .isEqualTo(new InnbucksCustomerValidateClient.Unavailable("unconfigured"));
+        wireMock.verify(0, anyRequestedFor(urlMatching(".*")));
     }
 }

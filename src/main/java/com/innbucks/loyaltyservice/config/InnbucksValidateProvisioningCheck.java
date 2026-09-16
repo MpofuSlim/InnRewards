@@ -24,12 +24,15 @@ import org.springframework.stereotype.Component;
 public class InnbucksValidateProvisioningCheck {
 
     private final boolean sweepEnabled;
+    private final String validatePath;
     private final InnbucksCustomerValidateClient validateClient;
 
     public InnbucksValidateProvisioningCheck(
             @Value("${loyalty.registration.innbucks-validate.sweep.enabled:false}") boolean sweepEnabled,
+            @Value("${loyalty.registration.innbucks-validate.validate-path:/auth/client-service/msisdn/{msisdn}/validate}") String validatePath,
             InnbucksCustomerValidateClient validateClient) {
         this.sweepEnabled = sweepEnabled;
+        this.validatePath = validatePath == null ? "" : validatePath;
         this.validateClient = validateClient;
     }
 
@@ -37,6 +40,18 @@ public class InnbucksValidateProvisioningCheck {
     public void checkSweepProvisioning() {
         if (!sweepEnabled) return;
         if (!validateClient.isConfigured()) {
+            // A validate-path missing the {msisdn} placeholder fails isConfigured
+            // by design (see the client) — a mass fail-open guard, not a missing
+            // credential. Name that case precisely; a "provision your credentials"
+            // message would send the operator hunting the wrong thing.
+            if (!validatePath.contains("{msisdn}")) {
+                log.error("InnBucks backlog validate sweep is MISCONFIGURED: "
+                        + "LOYALTY_INNBUCKS_VALIDATE_PATH ('{}') has no {msisdn} placeholder, so every "
+                        + "phone would probe one literal URL — a fail-open the client refuses by reading "
+                        + "as unconfigured. Restore the {msisdn} placeholder, or set "
+                        + "LOYALTY_INNBUCKS_VALIDATE_SWEEP_ENABLED=false.", validatePath);
+                return;
+            }
             log.error("InnBucks backlog validate sweep is HALF-PROVISIONED: "
                     + "LOYALTY_INNBUCKS_VALIDATE_SWEEP_ENABLED is true but the validate client has no "
                     + "credentials — every run will skip and no PENDING customer will be promoted. "

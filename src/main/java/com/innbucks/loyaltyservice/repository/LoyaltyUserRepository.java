@@ -69,8 +69,19 @@ public interface LoyaltyUserRepository extends JpaRepository<LoyaltyUser, UUID> 
      * A bounded, RANDOM sample of distinct phones that would become spendable
      * if registered — PENDING projections plus sweeper age-outs
      * ({@code INACTIVE}/{@code PENDING_EXPIRED}, which {@code registerPhone}
-     * recovers) whose phone has no live registration. Feeds
+     * recovers) whose phone has NEVER been registered. Feeds
      * {@code InnbucksValidateBacklogSweeper}.
+     *
+     * <p>The {@code NOT EXISTS} deliberately matches ANY registration row,
+     * revoked ones included — unlike {@code findStaleUnregistered}'s live-only
+     * filter. A revoked registration is an OPERATOR decision (a leaked key's
+     * batch, or the eligibility decision itself reversed), and
+     * {@code registerPhone} reinstates a revoked row on any fresh proof — so a
+     * sweep that re-sampled revoked phones would re-validate and quietly undo
+     * the revocation on its next pass, defeating the batch-revocation lever the
+     * V44 migration documents. Housekeeping must not undo operators; a revoked
+     * phone comes back only through a per-phone act (the app calling the
+     * registration endpoint, or ticketing's OTP).
      *
      * <p>Random rather than oldest-first ON PURPOSE: a validate check can answer
      * "not a customer", and those phones stay in this result set until they age
@@ -87,8 +98,7 @@ public interface LoyaltyUserRepository extends JpaRepository<LoyaltyUser, UUID> 
              WHERE (u.status = 'PENDING'
                     OR (u.status = 'INACTIVE' AND u.status_reason = 'PENDING_EXPIRED'))
                AND NOT EXISTS (SELECT 1 FROM phone_registrations r
-                                WHERE r.phone_number = u.phone_number
-                                  AND r.revoked_at IS NULL)
+                                WHERE r.phone_number = u.phone_number)
         ) p
         ORDER BY random()
         LIMIT :batch

@@ -411,19 +411,54 @@ public class UserService {
             return new RegistrationResult(false, 0, true);
         }
 
-        reg.setSource(source);
-        if (sourceRef != null && !sourceRef.isBlank()) {
-            reg.setSourceRef(sourceRef);
+        // INNBUCKS_VALIDATE (V44) is an ELIGIBILITY signal, not an ownership
+        // proof, so it must never override a STRONGER fact already recorded on an
+        // existing row — and both facts it must not override are exactly what the
+        // V44 batch-revocation lever depends on:
+        //
+        //  1. A REVOCATION. An operator revoking `WHERE source='INNBUCKS_VALIDATE'`
+        //     (reversing the eligibility decision, or cleaning a batch) must stay
+        //     reversed. The block below reinstates a revoked row on any fresh
+        //     proof — correct for a real proof (OTP/assertion/key), WRONG for a
+        //     mere eligibility check, which the app fires on every login: the
+        //     first customer to open the app would resurrect their own revocation.
+        //     So an eligibility check leaves a revoked row revoked and promotes
+        //     nothing (the phone is deliberately unregistered).
+        //  2. A stronger SOURCE. A phone already proven by OTP/assertion/key must
+        //     keep that source; relabelling it INNBUCKS_VALIDATE would make the
+        //     revoke query capture a genuinely-proven customer (over-revoking),
+        //     and desync source from `registered_at` (which keeps the FIRST proof)
+        //     so the incident-response `source + registered_at BETWEEN` queries
+        //     break. So an eligibility check on a live already-registered phone
+        //     only (re)converges projections; it writes no source, clears no
+        //     revocation. A real proof still overwrites INNBUCKS_VALIDATE, so a
+        //     customer who later OTP-verifies correctly graduates out of the
+        //     eligibility-only population.
+        //
+        // Every OTHER source takes the else-branch below exactly as before, so
+        // their behaviour is byte-for-byte unchanged; only the new source is
+        // special.
+        boolean eligibilityOnly = source == PhoneRegistration.Source.INNBUCKS_VALIDATE;
+        if (!newlyRegistered && eligibilityOnly && reg.getRevokedAt() != null) {
+            return new RegistrationResult(false, 0, false);
         }
-        if (assertedAt != null) {
-            reg.setLastAssertedAt(assertedAt);
-            reg.setLastAssertionJti(assertionJti);
+        if (newlyRegistered || !eligibilityOnly) {
+            reg.setSource(source);
+            if (sourceRef != null && !sourceRef.isBlank()) {
+                reg.setSourceRef(sourceRef);
+            }
+            if (assertedAt != null) {
+                reg.setLastAssertedAt(assertedAt);
+                reg.setLastAssertionJti(assertionJti);
+            }
+            // A fresh proof reinstates a revoked registration. Revocation answers
+            // a compromised credential, not a bad customer, so the customer
+            // proving themselves again through a sound channel is the intended
+            // recovery. An eligibility check is NOT such a proof — it never
+            // reaches here on an existing row (guarded above).
+            reg.setRevokedAt(null);
+            reg.setRevokedReason(null);
         }
-        // A fresh proof reinstates a revoked registration. Revocation answers a
-        // compromised credential, not a bad customer, so the customer proving
-        // themselves again through a sound channel is the intended recovery.
-        reg.setRevokedAt(null);
-        reg.setRevokedReason(null);
         registrations.save(reg);
 
         int promoted = 0;

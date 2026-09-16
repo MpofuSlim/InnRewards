@@ -36,6 +36,7 @@ public class PublicTestProvisioningCheck {
 
     private final boolean enabled;
     private final String configuredTenantId;
+    private final String apiKey;
 
     public PublicTestProvisioningCheck(
             // These bound `loyalty.public.test.*` while PublicTestController and
@@ -45,14 +46,18 @@ public class PublicTestProvisioningCheck {
             // override of one silently left the other unset, so the check could
             // report on a configuration the controller was not running.
             @Value("${loyalty.public-test.enabled:false}") boolean enabled,
-            @Value("${loyalty.public-test.tenant-id:}") String configuredTenantId) {
+            @Value("${loyalty.public-test.tenant-id:}") String configuredTenantId,
+            @Value("${loyalty.public-test.api-key:}") String apiKey) {
         this.enabled = enabled;
         this.configuredTenantId = configuredTenantId;
+        this.apiKey = apiKey;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void checkPublicTestProvisioning() {
         if (!enabled) return;
+
+        checkApiKey();
 
         String raw = configuredTenantId == null ? "" : configuredTenantId.trim();
         if (raw.isEmpty()) {
@@ -68,6 +73,29 @@ public class PublicTestProvisioningCheck {
             log.error("Public test surface is MISCONFIGURED: LOYALTY_PUBLIC_TEST_TENANT_ID is set but "
                     + "is not a valid UUID, so it is SILENTLY IGNORED and the points writes behave as "
                     + "if no pin were configured. Fix the value or clear it.");
+        }
+    }
+
+    /**
+     * The half-provisioned state, called out the way the ZimSwitch rail's is:
+     * the surface is switched ON but has no {@code x-api-key} to check, so
+     * {@code PublicTestApiKeyFilter} refuses every call 503. That looks
+     * identical to an outage from the client's side, and the operator's only
+     * clue that it is a config gap rather than a broken service is this line.
+     *
+     * <p>ERROR, never a boot failure, for the same reason as the rest of this
+     * class — a test affordance must not stop a cell starting.
+     */
+    private void checkApiKey() {
+        String key = apiKey == null ? "" : apiKey.trim();
+        if (key.isEmpty()) {
+            log.error("Public test surface is HALF-PROVISIONED: /loyalty/public/** is ENABLED but "
+                    + "LOYALTY_PUBLIC_TEST_API_KEY is blank, so every call is refused 503. Set the key "
+                    + "(openssl rand -base64 32) in this host's gitignored cell.<iso>.local.env and "
+                    + "publish the same value to the app's Firebase Remote Config, or switch the "
+                    + "surface off.");
+        } else {
+            log.info("Public test surface is enabled and gated by an x-api-key.");
         }
     }
 }

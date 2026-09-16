@@ -87,7 +87,41 @@ public class OpenApiConfig {
                                         .name("X-Tenant-Code")
                                         .description("Tenant short code — required on every tenant-scoped endpoint (alternative to X-Tenant-Id).")
                                         .required(false)
+                                        .schema(new StringSchema()))
+                        .addParameters("x-api-key",
+                                new HeaderParameter()
+                                        .name("x-api-key")
+                                        .description("Shared key for the /loyalty/public/** test surface. "
+                                                + "Missing or wrong: 401. Surface enabled with no key provisioned on the cell: 503.")
+                                        .required(true)
                                         .schema(new StringSchema())));
+    }
+
+    /**
+     * Renders the {@code x-api-key} input field on the {@code /loyalty/public/**}
+     * operations. Those carry an empty {@code @SecurityRequirements} (no bearer
+     * token), which is still true — but they are NOT credential-free, and a
+     * Try-it-out form with nowhere to type the key makes the whole surface look
+     * broken from Swagger UI: every call comes back 401 with no hint why. Same
+     * failure the tenant-header customizer above exists to fix.
+     */
+    @Bean
+    public OperationCustomizer publicTestApiKeyOperationCustomizer() {
+        return (operation, handlerMethod) -> {
+            RequestMapping classMapping = handlerMethod.getBeanType().getAnnotation(RequestMapping.class);
+            boolean isPublicTest = classMapping != null && classMapping.value().length > 0
+                    && classMapping.value()[0].startsWith("/loyalty/public");
+            if (!isPublicTest) {
+                return operation;
+            }
+            boolean alreadyDeclared = operation.getParameters() != null
+                    && operation.getParameters().stream()
+                            .anyMatch(p -> "x-api-key".equals(p.getName()));
+            if (!alreadyDeclared) {
+                operation.addParametersItem(new Parameter().$ref("#/components/parameters/x-api-key"));
+            }
+            return operation;
+        };
     }
 
     /**

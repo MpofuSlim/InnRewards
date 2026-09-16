@@ -148,6 +148,25 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * Calls refused at the {@code /loyalty/public/**} api-key gate, grouped by
+     * reason — {@code missing_key}, {@code bad_key}, {@code unconfigured}.
+     *
+     * <p>{@code unconfigured} is the one that needs acting on: it means the
+     * surface is switched ON with no {@code LOYALTY_PUBLIC_TEST_API_KEY}, so
+     * every client call is failing 503 until the key is provisioned. The other
+     * two are ordinary — a stale key in someone's app build, or a scanner
+     * finding the path — but a sustained run of {@code bad_key} from real
+     * traffic means the app is shipping a key we have since rotated.
+     */
+    public void incPublicTestRejected(String reason) {
+        Counter.builder("loyalty.public.test.rejected")
+                .description("Public test endpoint calls refused at the api-key gate, grouped by reason")
+                .tag("reason", reason)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Backlog validate-sweep checks (V44), tagged by outcome — {@code customer}
      * (registered), {@code not_customer} (left PENDING to age out normally),
      * {@code unavailable} (run aborted; upstream could not answer).

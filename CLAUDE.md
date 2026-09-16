@@ -34,8 +34,8 @@ loyalty-relevant subset of that monorepo's `CLAUDE.md`.
   examples, and a gotchas checklist. Anchor every field to the merged code, not
   memory.
 - Loyalty note: the customer-app surface is the **`/loyalty/public/**` staging
-  endpoints** (unauthenticated today, planned `x-api-key`), whose authenticated
-  twins are the production target — keep new guides consistent with that
+  endpoints** (no customer auth; gated by a shared `x-api-key` — see below),
+  whose authenticated twins are the production target — keep new guides consistent with that
   authenticated-public-for-staging posture and map public → authenticated where
   it applies.
 
@@ -582,9 +582,10 @@ split. They describe a client that must not be switched on.
   return **zero rows** — the mode has never been enabled on any cell. If it ever
   returns rows, treat every one as an unproven registration and revoke it.
 - **Never add an activation path under `/loyalty/public/**`.** Those endpoints
-  are unauthenticated; activation there would let anyone who guesses a phone
-  number activate and then drain it, which is precisely what PENDING exists to
-  prevent.
+  have no CUSTOMER authentication; activation there would let anyone who guesses
+  a phone number activate and then drain it, which is precisely what PENDING
+  exists to prevent. The `x-api-key` gate does not change this — it identifies
+  the app, not the phone's owner, so a key holder is still "anyone".
 - **The gateway route lives in `ticketing-system`** and IS added (ticketing
   PR #543): `loyalty-partner-registration-route`, POST-only, IP-keyed fail-safe
   limiter, ordered before `loyalty-service-route` and pinned in
@@ -593,6 +594,46 @@ split. They describe a client that must not be switched on.
   caps brute-forcing the shared key. It was also shaped for the mobile-client
   traffic `innbucks` would have carried; with that mode dead, no mobile client
   calls this path at all.
+
+## `/loyalty/public/**` is gated by a shared `x-api-key`
+
+`PublicTestApiKeyFilter` checks one header for the whole prefix, in constant
+time, before any mapping in `PublicTestController` runs. The key lives in the
+super app's **Firebase Remote Config**, which is the property that matters: it
+can be rotated or revoked without an app release.
+
+- **It authenticates the APP, not the customer, and that is the whole limit of
+  what it buys.** The key ships inside a client, so anyone who can read that
+  client's config can read the key. It stops casual traffic and drive-by
+  scanners and gives us a kill switch; it does NOT make these endpoints safe —
+  the phone number in the URL is still the only identity, so a key holder can
+  still spend any phone's points. **`loyalty.public-test.enabled=false` on
+  production is still the control that matters.** Don't let the key be read as
+  promoting this surface toward production-worthy.
+- **A filter, not a per-method check.** The prefix is `permitAll()`, so nothing
+  in the security chain asks who is calling. A check inside each handler has to
+  be remembered by whoever adds the next mapping, and the one that forgets is a
+  live unauthenticated spend. Covering the prefix by shape means a new endpoint
+  is gated the moment it exists.
+- **Three states, and the middle one is the trap that was designed out.** Off →
+  the filter is inert and the controller's 404 stands (a 401 would confirm there
+  is something behind a path that is meant to look absent). On with a blank key →
+  **503** on every call plus a HALF-PROVISIONED boot ERROR, because a blank key
+  reading as "no key required" is exactly the state this gate exists to end. On
+  with a key → one opaque **401** for missing and wrong alike; which it was lives
+  in `loyalty.public.test.rejected{reason}`, never in the body.
+- **`OPTIONS` is never gated.** A CORS preflight carries no custom headers by
+  construction, so gating it 401s the preflight and the browser never sends the
+  real request.
+- **Config:** `LOYALTY_PUBLIC_TEST_API_KEY`, committed BLANK in
+  `ticketing-system`'s `deploy/cells/cell.zw.env` (the cell-wide ConfigMap is
+  shared by both ZW hosts — a value there would be a committed credential) and
+  set per host in the gitignored `cell.zw.local.env`, where the Secret wins.
+  Enabling the surface and provisioning the key are two steps; doing only the
+  first is the 503 state above, loudly.
+- **Watch `reason=unconfigured`** — it means a cell is serving 503s that look
+  exactly like an outage from the client side. `reason=bad_key` from real
+  traffic means the app is still shipping a key we have rotated.
 
 ## Multi-currency — USD base, allowlist, bank-rate default + tenant override (V36)
 

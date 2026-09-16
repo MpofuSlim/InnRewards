@@ -175,7 +175,19 @@ public class PartnerRegistrationController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
-                                    @ExampleObject(name = "First registration (self-service mode)", value = """
+                                    @ExampleObject(name = "First registration (assertion / key / innbucks_validate)", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Phone registration recorded",
+                                              "data": {
+                                                "phoneNumber": "+263771234567",
+                                                "registered": true,
+                                                "newlyRegistered": true,
+                                                "projectionsPromoted": 2,
+                                                "replay": false
+                                              }
+                                            }"""),
+                                    @ExampleObject(name = "First registration (dead self-service modes only — no live mode returns this)", value = """
                                             {
                                               "code": "200 OK",
                                               "message": "Phone registration recorded",
@@ -210,7 +222,7 @@ public class PartnerRegistrationController {
                                       "message": "Invalid phone number: 07712345",
                                       "data": null
                                     }"""))),
-            @ApiResponse(responseCode = "401", description = "REGISTRATION_UNAUTHORIZED — assertion or key rejected. Deliberately opaque: the body never says which check failed.",
+            @ApiResponse(responseCode = "401", description = "REGISTRATION_UNAUTHORIZED — the proof was not accepted: an assertion or key rejected, or (in `innbucks_validate` mode) a number the directory does not confirm as an InnBucks customer. Deliberately opaque: the body never says which check failed.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = """

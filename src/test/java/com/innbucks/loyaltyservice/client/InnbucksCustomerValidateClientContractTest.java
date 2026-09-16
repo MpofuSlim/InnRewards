@@ -9,6 +9,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Base64;
+
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.anyRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
@@ -132,6 +136,56 @@ class InnbucksCustomerValidateClientContractTest {
 
         wireMock.verify(getRequestedFor(urlEqualTo(VALIDATE)));
         wireMock.verify(0, getRequestedFor(urlMatching(".*\\+263.*")));
+    }
+
+    /** An UNSIGNED three-part JWT carrying just an {@code exp} — enough for the
+     *  best-effort exp parse; the signature is never verified. */
+    private static String jwtWithExp(long epochSeconds) {
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        String header = b64.encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8));
+        String payload = b64.encodeToString(("{\"exp\":" + epochSeconds + "}").getBytes(StandardCharsets.UTF_8));
+        return header + "." + payload + ".sig";
+    }
+
+    @Test
+    @DisplayName("a JWT bearer is cached until its OWN exp, not the TTL fallback")
+    void check_jwtExpIsHonouredForCaching() {
+        // A JWT whose exp is comfortably ahead caches like any live token — one
+        // login for two checks. Distinct from the opaque-token path below only
+        // in which branch of deriveExpiry runs, but it pins that the exp parse
+        // does not mis-read a valid future exp as already-expired.
+        stubLogin(jwtWithExp(Instant.now().getEpochSecond() + 3600));
+        wireMock.stubFor(get(urlEqualTo(VALIDATE))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":\"00\"}")));
+        InnbucksCustomerValidateClient c = client();
+
+        c.checkCustomer(E164);
+        c.checkCustomer(E164);
+
+        wireMock.verify(1, postRequestedFor(urlEqualTo(LOGIN)));
+    }
+
+    @Test
+    @DisplayName("a JWT whose exp is inside the 30s skew re-logs in every call — the exp IS parsed")
+    void check_jwtExpInsideSkewForcesReLogin() {
+        // exp only ~10s ahead: minus the 30s safety skew, the token is treated
+        // as already expired, so a SECOND check re-logs in. An opaque token (TTL
+        // fallback, 8 min) would cache — so seeing two logins proves the JWT exp
+        // was read, not the fallback. A units bug (exp read as millis) would
+        // cache for ~50 millennia and this test would drop to one login.
+        stubLogin(jwtWithExp(Instant.now().getEpochSecond() + 10));
+        wireMock.stubFor(get(urlEqualTo(VALIDATE))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":\"00\"}")));
+        InnbucksCustomerValidateClient c = client();
+
+        c.checkCustomer(E164);
+        c.checkCustomer(E164);
+
+        wireMock.verify(2, postRequestedFor(urlEqualTo(LOGIN)));
     }
 
     @Test

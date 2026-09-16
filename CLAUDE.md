@@ -417,9 +417,12 @@ other — they answer different questions.
   `auth-mode=innbucks_validate` branch of `POST /loyalty/partner/registrations`
   (the app calls it after each middleware phone+PIN login; anyone MAY call it —
   the effect is only that a real customer's phone becomes spendable), and
-  `InnbucksValidateBacklogSweeper` (random bounded samples of unregistered
+  `InnbucksValidateBacklogSweeper` (random bounded samples of NEVER-registered
   PENDING / `PENDING_EXPIRED` phones per run, so the pre-existing backlog
-  drains without waiting for logins; aborts the run on the first Unavailable;
+  drains without waiting for logins; a phone with a REVOKED registration is
+  never re-sampled — a revocation is an operator decision the sweep must not
+  undo, which is what keeps the batch-revocation lever below effective;
+  aborts the run on the first Unavailable;
   sends NO customer notification — a bulk-backfill SMS campaign is a marketing
   decision, not a side effect).
 - **The load-bearing boundary: this mode NEVER mints a session.**

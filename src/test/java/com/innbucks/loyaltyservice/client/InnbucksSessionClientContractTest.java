@@ -74,15 +74,24 @@ class InnbucksSessionClientContractTest {
     @Test
     @DisplayName("200 + success code: ownership proved, and the CUSTOMER's token authorized the probe")
     void verify_happyPath() {
-        // Body shape as supplied by the partner for this endpoint.
+        // Body SHAPE as supplied by the partner for this endpoint — the keys,
+        // their nesting and the responseCode spelling are the observed contract.
+        //
+        // The VALUES are deliberately anonymised placeholders. This stub was
+        // originally a verbatim transcription of a live response, which meant a
+        // real customer's name and bank account number sat in this repo (public,
+        // so world-readable). The repo convention is that a stub transcribes a
+        // real response rather than an assumption — that is about the SHAPE, and
+        // nothing here asserts on a name or an account number, so real values buy
+        // no fidelity at all. Do not "restore" them.
         wireMock.stubFor(get(urlEqualTo(PROBE))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody("""
                                 {"responseCode":"000","responseDescription":"Approved or completed successfully",
-                                 "firstName":"SEDRICK","lastName":"NYANYIWA",
-                                 "accounts":[{"accountNumber":"3005243923335","currency":"ZWG"}]}""")));
+                                 "firstName":"TEST","lastName":"CUSTOMER",
+                                 "accounts":[{"accountNumber":"0000000000000","currency":"ZWG"}]}""")));
 
         InnbucksSessionClient.OwnershipOutcome outcome = client.verifyOwnership(USER_TOKEN, E164);
 
@@ -206,7 +215,7 @@ class InnbucksSessionClientContractTest {
         wireMock.stubFor(get(urlEqualTo(PROBE))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"firstName\":\"SEDRICK\"}")));
+                        .withBody("{\"firstName\":\"TEST\"}")));
 
         assertThat(client.verifyOwnership(USER_TOKEN, E164))
                 .isEqualTo(new InnbucksSessionClient.Unavailable("no_response_code"));

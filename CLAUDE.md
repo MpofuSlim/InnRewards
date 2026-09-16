@@ -797,11 +797,19 @@ Invariants — weakening any needs a deliberate, called-out reason:
   as truthy on this private repo, so the job ran and failed), so the `if` now
   uses the canonical `repository.private` boolean AND `continue-on-error`
   guarantees the "not supported" error can never red a PR even if the metadata
-  is wrong again. This repo is currently private without GHAS, so the job
-  self-skips; it auto-re-enables if the repo goes public or GHAS is licensed.
-  This drops only the PR-time *direct-dependency* advisory surface —
-  transitive/library CVEs remain covered by the Release workflow's Trivy image
-  scan. (The public `ticketing-system` repo runs this job normally.)
+  is wrong again. **This repo is now PUBLIC** (it was private when the gate was
+  written), so the job no longer self-skips — the auto-re-enable has already
+  fired and `dependency-review` runs here normally, as it does on
+  `ticketing-system`. The gate and `continue-on-error` stay: they cost nothing
+  while public and are what stops every PR reddening if the repo is ever made
+  private again.
+
+  **Being public is worth remembering when you write a test fixture or an
+  example.** Anything committed here is world-readable, and git history keeps it
+  after a later scrub. A stub transcribed verbatim from a live response once put
+  a real customer's name and bank account number in this repo on exactly that
+  basis — see `InnbucksSessionClientContractTest`, where the shape is real and
+  the values are now placeholders.
 
 ## Local build (no Docker in some sandboxes)
 

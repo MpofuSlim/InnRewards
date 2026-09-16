@@ -42,9 +42,10 @@ import static org.mockito.Mockito.when;
  * <ul>
  *   <li>the phone is registered ONLY after the directory confirms it, in the
  *       NORMALISED spelling that was checked;</li>
- *   <li>a refusal registers nothing and never says which check failed —
- *       the endpoint must not become a free is-this-an-InnBucks-customer
- *       oracle;</li>
+ *   <li>a refusal registers nothing and the opaque 401 hides WHICH check failed
+ *       (not-customer vs a config/upstream fault, which is a 503) — it does NOT
+ *       hide customer-existence, which 200-vs-401 inherently reveals and which
+ *       this eligibility mode exists to answer;</li>
  *   <li>Unavailable (including OUR credentials being refused) is a retryable
  *       503, never the opaque 401 and never a registration.</li>
  * </ul>

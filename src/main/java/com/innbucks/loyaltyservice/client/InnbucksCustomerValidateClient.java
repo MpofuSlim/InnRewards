@@ -133,10 +133,22 @@ public class InnbucksCustomerValidateClient {
                 .build();
     }
 
-    /** Base URL, API key, login credentials and both paths must be provisioned. */
+    /**
+     * Base URL, API key, login credentials and both paths must be provisioned —
+     * and the validate path MUST carry the {@code {msisdn}} placeholder.
+     *
+     * <p>The placeholder check FAILS CLOSED on a real footgun: a validate-path
+     * without it makes {@code replace("{msisdn}", ...)} a no-op, so every phone
+     * probes the SAME literal URL. If that URL happens to answer a success
+     * {@code responseCode}, the client would confirm every phone as a customer
+     * and register the entire backlog — a mass fail-OPEN. Treating a
+     * placeholder-less path as unconfigured turns that into a clean 503 / skipped
+     * sweep instead, and the provisioning check names it explicitly at boot.
+     */
     public boolean isConfigured() {
         return !baseUrl.isBlank() && !apiKey.isBlank() && !username.isBlank()
-                && !password.isBlank() && !loginPath.isBlank() && !validatePath.isBlank();
+                && !password.isBlank() && !loginPath.isBlank()
+                && !validatePath.isBlank() && validatePath.contains("{msisdn}");
     }
 
     /**
@@ -255,8 +267,12 @@ public class InnbucksCustomerValidateClient {
                     .onStatus(status -> true, (req, res) -> { })
                     .toEntity(String.class);
         } catch (Exception e) {
+            // NOT e.toString(): Spring's I/O exception message embeds the request
+            // URL, which carries the bare msisdn — logging it raw would leak the
+            // very PII MsisdnMasking exists to keep out of the logs. The class
+            // name is enough to tell connect-refused from read-timeout.
             log.warn("InnBucks validate unreachable phone={} cause={}",
-                    MsisdnMasking.mask(e164Phone), e.toString());
+                    MsisdnMasking.mask(e164Phone), e.getClass().getSimpleName());
             return null;
         }
     }

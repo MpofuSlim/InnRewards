@@ -367,9 +367,14 @@ public class PartnerRegistrationController {
                     source = PhoneRegistration.Source.INNBUCKS_VALIDATE;
                 }
                 case com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.NotACustomer r -> {
-                    // Logged with the reason, answered without it — same opaque
-                    // 401 as every other refusal on this endpoint, so it is not
-                    // a free is-this-an-InnBucks-customer oracle.
+                    // Same opaque 401 as every other refusal on this endpoint: it
+                    // hides WHICH check failed (not-customer vs a config/upstream
+                    // fault, which is a 503), not WHETHER the number is a customer.
+                    // Customer-existence is inherently observable here — 200 vs 401
+                    // is the signal, and this eligibility mode exists to answer
+                    // exactly that — so this is not, and cannot be, an oracle guard;
+                    // it is the owner-accepted "anyone MAY call it" posture, capped
+                    // only by the gateway's IP rate limiter.
                     log.warn("InnBucks validate registration rejected phone={} reason={}",
                             MsisdnMasking.mask(claimed), r.reason());
                     metrics.incPartnerRegistrationRejected("innbucks_validate_not_customer");

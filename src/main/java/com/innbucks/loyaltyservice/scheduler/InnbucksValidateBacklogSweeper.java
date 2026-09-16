@@ -101,32 +101,49 @@ public class InnbucksValidateBacklogSweeper {
         }
         int registered = 0;
         int notCustomer = 0;
+        int failed = 0;
         for (String phone : phones) {
-            switch (validateClient.checkCustomer(phone)) {
-                case InnbucksCustomerValidateClient.Customer ignored -> {
-                    UserService.RegistrationResult result = userService.registerPhone(
-                            phone, PhoneRegistration.Source.INNBUCKS_VALIDATE, null, null, null);
-                    registered++;
-                    metrics.incBacklogValidateChecked("customer");
-                    log.info("Backlog sweep registered phone={} projectionsPromoted={}",
-                            MsisdnMasking.mask(phone), result.projectionsPromoted());
+            // Per-phone isolation. The client never throws (every failure is a
+            // typed outcome), but registerPhone CAN — a lost create race surfaces
+            // as DataIntegrityViolationException, and any DB hiccup as an
+            // unchecked exception. Without this catch one bad phone would abort
+            // the whole batch and lose every un-checked phone behind it. An
+            // Unavailable OUTCOME still aborts deliberately (below); a thrown
+            // exception is a single-row problem, so it is logged and skipped.
+            try {
+                switch (validateClient.checkCustomer(phone)) {
+                    case InnbucksCustomerValidateClient.Customer ignored -> {
+                        UserService.RegistrationResult result = userService.registerPhone(
+                                phone, PhoneRegistration.Source.INNBUCKS_VALIDATE, null, null, null);
+                        registered++;
+                        metrics.incBacklogValidateChecked("customer");
+                        log.info("Backlog sweep registered phone={} projectionsPromoted={}",
+                                MsisdnMasking.mask(phone), result.projectionsPromoted());
+                    }
+                    case InnbucksCustomerValidateClient.NotACustomer r -> {
+                        notCustomer++;
+                        metrics.incBacklogValidateChecked("not_customer");
+                        log.debug("Backlog sweep: phone={} is not an InnBucks customer ({})",
+                                MsisdnMasking.mask(phone), r.reason());
+                    }
+                    case InnbucksCustomerValidateClient.Unavailable u -> {
+                        metrics.incBacklogValidateChecked("unavailable");
+                        log.warn("Backlog sweep aborting run: upstream unavailable ({}) after {} of {} "
+                                        + "checks (registered={}, notCustomer={}, failed={}). "
+                                        + "Next run retries a fresh sample.",
+                                u.reason(), registered + notCustomer + failed, phones.size(),
+                                registered, notCustomer, failed);
+                        return;
+                    }
                 }
-                case InnbucksCustomerValidateClient.NotACustomer r -> {
-                    notCustomer++;
-                    metrics.incBacklogValidateChecked("not_customer");
-                    log.debug("Backlog sweep: phone={} is not an InnBucks customer ({})",
-                            MsisdnMasking.mask(phone), r.reason());
-                }
-                case InnbucksCustomerValidateClient.Unavailable u -> {
-                    metrics.incBacklogValidateChecked("unavailable");
-                    log.warn("Backlog sweep aborting run: upstream unavailable ({}) after {} of {} "
-                                    + "checks (registered={}, notCustomer={}). Next run retries a fresh sample.",
-                            u.reason(), registered + notCustomer, phones.size(), registered, notCustomer);
-                    return;
-                }
+            } catch (RuntimeException e) {
+                failed++;
+                metrics.incBacklogValidateChecked("failed");
+                log.warn("Backlog sweep skipping phone={} after an error ({}); continuing the batch.",
+                        MsisdnMasking.mask(phone), e.getClass().getSimpleName());
             }
         }
-        log.info("InnbucksValidateBacklogSweeper checked {} phones: registered={}, notCustomer={}",
-                phones.size(), registered, notCustomer);
+        log.info("InnbucksValidateBacklogSweeper checked {} phones: registered={}, notCustomer={}, failed={}",
+                phones.size(), registered, notCustomer, failed);
     }
 }

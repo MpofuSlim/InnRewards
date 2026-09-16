@@ -368,6 +368,85 @@ class UserServiceTest {
     }
 
     @Test
+    void registerPhone_eligibilityCheck_doesNotOverwriteAStrongerExistingSource() {
+        // V44 reversal-lever integrity: the app fires INNBUCKS_VALIDATE on every
+        // login, so a phone already proven by OTP must NOT be relabelled — else
+        // `WHERE source='INNBUCKS_VALIDATE'` would revoke a genuinely-proven
+        // customer, and source would desync from registered_at.
+        PhoneRegistration existing = new PhoneRegistration();
+        existing.setPhoneNumber(PHONE);
+        existing.setSource(PhoneRegistration.Source.TICKETING_OTP);
+        when(registrations.lockByPhoneNumber(PHONE)).thenReturn(Optional.of(existing));
+        when(users.findByPhoneNumber(PHONE)).thenReturn(java.util.List.of());
+
+        service.registerPhone(PHONE, PhoneRegistration.Source.INNBUCKS_VALIDATE, null, null, null);
+
+        assertThat(existing.getSource()).isEqualTo(PhoneRegistration.Source.TICKETING_OTP);
+    }
+
+    @Test
+    void registerPhone_realProof_stillOverwritesAnEligibilityOnlySource() {
+        // The other direction: a customer who was made spendable by eligibility
+        // and later actually OTP-verifies GRADUATES out of the eligibility-only
+        // population, so the reversal lever no longer captures them.
+        PhoneRegistration existing = new PhoneRegistration();
+        existing.setPhoneNumber(PHONE);
+        existing.setSource(PhoneRegistration.Source.INNBUCKS_VALIDATE);
+        when(registrations.lockByPhoneNumber(PHONE)).thenReturn(Optional.of(existing));
+        when(users.findByPhoneNumber(PHONE)).thenReturn(java.util.List.of());
+
+        service.registerPhone(PHONE, PhoneRegistration.Source.TICKETING_OTP, null, null, null);
+
+        assertThat(existing.getSource()).isEqualTo(PhoneRegistration.Source.TICKETING_OTP);
+    }
+
+    @Test
+    void registerPhone_eligibilityCheck_doesNotResurrectARevokedRegistration() {
+        // The revocation half of the same invariant. An operator revoked the
+        // eligibility batch; the app calling INNBUCKS_VALIDATE on the next login
+        // must leave the row revoked and promote nothing, or the reversal is
+        // undone one customer at a time. Only a real proof reinstates.
+        LoyaltyUser pending = withStatus(LoyaltyUser.Status.PENDING);
+        PhoneRegistration revoked = new PhoneRegistration();
+        revoked.setPhoneNumber(PHONE);
+        revoked.setSource(PhoneRegistration.Source.INNBUCKS_VALIDATE);
+        revoked.setRevokedAt(Instant.parse("2026-09-10T10:00:00Z"));
+        revoked.setRevokedReason("eligibility decision reversed");
+        when(registrations.lockByPhoneNumber(PHONE)).thenReturn(Optional.of(revoked));
+
+        UserService.RegistrationResult result = service.registerPhone(
+                PHONE, PhoneRegistration.Source.INNBUCKS_VALIDATE, null, null, null);
+
+        assertThat(result.projectionsPromoted()).isZero();
+        assertThat(revoked.getRevokedAt()).isNotNull();
+        // The projection is never even looked at — nothing is promoted.
+        org.mockito.Mockito.verify(users, org.mockito.Mockito.never()).findByPhoneNumber(PHONE);
+        assertThat(pending.getStatus()).isEqualTo(LoyaltyUser.Status.PENDING);
+    }
+
+    @Test
+    void registerPhone_realProof_stillReinstatesARevokedRegistration() {
+        // Unchanged for real proofs: a fresh OTP/assertion reinstates a revoked
+        // row (a compromised credential, not a bad customer). This guards that
+        // the eligibility carve-out above did not break the documented recovery.
+        LoyaltyUser pending = withStatus(LoyaltyUser.Status.PENDING);
+        PhoneRegistration revoked = new PhoneRegistration();
+        revoked.setPhoneNumber(PHONE);
+        revoked.setSource(PhoneRegistration.Source.PARTNER_KEY);
+        revoked.setRevokedAt(Instant.parse("2026-09-10T10:00:00Z"));
+        revoked.setRevokedReason("leaked key cleanup");
+        when(registrations.lockByPhoneNumber(PHONE)).thenReturn(Optional.of(revoked));
+        when(users.findByPhoneNumber(PHONE)).thenReturn(java.util.List.of(pending));
+
+        UserService.RegistrationResult result = service.registerPhone(
+                PHONE, PhoneRegistration.Source.PARTNER_ASSERTION, null, null, null);
+
+        assertThat(revoked.getRevokedAt()).isNull();
+        assertThat(result.projectionsPromoted()).isEqualTo(1);
+        assertThat(pending.getStatus()).isEqualTo(LoyaltyUser.Status.ACTIVE);
+    }
+
+    @Test
     void promoteByPhone_stillWorks_andNowRecordsThePhoneLevelFact() {
         // The ticketing OTP webhook's contract is unchanged — it returns the
         // number of rows promoted — but it now writes the phone-level fact too,

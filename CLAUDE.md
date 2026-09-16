@@ -453,7 +453,19 @@ other — they answer different questions.
   not that the backlog is empty.
 - **Reversal lever:** the registrations are batch-revocable —
   `WHERE source = 'INNBUCKS_VALIDATE'` — then re-PENDING the projections, per
-  the V40 revocation notes.
+  the V40 revocation notes. This lever is only correct because
+  `registerPhone` treats INNBUCKS_VALIDATE as a WEAK signal that never
+  overrides a stronger recorded fact: it does **not** overwrite an existing
+  stronger `source` (an OTP/assertion/key-proven phone the app later re-touches
+  keeps its real source, so the revoke query never captures a genuinely-proven
+  customer, and `source` stays consistent with the FIRST-proof `registered_at`),
+  and it does **not** reinstate a revoked row (only a real proof reinstates, so
+  the app firing eligibility on every login can't resurrect an operator's
+  revocation one customer at a time). A real proof still overwrites an
+  eligibility-only source, so a customer who later OTP-verifies graduates out of
+  the revocable population. Pinned by the four `registerPhone_*eligibility*` /
+  `*RevokedRegistration` cases in `UserServiceTest`. Every other source's
+  behaviour in `registerPhone` is unchanged.
 
 ### `innbucks` mode is UNSOUND and must stay disabled (V42)
 

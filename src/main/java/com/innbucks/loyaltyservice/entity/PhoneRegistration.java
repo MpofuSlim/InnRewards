@@ -100,7 +100,20 @@ public class PhoneRegistration {
          *  own source so anything it ever wrote is revocable as a batch —
          *  {@code SELECT * FROM phone_registrations WHERE source =
          *  'INNBUCKS_SESSION'} should return zero rows on every cell. */
-        INNBUCKS_SESSION
+        INNBUCKS_SESSION,
+        /** The platform confirmed the msisdn belongs to a real InnBucks customer
+         *  ({@code GET /auth/client-service/msisdn/{msisdn}/validate}, authorized
+         *  by the APP's own credentials — V44).
+         *
+         *  <p><b>This records ELIGIBILITY, not ownership.</b> Registered under
+         *  the explicit platform-owner decision (2026-09) that every InnBucks
+         *  customer may spend loyalty points; nothing about this proof says the
+         *  caller who named the phone holds it. That is why a registration from
+         *  this source must NEVER mint a loyalty session — identity remains the
+         *  OTP / assertion channels' job — and why it is its own source value,
+         *  so the whole batch is revocable if the decision is ever reversed:
+         *  {@code WHERE source = 'INNBUCKS_VALIDATE'}. */
+        INNBUCKS_VALIDATE
     }
 
     /** Live = not revoked. A revoked row is history, never a grant. */

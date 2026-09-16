@@ -80,7 +80,9 @@ class PartnerRegistrationControllerInnbucksModeTest {
                 // The veengu client is wired but must never be touched in this
                 // mode — a strict mock would fail the moment it were.
                 mock(com.innbucks.loyaltyservice.client.VeenguIdentityClient.class),
-                innbucksClient, sessionIssuer, notifier, mock(LoyaltyMetrics.class),
+                innbucksClient,
+                mock(com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.class),
+                sessionIssuer, notifier, mock(LoyaltyMetrics.class),
                 enabled, "innbucks", "");
     }
 

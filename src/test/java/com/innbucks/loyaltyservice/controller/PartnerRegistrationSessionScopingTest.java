@@ -50,6 +50,8 @@ class PartnerRegistrationSessionScopingTest {
     private final UserService userService = mock(UserService.class);
     private final LoyaltySessionIssuer sessionIssuer = mock(LoyaltySessionIssuer.class);
     private final InnbucksSessionClient innbucksClient = mock(InnbucksSessionClient.class);
+    private final com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient validateClient =
+            mock(com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.class);
 
     private PartnerRegistrationController controller(String mode, String key) {
         when(sessionIssuer.issue(anyString())).thenReturn("minted.session.token");
@@ -60,9 +62,12 @@ class PartnerRegistrationSessionScopingTest {
         when(innbucksClient.isConfigured()).thenReturn(true);
         when(innbucksClient.verifyOwnership(anyString(), anyString()))
                 .thenReturn(new InnbucksSessionClient.Verified("000"));
+        when(validateClient.isConfigured()).thenReturn(true);
+        when(validateClient.checkCustomer(anyString()))
+                .thenReturn(new com.innbucks.loyaltyservice.client.InnbucksCustomerValidateClient.Customer("00"));
         return new PartnerRegistrationController(
                 userService, mock(RegistrationAssertionVerifier.class),
-                mock(VeenguIdentityClient.class), innbucksClient, sessionIssuer,
+                mock(VeenguIdentityClient.class), innbucksClient, validateClient, sessionIssuer,
                 mock(MemberActivityNotifier.class), mock(LoyaltyMetrics.class),
                 true, mode, key);
     }
@@ -94,6 +99,34 @@ class PartnerRegistrationSessionScopingTest {
         // saw before — adding a field here would also be handing them a
         // credential they never asked for.
         var data = controller("key", PARTNER_KEY).register(PARTNER_KEY, null, null, body())
+                .getBody().getData();
+
+        assertThat(data.keySet()).containsExactlyInAnyOrder(
+                "phoneNumber", "registered", "newlyRegistered", "projectionsPromoted", "replay");
+    }
+
+    @Test
+    @DisplayName("SECURITY: `innbucks_validate` — an eligibility check registers the phone but NEVER a session")
+    void innbucksValidateMode_withholdsTheSession() {
+        // The mode's check proves the msisdn belongs to SOME InnBucks customer,
+        // not that the caller holds it. A session here would be a passwordless
+        // login to any customer account by naming their number — the no-session
+        // property is the entire boundary that makes the eligibility decision
+        // (every InnBucks customer may spend) safe to implement.
+        var response = controller("innbucks_validate", "").register(null, null, null, body());
+
+        assertThat(response.getBody().getData())
+                .containsEntry("registered", true)
+                .containsEntry("phoneNumber", PHONE)
+                .doesNotContainKey("loyaltyToken")
+                .doesNotContainKey("expiresInSeconds");
+        verify(sessionIssuer, never()).issue(any());
+    }
+
+    @Test
+    @DisplayName("SECURITY: the `innbucks_validate` response shape carries no credential-shaped field")
+    void innbucksValidateMode_responseShapeMatchesKeyMode() {
+        var data = controller("innbucks_validate", "").register(null, null, null, body())
                 .getBody().getData();
 
         assertThat(data.keySet()).containsExactlyInAnyOrder(

@@ -137,7 +137,7 @@ loyalty:
       # cell, so a flag set there turns the endpoint on everywhere. Disabled =
       # 404, indistinguishable from no such route.
       enabled: ${LOYALTY_PARTNER_REGISTRATION_ENABLED:false}
-      # assertion (default) | key | veengu | innbucks
+      # assertion (default) | key | innbucks_validate | veengu | innbucks
       #
       # assertion: the caller sends a short-lived, phone-scoped token signed with
       #   a private key only it holds; loyalty stores only the public key, so
@@ -146,6 +146,17 @@ loyalty:
       # key: a shared secret in X-Partner-Key, for a partner that cannot sign.
       #   Weaker and honestly so — whoever holds the key can register ANY phone.
       #   Never ship it to a mobile client.
+      # innbucks_validate (V44): an ELIGIBILITY mode, not an ownership proof.
+      #   The body msisdn is confirmed as a real InnBucks customer against the
+      #   app-authorized /auth/client-service/msisdn/{msisdn}/validate directory
+      #   endpoint, and a confirmed customer is registered
+      #   (source = INNBUCKS_VALIDATE). Platform-owner decision (2026-09): every
+      #   InnBucks customer may spend loyalty points, so customer-existence IS
+      #   the whole question here; nothing about the check says the caller holds
+      #   the number, which is why this mode NEVER returns a session (identity
+      #   stays with the OTP / assertion channels) and why its registrations are
+      #   batch-revocable by source. Client config: the innbucks-validate block
+      #   below (defaults chain to the BANK_API_* fleet credentials).
       #
       # The two self-service modes below are BOTH DEAD. Neither may be enabled,
       # and no mobile client calls this endpoint at all — the customer app gets
@@ -224,6 +235,50 @@ loyalty:
       # the right failure: a blank string must never compare equal to a missing
       # header. Real value belongs only in the gitignored per-host env file.
       key: ${LOYALTY_PARTNER_REGISTRATION_KEY:}
+    # The InnBucks customer-directory client behind the innbucks_validate mode
+    # and the backlog sweep (V44). Every default chains to the BANK_API_* fleet
+    # credentials the cell already provisions for SMS/email, so a cell that
+    # notifies needs NO new secret — the overrides exist for the day the
+    # client-service surface authenticates differently from the notification
+    # surface. Blank credentials fail SAFE: the client reports unconfigured,
+    # the endpoint answers 503, the sweep skips, and the provisioning checks
+    # log a HALF-PROVISIONED boot error.
+    innbucks-validate:
+      base-url: ${LOYALTY_INNBUCKS_VALIDATE_BASE_URL:${BANK_API_URL:}}
+      # Sent as X-Api-Key on the login and every validate call.
+      api-key: ${LOYALTY_INNBUCKS_VALIDATE_API_KEY:${BANK_API_KEY:}}
+      # Third-party client login credentials — the same mint the notification
+      # clients use (POST /auth/third-party -> accessToken, cached until the
+      # JWT's own exp, refreshed once on a 401 before giving up).
+      username: ${LOYALTY_INNBUCKS_VALIDATE_USERNAME:${BANK_API_USERNAME:}}
+      password: ${LOYALTY_INNBUCKS_VALIDATE_PASSWORD:${BANK_API_PASSWORD:}}
+      login-path: ${LOYALTY_INNBUCKS_VALIDATE_LOGIN_PATH:/auth/third-party}
+      # The customer-directory check. {msisdn} is substituted in the platform's
+      # bare format (no leading '+'). This IS the app-authorized /validate
+      # endpoint — deliberate here (eligibility, per the platform-owner
+      # decision documented in V44), and still forbidden as the dead innbucks
+      # mode's OWNERSHIP probe.
+      validate-path: ${LOYALTY_INNBUCKS_VALIDATE_PATH:/auth/client-service/msisdn/{msisdn}/validate}
+      # Platform success codes: business failures ride HTTP 200 with a
+      # non-success responseCode, so the code is checked as well as the status.
+      success-codes: ${LOYALTY_INNBUCKS_VALIDATE_SUCCESS_CODES:00,000,0}
+      # Fallback bearer lifetime when the login JWT carries no parseable exp.
+      token-ttl-seconds: ${LOYALTY_INNBUCKS_VALIDATE_TOKEN_TTL_SECONDS:480}
+      connect-timeout-ms: ${LOYALTY_INNBUCKS_VALIDATE_CONNECT_TIMEOUT_MS:3000}
+      read-timeout-ms: ${LOYALTY_INNBUCKS_VALIDATE_READ_TIMEOUT_MS:6000}
+      # Backlog drain (InnbucksValidateBacklogSweeper): each run takes a random
+      # bounded sample of unregistered PENDING (and PENDING_EXPIRED) phones,
+      # confirms them against the directory, and registers the hits — so the
+      # customers who existed BEFORE the app started calling the registration
+      # endpoint become spendable without waiting for a login. Off by default;
+      # enable per host in the gitignored cell.<iso>.local.env alongside the
+      # endpoint flag. Sends no customer notification (a bulk backfill texting
+      # the whole backlog would be a marketing decision, not a side effect).
+      sweep:
+        enabled: ${LOYALTY_INNBUCKS_VALIDATE_SWEEP_ENABLED:false}
+        batch-size: ${LOYALTY_INNBUCKS_VALIDATE_SWEEP_BATCH_SIZE:100}
+        # Hourly at :20, offset from the pending-expiry sweep at :05.
+        cron: ${LOYALTY_INNBUCKS_VALIDATE_SWEEP_CRON:0 20 * * * *}
   points:
     # 0 (the default) = points NEVER expire: every credit opens a lot with a
     # NULL expires_at, which no expiry query matches, so nothing is released as

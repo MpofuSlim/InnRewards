@@ -64,4 +64,34 @@ public interface LoyaltyUserRepository extends JpaRepository<LoyaltyUser, UUID> 
                               AND r.revokedAt IS NULL)
         """)
     List<LoyaltyUser> findStaleUnregistered(@Param("cutoff") Instant cutoff);
+
+    /**
+     * A bounded, RANDOM sample of distinct phones that would become spendable
+     * if registered — PENDING projections plus sweeper age-outs
+     * ({@code INACTIVE}/{@code PENDING_EXPIRED}, which {@code registerPhone}
+     * recovers) whose phone has no live registration. Feeds
+     * {@code InnbucksValidateBacklogSweeper}.
+     *
+     * <p>Random rather than oldest-first ON PURPOSE: a validate check can answer
+     * "not a customer", and those phones stay in this result set until they age
+     * out. Deterministic ordering would let a head-of-queue cluster of
+     * non-customers absorb every batch forever while genuine customers behind
+     * them never get checked; sampling makes coverage converge regardless.
+     * Native SQL because JPQL has no random(); the DISTINCT runs in a subselect
+     * because Postgres refuses {@code SELECT DISTINCT ... ORDER BY random()}.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT p.phone_number FROM (
+            SELECT DISTINCT u.phone_number
+              FROM loyalty_users u
+             WHERE (u.status = 'PENDING'
+                    OR (u.status = 'INACTIVE' AND u.status_reason = 'PENDING_EXPIRED'))
+               AND NOT EXISTS (SELECT 1 FROM phone_registrations r
+                                WHERE r.phone_number = u.phone_number
+                                  AND r.revoked_at IS NULL)
+        ) p
+        ORDER BY random()
+        LIMIT :batch
+        """)
+    List<String> sampleUnregisteredBacklogPhones(@Param("batch") int batch);
 }

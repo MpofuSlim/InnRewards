@@ -63,7 +63,12 @@ class VoucherStatusConverterTest {
 
     @Test
     void anUnknownStatusStillFails_soTheErrorContractDoesNotMove() {
-        // Spring turns this into the same 400 its default enum binder produced.
+        // The same exception the default enum binder threw, so Spring wraps it
+        // the same way and a rejection looks identical with or without this
+        // class. What that rejection BECOMES on the wire is
+        // GlobalExceptionHandler's business, and is pinned separately by
+        // GlobalExceptionHandlerParameterBindingTest (a 400 — it was an opaque
+        // 500 until this change).
         assertThatThrownBy(() -> converter.convert("BOGUS"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> converter.convert(""))

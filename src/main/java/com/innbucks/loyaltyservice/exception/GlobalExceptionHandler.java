@@ -116,6 +116,52 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * A request parameter or path variable that could not be converted to the
+     * handler's declared type — {@code ?status=FOO}, a non-UUID id in the path,
+     * {@code ?page=abc}. Spring's own {@code DefaultHandlerExceptionResolver}
+     * maps this to 400, but on this service it never gets the chance: the
+     * {@code @ExceptionHandler} resolver is consulted FIRST, so the
+     * {@code Exception} catch-all below shadowed it and every mistyped
+     * parameter surfaced as an opaque 500 — "Something went wrong on our end.
+     * Please try again.", which invites a retry that can never succeed and
+     * reads as a service fault when the request was simply malformed. Same
+     * reasoning as the two handlers above; this is the parameter-binding case.
+     *
+     * <p>The message names the parameter and, for an enum target, the values it
+     * accepts — a client cannot correct a rejected value it is never told the
+     * shape of. The rejected value itself is deliberately NOT echoed (it is
+     * caller-controlled and would be reflected into the response body), and the
+     * conversion cause, which can carry internal type detail, is logged rather
+     * than returned. That is the narrow version of the
+     * {@code IllegalArgumentException} handler the catch-all's note below
+     * records as removed for leaking library messages: bound by type to
+     * parameter binding, with a message we author.
+     */
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResult<Void>> handle(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        log.warn("Unconvertible request parameter name={} requiredType={}: {}", ex.getName(),
+                ex.getRequiredType() == null ? "?" : ex.getRequiredType().getSimpleName(),
+                ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest()
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, unconvertibleParameterMessage(ex)));
+    }
+
+    private static String unconvertibleParameterMessage(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        Class<?> required = ex.getRequiredType();
+        if (required != null && required.isEnum()) {
+            StringBuilder accepted = new StringBuilder();
+            for (Object constant : required.getEnumConstants()) {
+                if (!accepted.isEmpty()) accepted.append(", ");
+                accepted.append(((Enum<?>) constant).name());
+            }
+            return "Invalid value for '" + ex.getName() + "'. Accepted values: " + accepted + ".";
+        }
+        return "Invalid value for '" + ex.getName() + "'.";
+    }
+
+    /**
      * No route matched the request path (e.g. a removed or mistyped endpoint).
      * Spring raises NoResourceFoundException; without this it hits the Exception
      * catch-all and surfaces as a 500. A missing route is a client error → 404.

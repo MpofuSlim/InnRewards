@@ -784,14 +784,18 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Unknown status value",
+                    description = """
+                            Unknown status value. The retired `DELIVERED` is still \
+                            ACCEPTED here and binds to `ISSUED` (V48 merged the two), \
+                            so an operator console still sending the old filter keeps \
+                            working — but the service never RETURNS `DELIVERED`.""",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Bad status", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "Unknown voucher status: FOO",
+                                      "message": "Invalid value for 'status'. Accepted values: ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED.",
                                       "data": null
                                     }
                                     """)

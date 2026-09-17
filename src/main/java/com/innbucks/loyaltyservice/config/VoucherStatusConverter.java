@@ -12,11 +12,21 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>Why this exists.</b> V48 merged DELIVERED into ISSUED. Seven endpoints
  * take a {@code Voucher.Status} as a request parameter (six report endpoints
- * plus {@code GET /loyalty/vouchers}), and Spring's default enum binding
- * rejects an unknown name with a 400. The operator console ships a DELIVERED
- * filter tab TODAY, so without this converter the backend deploy would break
- * that tab until a separate frontend release removed it — a self-inflicted
- * outage in the rolling window, for a value whose correct answer we know.
+ * plus {@code GET /loyalty/vouchers}), and an unknown name fails to bind. The
+ * operator console ships a DELIVERED filter tab TODAY, so without this
+ * converter the backend deploy would break that tab until a separate frontend
+ * release removed it — a self-inflicted outage in the rolling window, for a
+ * value whose correct answer we know.
+ *
+ * <p>Worth being exact about what that breakage would have been, because it is
+ * worse than it looks: a failed parameter binding raises
+ * {@code MethodArgumentTypeMismatchException}, which until this change was
+ * swallowed by {@code GlobalExceptionHandler}'s {@code Exception} catch-all and
+ * returned as a <b>500 "Something went wrong on our end"</b> — not a 400. The
+ * console's DELIVERED tab would have read as a broken service rather than a
+ * stale filter. That handler gap is fixed in the same change, so an unknown
+ * status is now a real 400; this converter is why the one known-retired value
+ * does not need to reach it at all.
  *
  * <p>The alias is not a fudge: the vouchers that tab used to show are exactly
  * the vouchers ISSUED now returns (V48 rewrote the rows), so the old request
@@ -49,8 +59,10 @@ public class VoucherStatusConverter implements Converter<String, Voucher.Status>
      * Registering a {@code Converter<String, Voucher.Status>} REPLACES Spring's
      * default binding for this enum, so this method must handle every live
      * value too — not just the alias. An unknown name throws
-     * {@link IllegalArgumentException}, which Spring surfaces as the same 400
-     * the default binder produced, so nothing about the error contract moves.
+     * {@link IllegalArgumentException}, exactly as the default binder did, so
+     * Spring wraps it identically and the refusal is indistinguishable from the
+     * pre-converter one: this class changes which values are accepted, never
+     * what a rejection looks like.
      */
     @Override
     public Voucher.Status convert(String source) {

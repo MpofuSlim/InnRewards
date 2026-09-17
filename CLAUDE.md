@@ -1113,8 +1113,10 @@ REVOKED`.
   `VoucherStatusConverter`, counted by `loyalty.voucher.status.legacy_alias`.
   Seven endpoints bind a `Voucher.Status` request param, and the console ships
   a DELIVERED filter tab today, so without the alias a backend deploy would
-  400 that tab until a separate frontend release landed. The alias returns the
-  right rows (V48 rewrote them), and the service NEVER emits the value.
+  break that tab until a separate frontend release landed — and, per the
+  handler note below, break it as an opaque **500**, not a 400. The alias
+  returns the right rows (V48 rewrote them), and the service NEVER emits the
+  value.
   **Registering that converter REPLACES Spring's default enum binding**, so it
   must keep handling every live value — a gap there would 400 a request that
   used to work; `VoucherStatusConverterTest` iterates the whole enum for that
@@ -1123,6 +1125,44 @@ REVOKED`.
 - Client-visible fallout beyond the alias: the report's `byStatus` /
   `countByStatus` maps simply stop emitting a `DELIVERED` key, so a console
   rendering a fixed column list shows an empty column rather than erroring.
+
+### A mistyped request parameter was a 500, fleet-wide on this service
+
+Found while measuring what the retired `?status=DELIVERED` would actually have
+returned. **`GlobalExceptionHandler`'s `@ExceptionHandler(Exception.class)`
+catch-all shadows Spring's own status mapping**, because the
+`@ExceptionHandler` resolver is consulted BEFORE
+`DefaultHandlerExceptionResolver`. So `MethodArgumentTypeMismatchException` —
+Spring's own 400 — was being answered *"Something went wrong on our end. Please
+try again."* with a **500**, on every endpoint in the service, for any
+unconvertible query param or path variable (`?status=FOO`, a non-UUID id,
+`?page=abc`). A client error read as a service fault and invited a retry that
+could never succeed.
+
+- **It is now a 400** naming the parameter, and for an enum target the values it
+  accepts. The rejected value is deliberately NOT echoed (caller-controlled →
+  reflected into the body) and the conversion cause is logged, not returned —
+  the narrow, type-bound version of the `IllegalArgumentException` handler this
+  file's catch-all notes as removed for leaking library messages.
+- **This class of bug is invisible to a unit test of the handler**: the defect
+  was in *which* handler Spring picks. `GlobalExceptionHandlerParameterBindingTest`
+  therefore goes through real dispatch (standalone MockMvc + the advice), and it
+  is the pattern to copy — it fails with `expected:<400> but was:<500>` the
+  moment the handler is removed, which is how the 500 was confirmed rather than
+  assumed.
+- **The three handlers above it exist for the same reason** and each says so
+  (`ResponseStatusException`, `HttpMessageNotReadableException`,
+  `NoResourceFoundException`). Treat the catch-all as *hostile to Spring's
+  defaults*: when adding an endpoint whose failure mode is a standard Spring MVC
+  exception, check there is a handler for it, or it will 500. **Three more are
+  still shadowed and still answer 500** — measured the same way, left out of
+  V48's scope deliberately rather than undiscovered:
+  a **missing** required `@RequestParam` (should be 400; live on the 9 endpoints
+  that declare one), a missing required `@RequestHeader` (should be 400; **no
+  live exposure** — nothing in `src/main` uses `@RequestHeader`, the tenant
+  headers are read by `TenantContext`, which throws a proper `LoyaltyException`),
+  and a **wrong HTTP method** on a real path (should be 405; live everywhere).
+  Each is one more `@ExceptionHandler` of the same shape.
 
 ## Cryptography & key management (OWASP A02)
 

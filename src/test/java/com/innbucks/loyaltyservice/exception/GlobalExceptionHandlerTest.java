@@ -95,6 +95,29 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void unconvertibleParameter_withNoKnownTargetType_stillNamesTheParameter() {
+        // The enum branch (accepted-values list) and the end-to-end resolver
+        // behaviour are pinned by GlobalExceptionHandlerParameterBindingTest.
+        // What only a unit test reaches is a null requiredType: Spring declares
+        // it @Nullable, so the message builder must not assume a type is known.
+        var ex = org.mockito.Mockito.mock(
+                org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class);
+        org.mockito.Mockito.when(ex.getName()).thenReturn("since");
+        org.mockito.Mockito.when(ex.getRequiredType()).thenReturn(null);
+        org.mockito.Mockito.when(ex.getMostSpecificCause())
+                .thenReturn(new RuntimeException("Failed to convert value of type 'java.lang.String'"));
+
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(ex);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("400 BAD_REQUEST", resp.getBody().getCode());
+        assertEquals("Invalid value for 'since'.", resp.getBody().getMessage());
+        // The conversion detail names internal types — log it, never return it.
+        assertFalse(String.valueOf(resp.getBody().getMessage()).contains("java.lang.String"),
+                "400 body must not leak the conversion detail");
+    }
+
+    @Test
     void unmappedRoute_returns404_notSwallowedByCatchAll() {
         // The handler returns a static 404 regardless of the exception's contents,
         // so a mock avoids coupling to the Spring-version-specific constructor.

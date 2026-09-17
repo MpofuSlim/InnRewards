@@ -176,7 +176,10 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     @Test
     void customer_cannot_list_vouchers() throws Exception {
         String customerToken = jwt("customer@test.local", "CUSTOMER");
+        // status is a REQUIRED request param on the list endpoint — omit it and
+        // argument binding fails before any of the refusals under test run.
         mockMvc.perform(get("/loyalty/vouchers")
+                        .param("status", "ISSUED")
                         .header("Authorization", bearer(customerToken))
                         .header("X-Tenant-Id", UUID.randomUUID().toString()))
                 .andExpect(status().isForbidden());
@@ -186,6 +189,7 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     void admin_without_tenant_header_returns_400() throws Exception {
         String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
         mockMvc.perform(get("/loyalty/vouchers")
+                        .param("status", "ISSUED")
                         .header("Authorization", bearer(admin)))
                 .andExpect(status().isBadRequest());
     }
@@ -282,6 +286,7 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
         // Caller email NOT added to tenant_members.
         String stranger = jwt("stranger@test.local", "MERCHANT_ADMIN");
         mockMvc.perform(get("/loyalty/vouchers")
+                        .param("status", "ISSUED")
                         .header("Authorization", bearer(stranger))
                         .header("X-Tenant-Id", otherTenant.toString()))
                 .andExpect(status().isForbidden());

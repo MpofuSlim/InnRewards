@@ -51,6 +51,7 @@ class VoucherSignatureTamperingTest {
     @Autowired UserService userService;
     @Autowired VoucherService voucherService;
     @Autowired VoucherRepository voucherRepository;
+    @Autowired com.innbucks.loyaltyservice.repository.VoucherTemplateRepository voucherTemplateRepository;
     @Autowired FraudAttemptRepository fraudAttemptRepository;
     @Autowired com.innbucks.loyaltyservice.config.LoyaltyProperties loyaltyProperties;
 
@@ -135,7 +136,16 @@ class VoucherSignatureTamperingTest {
 
         // Hand-craft a row exactly as the pre-V45 issue path persisted it: a
         // template id on the row and a signature over tenant:templateId:code.
-        java.util.UUID legacyTemplateId = java.util.UUID.randomUUID();
+        // vouchers.template_id still carries its FK (kept for legacy
+        // integrity), so the fixture needs a REAL template row — saved through
+        // the retained legacy read-model repository, which is fixture setup,
+        // not a resurrected write path.
+        com.innbucks.loyaltyservice.entity.VoucherTemplate legacyTemplate =
+                new com.innbucks.loyaltyservice.entity.VoucherTemplate();
+        legacyTemplate.setTenantId(t.getId());
+        legacyTemplate.setMerchantId(mr.id());
+        legacyTemplate.setName("Legacy 5 off " + System.nanoTime());
+        java.util.UUID legacyTemplateId = voucherTemplateRepository.save(legacyTemplate).getId();
         String code = "LEGACY-" + System.nanoTime();
         var signer = new com.innbucks.loyaltyservice.security.CryptoSigner(
                 loyaltyProperties.voucher().secret());

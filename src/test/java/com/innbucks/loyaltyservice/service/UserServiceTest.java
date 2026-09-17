@@ -18,12 +18,15 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class UserServiceTest {
 
     private LoyaltyUserRepository users;
     private PhoneRegistrationRepository registrations;
+    private OnDemandEligibilityCheck onDemand;
     private UserService service;
 
     private static final UUID TENANT = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
@@ -33,8 +36,12 @@ class UserServiceTest {
     void setUp() {
         users = mock(LoyaltyUserRepository.class);
         registrations = mock(PhoneRegistrationRepository.class);
+        // Defaults to false — i.e. the check is off or the directory did not
+        // confirm, which is what every test here other than the on-demand ones
+        // assumes and is the behaviour that existed before it was added.
+        onDemand = mock(OnDemandEligibilityCheck.class);
         service = new UserService(users, mock(WalletRepository.class),
-                mock(UserServiceClient.class), mock(LoyaltyMetrics.class), registrations);
+                mock(UserServiceClient.class), mock(LoyaltyMetrics.class), registrations, onDemand);
     }
 
     /**
@@ -138,6 +145,94 @@ class UserServiceTest {
                     assertThat(ex.getCode()).isEqualTo("USER_PENDING");
                     assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
                 });
+    }
+
+    // ---- The on-demand eligibility check at the spend gate ----
+    //
+    // Why it is here at all: before it, a customer's first spend depended on
+    // something having registered their phone first — ticketing's OTP webhook,
+    // or a client firing POST /loyalty/partner/registrations after sign-in, or
+    // the hourly backlog sweep catching them. A client that never makes that
+    // call leaves the customer refused, and nothing here can tell that apart
+    // from a phone that genuinely is not a customer. Asking at the gate makes
+    // the eligibility rule work with no client involvement at all.
+
+    @Test
+    void requireSpendable_pending_confirmedOnDemand_isPromotedAndPassesThrough() {
+        LoyaltyUser u = withStatus(LoyaltyUser.Status.PENDING);
+        when(onDemand.confirmsCustomer(PHONE)).thenReturn(true);
+        // registerPhone writes the fact; the gate then re-reads it.
+        when(registrations.lockByPhoneNumber(PHONE)).thenReturn(Optional.empty());
+        phoneIsRegistered();
+
+        service.requireSpendable(u);
+
+        assertThat(u.getStatus()).isEqualTo(LoyaltyUser.Status.ACTIVE);
+    }
+
+    @Test
+    void requireSpendable_pending_registeredAlready_neverAsksUpstream() {
+        // The common case must not pay for an upstream round-trip: the phone-level
+        // fact already answers it, so the check is never consulted.
+        phoneIsRegistered();
+
+        service.requireSpendable(withStatus(LoyaltyUser.Status.PENDING));
+
+        verify(onDemand, never()).confirmsCustomer(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void requireSpendable_active_neverAsksUpstream() {
+        service.requireSpendable(withStatus(LoyaltyUser.Status.ACTIVE));
+
+        verify(onDemand, never()).confirmsCustomer(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void requireSpendable_pending_notConfirmed_stillRefuses() {
+        when(onDemand.confirmsCustomer(PHONE)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.requireSpendable(withStatus(LoyaltyUser.Status.PENDING)))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("USER_PENDING"));
+    }
+
+    /**
+     * The revocation lever, which a promote-on-confirmation shortcut would break.
+     *
+     * <p>{@code registerPhone} deliberately leaves a REVOKED registration revoked
+     * when the proof is eligibility-only, so an operator who revoked a batch
+     * (`WHERE source='INNBUCKS_VALIDATE'`) stays reversed. The gate therefore
+     * re-reads the phone-level fact instead of trusting the directory's yes: a
+     * confirmed customer whose registration is revoked is still refused, and the
+     * revocation is not undone by their next spend attempt.
+     */
+    @Test
+    void requireSpendable_pending_confirmedButRevoked_isStillRefused() {
+        PhoneRegistration revoked = new PhoneRegistration();
+        revoked.setPhoneNumber(PHONE);
+        revoked.setSource(PhoneRegistration.Source.INNBUCKS_VALIDATE);
+        revoked.setRevokedAt(Instant.now());
+        when(onDemand.confirmsCustomer(PHONE)).thenReturn(true);
+        when(registrations.lockByPhoneNumber(PHONE)).thenReturn(Optional.of(revoked));
+        // The fact stays false: the row is still revoked after registerPhone.
+
+        LoyaltyUser u = withStatus(LoyaltyUser.Status.PENDING);
+        assertThatThrownBy(() -> service.requireSpendable(u))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("USER_PENDING"));
+        assertThat(u.getStatus()).isEqualTo(LoyaltyUser.Status.PENDING);
+        assertThat(revoked.getRevokedAt()).as("the revocation is not cleared").isNotNull();
+    }
+
+    @Test
+    void requireSpendable_blocked_neverAsksUpstream() {
+        // BLOCKED is fraud, not an unproven phone. Eligibility has no bearing on
+        // it and must never be consulted — a confirmed customer stays suspended.
+        assertThatThrownBy(() -> service.requireSpendable(withStatus(LoyaltyUser.Status.BLOCKED)))
+                .isInstanceOf(LoyaltyException.class);
+
+        verify(onDemand, never()).confirmsCustomer(org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test

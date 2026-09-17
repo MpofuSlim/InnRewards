@@ -413,10 +413,10 @@ for every real customer whoever asks, which is disqualifying for identity and
 exactly the point for eligibility. Do not "fix" either section to match the
 other — they answer different questions.
 
-- **Two consumers of `InnbucksCustomerValidateClient`:** the
+- **Three consumers of `InnbucksCustomerValidateClient`:** the
   `auth-mode=innbucks_validate` branch of `POST /loyalty/partner/registrations`
   (the app calls it after each middleware phone+PIN login; anyone MAY call it —
-  the effect is only that a real customer's phone becomes spendable), and
+  the effect is only that a real customer's phone becomes spendable),
   `InnbucksValidateBacklogSweeper` (random bounded samples of NEVER-registered
   PENDING / `PENDING_EXPIRED` phones per run, so the pre-existing backlog
   drains without waiting for logins; a phone with a REVOKED registration is
@@ -424,13 +424,63 @@ other — they answer different questions.
   undo, which is what keeps the batch-revocation lever below effective;
   aborts the run on the first Unavailable;
   sends NO customer notification — a bulk-backfill SMS campaign is a marketing
-  decision, not a side effect).
+  decision, not a side effect), and **`OnDemandEligibilityCheck`** (below).
+- **`OnDemandEligibilityCheck` is what makes the rule work with NO client
+  involvement**, and it is the one to reach for first. The endpoint above has to
+  be CALLED, so a customer's first spend depended on a client remembering to
+  fire a request after sign-in — and a client that forgets, ships late or drops
+  the response leaves that customer refused, with nothing here able to tell that
+  apart from a phone that genuinely is not a customer. **The FE asked for this
+  to be a backend concern and was right** (its own framing — "the FE can be
+  exploited" — is not the reason: see the ownership note below). So
+  `requireSpendable`'s PENDING arm now ASKS the directory at the moment it is
+  about to refuse, registers the confirmed customer (`source =
+  INNBUCKS_VALIDATE`, `source_ref = on-demand-spend`) and lets the spend
+  through. The registration endpoint stays — it is still the faster path when a
+  client does call it, and the sweeper still converges everything else.
+  - **At the spend gate ONLY.** It is the one place the answer changes an
+    outcome, and an already-ACTIVE customer never reaches it, so the common path
+    pays nothing. Deliberately **not** on the earn path: `findOrCreatePending`
+    runs with a cashier waiting at a till.
+  - **It re-reads the FACT after registering, and that is not belt-and-braces.**
+    A confirmed customer is not always a registered phone — `registerPhone`
+    leaves a REVOKED registration revoked for an eligibility-only proof, which
+    is exactly what keeps the batch-revocation lever below working. Promoting on
+    the directory's yes alone would wave the spend through with the row still
+    revoked. Pinned by
+    `requireSpendable_pending_confirmedButRevoked_isStillRefused`.
+  - **The throttle is load-bearing, so no throttle means no check.** A spend
+    attempt is caller-triggered and repeatable, so the cooldown key is claimed
+    in Redis (`SETNX`) BEFORE the call, and with no Redis template available the
+    check is **skipped** rather than run unthrottled (watch
+    `outcome=no_throttle`). An `Unavailable` shortens the window rather than
+    locking the phone out, and is never read as "not a customer".
+  - **Nothing in it throws.** It runs inside a customer's spend transaction, so
+    every failure path returns false and the caller falls back to the ordinary
+    `USER_PENDING` — the pre-existing behaviour. Same reason an outage is not a
+    503 there: the account really is not spendable yet, and a retryable status
+    invites a retry that cannot change.
+  - `registerPhone` is reached by SELF-invocation, so it joins the spend
+    transaction instead of opening its own. That is wanted, and matches the heal
+    arm above: a registration earned on a spend that then fails rolls back with
+    it, and the sweeper converges the phone anyway. Don't "fix" it into
+    `REQUIRES_NEW` expecting an independent commit.
+  - Off by default: `LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_ENABLED`. Enabled
+    without credentials is a HALF-PROVISIONED boot ERROR, because its failure is
+    otherwise silent — no runs to log, every affected customer just keeps seeing
+    `USER_PENDING`.
 - **The load-bearing boundary: this mode NEVER mints a session.**
   `selfServiceMode()` excludes it and `PartnerRegistrationSessionScopingTest`
   pins it. A session here would be a passwordless login to any customer account
   by naming their number. Registering makes the phone's (already eligible)
   owner spendable; it grants the caller nothing. Identity remains the OTP /
   assertion channels' job.
+  **Which is also why moving the check from a client into the spend gate does
+  not make the phone trustworthy** — the directory answers whether a number
+  exists, not who holds it, so neither placement is an ownership proof. What the
+  backend placement genuinely buys is that no client can forget it, skip it, or
+  send a number the user typed: the phone is read off the loyalty account the
+  spend is already being performed against.
 - **Accepted residual exposure, stated once:** wherever spends are bound to the
   caller only by account status — today that is the unauthenticated
   `/loyalty/public/**` staging surface (`.../points/send`, `.../points/redeem`,

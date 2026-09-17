@@ -45,6 +45,7 @@ public class UserService {
     private final UserServiceClient userServiceClient;
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
     private final PhoneRegistrationRepository registrations;
+    private final OnDemandEligibilityCheck onDemandEligibility;
 
     /** This cell's country pin (ISO-3166-1 alpha-2) — region hint for
      *  normalising an inbound phone to E.164. Defaults to ZW so plain-`new`
@@ -56,12 +57,14 @@ public class UserService {
                        WalletRepository wallets,
                        UserServiceClient userServiceClient,
                        com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
-                       PhoneRegistrationRepository registrations) {
+                       PhoneRegistrationRepository registrations,
+                       OnDemandEligibilityCheck onDemandEligibility) {
         this.users = users;
         this.wallets = wallets;
         this.userServiceClient = userServiceClient;
         this.metrics = metrics;
         this.registrations = registrations;
+        this.onDemandEligibility = onDemandEligibility;
     }
 
     // Idempotent enrolment: returns the existing LoyaltyUser for the
@@ -188,13 +191,52 @@ public class UserService {
             // reaches us the only honest statement is that setup is incomplete on
             // our side.
             case PENDING -> {
-                if (!isPhoneRegistered(u.getPhoneNumber())) {
-                    throw LoyaltyException.forbidden("USER_PENDING",
-                            "Your rewards account is still being set up, so these points can't be spent "
-                                    + "yet. You'll keep earning in the meantime.");
+                if (isPhoneRegistered(u.getPhoneNumber())) {
+                    u.setStatus(LoyaltyUser.Status.ACTIVE);
+                    metrics.incPendingPromoted(1);
+                    return;
                 }
-                u.setStatus(LoyaltyUser.Status.ACTIVE);
-                metrics.incPendingPromoted(1);
+                // Nothing has told us this phone is registered. Before refusing,
+                // ASK — the eligibility rule (V44) is answerable from here, and
+                // making it answerable from here is what stops a customer's
+                // first spend depending on a client remembering to register them
+                // after sign-in. See OnDemandEligibilityCheck: throttled, silent
+                // on every failure, and false means "don't promote" rather than
+                // "not a customer".
+                //
+                // registerPhone is a SELF-invocation, so it joins this
+                // transaction instead of opening its own. That is wanted here
+                // and matches the heal above: a registration earned on a spend
+                // that then fails (INSUFFICIENT_FUNDS, say) rolls back with it,
+                // and the sweeper converges the phone anyway. Don't "fix" this
+                // into REQUIRES_NEW expecting it to commit independently.
+                if (onDemandEligibility.confirmsCustomer(u.getPhoneNumber())) {
+                    registerPhone(u.getPhoneNumber(), PhoneRegistration.Source.INNBUCKS_VALIDATE,
+                            "on-demand-spend", null, null);
+                    // Re-ask the FACT rather than trusting the call to have
+                    // recorded one. A confirmed customer is NOT always a
+                    // registered phone: registerPhone deliberately leaves a
+                    // REVOKED registration revoked when the proof is
+                    // eligibility-only, so an operator who revoked this batch
+                    // stays reversed instead of being undone by the next spend.
+                    // Reading the fact back is what keeps that lever working —
+                    // promoting on `confirmsCustomer` alone would hand the spend
+                    // through with the row still revoked and still PENDING.
+                    if (isPhoneRegistered(u.getPhoneNumber())) {
+                        // registerPhone already flipped every projection for this
+                        // phone, this managed instance among them, and counted
+                        // the promotions — so this only fires if it somehow did
+                        // not, and can never double-count.
+                        if (u.getStatus() == LoyaltyUser.Status.PENDING) {
+                            u.setStatus(LoyaltyUser.Status.ACTIVE);
+                            metrics.incPendingPromoted(1);
+                        }
+                        return;
+                    }
+                }
+                throw LoyaltyException.forbidden("USER_PENDING",
+                        "Your rewards account is still being set up, so these points can't be spent "
+                                + "yet. You'll keep earning in the meantime.");
             }
             case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
             case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "Your account is inactive. Please contact support to reactivate it.");

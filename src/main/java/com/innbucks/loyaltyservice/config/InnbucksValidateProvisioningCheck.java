@@ -24,20 +24,24 @@ import org.springframework.stereotype.Component;
 public class InnbucksValidateProvisioningCheck {
 
     private final boolean sweepEnabled;
+    private final boolean onDemandEnabled;
     private final String validatePath;
     private final InnbucksCustomerValidateClient validateClient;
 
     public InnbucksValidateProvisioningCheck(
             @Value("${loyalty.registration.innbucks-validate.sweep.enabled:false}") boolean sweepEnabled,
+            @Value("${loyalty.registration.innbucks-validate.on-demand.enabled:false}") boolean onDemandEnabled,
             @Value("${loyalty.registration.innbucks-validate.validate-path:/auth/client-service/msisdn/{msisdn}/validate}") String validatePath,
             InnbucksCustomerValidateClient validateClient) {
         this.sweepEnabled = sweepEnabled;
+        this.onDemandEnabled = onDemandEnabled;
         this.validatePath = validatePath == null ? "" : validatePath;
         this.validateClient = validateClient;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void checkSweepProvisioning() {
+        checkOnDemandProvisioning();
         if (!sweepEnabled) return;
         if (!validateClient.isConfigured()) {
             // A validate-path missing the {msisdn} placeholder fails isConfigured
@@ -64,5 +68,32 @@ public class InnbucksValidateProvisioningCheck {
                 + "phones, confirms them against the InnBucks customer directory, and registers the "
                 + "hits as spendable (platform-owner eligibility decision — see V44). No customer "
                 + "notification is sent from the sweep.");
+    }
+
+    /**
+     * The on-demand check ({@code OnDemandEligibilityCheck}) is enabled
+     * independently of the sweep and fails the same silent way: switched on in
+     * one config source while the credentials live in another that was never
+     * updated. It is quieter than the sweep's failure, because it has no runs to
+     * log — it simply never promotes anyone, and every affected customer sees
+     * the ordinary USER_PENDING refusal, which is indistinguishable from a
+     * genuinely unregistered phone.
+     */
+    private void checkOnDemandProvisioning() {
+        if (!onDemandEnabled) return;
+        if (!validateClient.isConfigured()) {
+            log.error("On-demand InnBucks eligibility check is HALF-PROVISIONED: "
+                    + "LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_ENABLED is true but the validate client has "
+                    + "no usable configuration, so the spend gate silently never asks and every PENDING "
+                    + "customer keeps getting USER_PENDING. Provision the BANK_API_* credentials (or the "
+                    + "LOYALTY_INNBUCKS_VALIDATE_* overrides, including a validate-path that keeps its "
+                    + "{msisdn} placeholder) in this host's cell.<iso>.local.env, or set "
+                    + "LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_ENABLED=false.");
+            return;
+        }
+        log.warn("On-demand InnBucks eligibility check is ENABLED: a PENDING account about to be "
+                + "refused a spend is confirmed against the InnBucks customer directory and registered "
+                + "on the spot (platform-owner eligibility decision — see V44). No client involvement "
+                + "is required for a customer to become spendable.");
     }
 }

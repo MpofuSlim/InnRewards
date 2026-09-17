@@ -236,7 +236,7 @@ public class ReportingController {
                                             },
                                             "vouchers": {
                                               "total": 412,
-                                              "byStatus": { "ISSUED": 40, "DELIVERED": 25, "REDEEMED": 310, "EXPIRED": 30, "REVOKED": 7 },
+                                              "byStatus": { "ISSUED": 65, "VIEWED": 12, "REDEEMED": 310, "EXPIRED": 30, "REVOKED": 7 },
                                               "valueIssuedAllTime": 10300.0000,
                                               "valueRedeemedAllTime": 7150.0000,
                                               "issuedLast30Days": 38,
@@ -1146,7 +1146,7 @@ public class ReportingController {
                 "to": "2026-07-01T00:00:00Z",
                 "summary": {
                   "totalIssued": 612,
-                  "countByStatus": { "ISSUED": 180, "DELIVERED": 44, "REDEEMED": 372, "EXPIRED": 14, "REVOKED": 2 },
+                  "countByStatus": { "ISSUED": 224, "VIEWED": 18, "REDEEMED": 372, "EXPIRED": 14, "REVOKED": 2 },
                   "faceValueByStatus": { "ISSUED": 900.00, "REDEEMED": 1860.00 },
                   "totalFaceValue": 3060.00,
                   "redeemedCount": 372,

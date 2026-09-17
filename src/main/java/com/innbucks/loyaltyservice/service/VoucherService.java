@@ -140,16 +140,17 @@ public class VoucherService {
         return finishIssue(v);
     }
 
-    /** The shared issue tail: persist, optimistic DELIVERED flip, both
+    /** The shared issue tail: persist, stamp the dispatch attempt, both
      *  notifications (recipient delivery + V46 sender copy), metrics. */
     private Dtos.VoucherResponse finishIssue(Voucher v) {
         vouchers.save(v);
-        // Flip status on THIS thread (before the async hand-off reads the entity
-        // on the executor thread). Optimistic best-effort: DELIVERED means "we
-        // dispatched it"; the actual WhatsApp/SMS send runs off the request
-        // thread so a slow gateway never blocks voucher issuance.
+        // Stamp WHEN dispatch was attempted, on THIS thread (before the async
+        // hand-off reads the entity on the executor thread). The status is NOT
+        // touched: a freshly issued voucher is ISSUED and stays ISSUED until
+        // someone opens or spends it (V48 — see Voucher.Status). The send runs
+        // off the request thread so a slow gateway never blocks issuance, which
+        // is exactly why a status flip here could never have meant "received".
         if (v.getDeliveryChannel() != null && v.getDeliveryChannel() != Voucher.DeliveryChannel.NONE) {
-            v.setStatus(Voucher.Status.DELIVERED);
             v.setDeliveredAt(Instant.now());
         }
         String recipientPhone = resolveDeliveryPhone(v);
@@ -360,22 +361,21 @@ public class VoucherService {
         throw new IllegalStateException("Failed to allocate unique voucher code");
     }
 
-    public void markDelivered(UUID voucherId) {
-        Voucher v = vouchers.findById(voucherId)
-                .orElseThrow(() -> LoyaltyException.notFound("voucher"));
-        v.setStatus(Voucher.Status.DELIVERED);
-        v.setDeliveredAt(Instant.now());
-    }
+    // markDelivered(UUID) was removed in V48 with the DELIVERED status it set.
+    // It had no HTTP endpoint and no caller anywhere in the service — nothing
+    // ever promoted a voucher to DELIVERED after the fact, which is part of why
+    // that status could only ever report an intention. The dispatch instant is
+    // stamped once, in finishIssue, onto Voucher.deliveredAt.
 
     public void markViewed(String code) {
         vouchers.findByCode(code).ifPresent(v -> {
             // Only the voucher's owner (assignee) — or issuing/merchant staff — may
             // record a VIEW. Without this any authenticated principal could mark an
-            // arbitrary code viewed and pollute delivery→view analytics.
+            // arbitrary code viewed and pollute issue→view analytics.
             requireCallerMayViewVoucher(v);
             if (v.getViewedAt() == null) {
                 v.setViewedAt(Instant.now());
-                if (v.getStatus() == Voucher.Status.ISSUED || v.getStatus() == Voucher.Status.DELIVERED) {
+                if (v.getStatus() == Voucher.Status.ISSUED) {
                     v.setStatus(Voucher.Status.VIEWED);
                 }
             }
@@ -615,7 +615,6 @@ public class VoucherService {
         // remainder splits one voucher's benefit across two people and makes
         // the redemption trail ambiguous about who received what.
         if (v.getStatus() != Voucher.Status.ISSUED
-                && v.getStatus() != Voucher.Status.DELIVERED
                 && v.getStatus() != Voucher.Status.VIEWED) {
             throw LoyaltyException.badRequest("VOUCHER_NOT_TRANSFERABLE",
                     "Only an unused voucher can be transferred (this one is " + v.getStatus() + ").");
@@ -721,17 +720,13 @@ public class VoucherService {
 
     @Transactional(readOnly = true)
     public List<Dtos.VoucherResponse> activeForUser(UUID userId) {
-        return vouchers.findByAssignedUserIdAndStatusIn(userId, List.of(
-                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
-                Voucher.Status.PARTIALLY_USED))
+        return vouchers.findByAssignedUserIdAndStatusIn(userId, Voucher.LIVE_STATUSES)
                 .stream().map(VoucherService::toResponse).toList();
     }
 
     @Transactional(readOnly = true)
     public Page<Dtos.VoucherResponse> activeForUser(UUID userId, Pageable pageable) {
-        return vouchers.findByAssignedUserIdAndStatusIn(userId, List.of(
-                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
-                Voucher.Status.PARTIALLY_USED), pageable)
+        return vouchers.findByAssignedUserIdAndStatusIn(userId, Voucher.LIVE_STATUSES, pageable)
                 .map(VoucherService::toResponse);
     }
 
@@ -750,9 +745,7 @@ public class VoucherService {
     @Transactional(readOnly = true)
     public Page<Dtos.VoucherResponse> activeForPhone(UUID tenantId, String phoneNumber, Pageable pageable) {
         return users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber)
-                .map(u -> vouchers.findByAssignedUserIdAndStatusIn(u.getId(), List.of(
-                                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
-                                Voucher.Status.PARTIALLY_USED), pageable)
+                .map(u -> vouchers.findByAssignedUserIdAndStatusIn(u.getId(), Voucher.LIVE_STATUSES, pageable)
                         .map(VoucherService::toResponse))
                 .orElseGet(() -> org.springframework.data.domain.Page.empty(pageable));
     }

@@ -84,10 +84,12 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
     // One-query active-voucher count grouped by user. Powers /me/wallet so we
     // don't issue N separate findByAssignedUserIdAndStatusIn calls for a
     // customer who's enrolled in N tenants.
+    // NOTE: this IN list is Voucher.LIVE_STATUSES spelled out — a query string
+    // cannot reference the constant, so the two must be changed together. It
+    // dropped DELIVERED in V48 when that status was merged into ISSUED.
     @Query("SELECT v.assignedUserId, COUNT(v) FROM Voucher v " +
             "WHERE v.assignedUserId IN :userIds " +
             "AND v.status IN (com.innbucks.loyaltyservice.entity.Voucher.Status.ISSUED, " +
-            "                 com.innbucks.loyaltyservice.entity.Voucher.Status.DELIVERED, " +
             "                 com.innbucks.loyaltyservice.entity.Voucher.Status.VIEWED, " +
             "                 com.innbucks.loyaltyservice.entity.Voucher.Status.PARTIALLY_USED) " +
             "GROUP BY v.assignedUserId")
@@ -148,8 +150,8 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
     BigDecimal sumRedeemedValueByMerchantId(@Param("merchantId") UUID merchantId);
 
     // Merchant-360 report: outstanding vouchers that will lapse inside the
-    // window. The caller passes the live statuses (ISSUED/DELIVERED/VIEWED/
-    // PARTIALLY_USED) — redeemed/expired/revoked ones can't "expire soon".
+    // window. The caller passes Voucher.LIVE_STATUSES — redeemed/expired/
+    // revoked ones can't "expire soon".
     long countByMerchantIdAndExpiresAtBetweenAndStatusIn(UUID merchantId, Instant from, Instant to,
                                                          Collection<Voucher.Status> statuses);
 
@@ -161,7 +163,6 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
         WHERE v.expiresAt IS NOT NULL AND v.expiryWarnedAt IS NULL
           AND v.expiresAt > :now AND v.expiresAt <= :cutoff
           AND v.status IN (com.innbucks.loyaltyservice.entity.Voucher.Status.ISSUED,
-                           com.innbucks.loyaltyservice.entity.Voucher.Status.DELIVERED,
                            com.innbucks.loyaltyservice.entity.Voucher.Status.VIEWED,
                            com.innbucks.loyaltyservice.entity.Voucher.Status.PARTIALLY_USED)
         ORDER BY v.expiresAt ASC

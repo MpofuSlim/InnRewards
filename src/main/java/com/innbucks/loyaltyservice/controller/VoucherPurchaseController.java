@@ -156,7 +156,7 @@ public class VoucherPurchaseController {
                                         "voucher": {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                           "code": "VCH-AB12CD34",
-                                          "status": "DELIVERED",
+                                          "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                           "assigneePhone": "+263786546765",
@@ -219,7 +219,7 @@ public class VoucherPurchaseController {
                                         "voucher": {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                           "code": "VCH-AB12CD34",
-                                          "status": "DELIVERED",
+                                          "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                           "assigneePhone": "+263786546765",

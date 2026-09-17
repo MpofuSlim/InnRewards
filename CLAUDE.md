@@ -173,8 +173,19 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V47**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V48**; never edit an applied
 migration — add the next version.
+
+> [!IMPORTANT]
+> **Removing a value from a `@Enumerated(EnumType.STRING)` enum is a DATA
+> migration, not a code change.** Hibernate cannot hydrate a row holding a
+> string the Java enum no longer has: it throws per row at query EXECUTION and
+> `GlobalExceptionHandler` renders that as an opaque 500 on every read path
+> that touches the table. **There is no compile, boot or CI signal** — every
+> `@SpringBootTest` applies Flyway first, so the suite stays green and the
+> breakage appears only against a cell with real history. Always ship the
+> `UPDATE` that rewrites existing rows in the same migration, BEFORE narrowing
+> any CHECK constraint (see V48).
 
 ## Registration is a property of the PHONE (V40)
 
@@ -1058,6 +1069,100 @@ along via `VoucherService.issueFromOrder` → `finishIssue`).
   via extend-expiry (1..60 min, never shortens). No gateway route changes:
   `/loyalty/vouchers/purchase/**` rides `loyalty-service-route`, the internal
   surface is already covered by `loyalty-internal-deny`.
+
+## A voucher is ISSUED until it is used — there is no DELIVERED (V48)
+
+**Owner decision (2026-09-17): `DELIVERED` is merged into `ISSUED`.**
+`Voucher.Status` is now `ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED,
+REVOKED`.
+
+- **Why it had to go.** `finishIssue` flipped the status to DELIVERED
+  SYNCHRONOUSLY at save time, before the `@Async` WhatsApp/SMS send ran, and
+  never revised it — so a voucher whose WhatsApp failed AND whose SMS fallback
+  failed still read DELIVERED, as did one with no reachable phone (the
+  gateway's own log line for that case says *"still issued"* while the row said
+  otherwise). It reported an intention as an outcome. And because every
+  voucher issued to a named person carries a channel, the flip was immediate
+  and universal: a single-issued voucher **never spent a moment in ISSUED**, so
+  the console's ISSUED tab was permanently empty except for bulk stock (which
+  `/issue-bulk` never attempts to deliver at all). Two statuses, one meaning,
+  one of them misleading.
+- **`vouchers.delivered_at` STAYS and is still stamped** — the honest version
+  of what DELIVERED reached for ("dispatch was ATTEMPTED at T"), already
+  surfaced as `deliveredAt` on the report row DTO and the report CSV. It is
+  stamped **only inside the same channel guard** that used to set the status;
+  do not "simplify" that away, or the column starts asserting a dispatch for
+  `NONE`/POS vouchers that were never sent anywhere — the same lie, relocated.
+  Pinned by `VoucherIssuedStatusTest.issuingWithChannelNONE_*`.
+- **Do NOT reintroduce a delivery state on `Status`.** An outbound-message
+  outcome is not a stage of a voucher's life. If delivery *confirmation* is
+  ever wanted it needs its own column fed by a gateway receipt (and a resend
+  path — there is none today), not a lifecycle value set optimistically.
+- **`Voucher.LIVE_STATUSES` is now the ONE definition of an outstanding
+  voucher** (`ISSUED, VIEWED, PARTIALLY_USED`). That set had been copy-pasted
+  into six places — three lookups in `VoucherService`, the report's
+  `OUTSTANDING` filter, the expiring-soon query, `PublicTestController` — which
+  is exactly why retiring one value touched twelve files. The two JPQL `IN`
+  lists in `VoucherRepository` can't reference a constant and carry
+  change-together NOTEs instead; `ReportingService.OUTSTANDING` is
+  `EnumSet.copyOf(LIVE_STATUSES)`, derived rather than restated.
+- **`markDelivered(UUID)` is deleted.** It had no endpoint and no caller —
+  nothing ever promoted a voucher to DELIVERED after the fact, which is part of
+  why the status could only ever mean "we tried".
+- **`?status=DELIVERED` is still ACCEPTED on input**, as an alias for ISSUED —
+  `VoucherStatusConverter`, counted by `loyalty.voucher.status.legacy_alias`.
+  Seven endpoints bind a `Voucher.Status` request param, and the console ships
+  a DELIVERED filter tab today, so without the alias a backend deploy would
+  break that tab until a separate frontend release landed — and, per the
+  handler note below, break it as an opaque **500**, not a 400. The alias
+  returns the right rows (V48 rewrote them), and the service NEVER emits the
+  value.
+  **Registering that converter REPLACES Spring's default enum binding**, so it
+  must keep handling every live value — a gap there would 400 a request that
+  used to work; `VoucherStatusConverterTest` iterates the whole enum for that
+  reason. Delete the converter, the counter and the test once the meter
+  flatlines in production.
+- Client-visible fallout beyond the alias: the report's `byStatus` /
+  `countByStatus` maps simply stop emitting a `DELIVERED` key, so a console
+  rendering a fixed column list shows an empty column rather than erroring.
+
+### A mistyped request parameter was a 500, fleet-wide on this service
+
+Found while measuring what the retired `?status=DELIVERED` would actually have
+returned. **`GlobalExceptionHandler`'s `@ExceptionHandler(Exception.class)`
+catch-all shadows Spring's own status mapping**, because the
+`@ExceptionHandler` resolver is consulted BEFORE
+`DefaultHandlerExceptionResolver`. So `MethodArgumentTypeMismatchException` —
+Spring's own 400 — was being answered *"Something went wrong on our end. Please
+try again."* with a **500**, on every endpoint in the service, for any
+unconvertible query param or path variable (`?status=FOO`, a non-UUID id,
+`?page=abc`). A client error read as a service fault and invited a retry that
+could never succeed.
+
+- **It is now a 400** naming the parameter, and for an enum target the values it
+  accepts. The rejected value is deliberately NOT echoed (caller-controlled →
+  reflected into the body) and the conversion cause is logged, not returned —
+  the narrow, type-bound version of the `IllegalArgumentException` handler this
+  file's catch-all notes as removed for leaking library messages.
+- **This class of bug is invisible to a unit test of the handler**: the defect
+  was in *which* handler Spring picks. `GlobalExceptionHandlerParameterBindingTest`
+  therefore goes through real dispatch (standalone MockMvc + the advice), and it
+  is the pattern to copy — it fails with `expected:<400> but was:<500>` the
+  moment the handler is removed, which is how the 500 was confirmed rather than
+  assumed.
+- **The three handlers above it exist for the same reason** and each says so
+  (`ResponseStatusException`, `HttpMessageNotReadableException`,
+  `NoResourceFoundException`). Treat the catch-all as *hostile to Spring's
+  defaults*: when adding an endpoint whose failure mode is a standard Spring MVC
+  exception, check there is a handler for it, or it will 500. **Three more are
+  still shadowed and still answer 500** — measured the same way, left out of
+  V48's scope deliberately rather than undiscovered:
+  a **missing** required `@RequestParam` (should be 400; live on the 9 endpoints
+  that declare one), a missing required `@RequestHeader` (should be 400; **no
+  live exposure** — nothing in `src/main` uses `@RequestHeader`, the tenant
+  headers are read by `TenantContext`, which throws a proper `LoyaltyException`),
+  and a **wrong HTTP method** on a real path (should be 405; live everywhere).
+  Each is one more `@ExceptionHandler` of the same shape.
 
 ## Cryptography & key management (OWASP A02)
 

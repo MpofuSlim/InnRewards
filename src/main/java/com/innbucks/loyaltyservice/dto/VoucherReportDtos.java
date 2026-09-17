@@ -49,7 +49,7 @@ public final class VoucherReportDtos {
             @Schema(example = "d2c8f0a1-0123-4567-1234-567890123456") UUID id,
             @Schema(example = "VCH-AB12CD34") String code,
             @Schema(example = "REDEEMED",
-                    description = "ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED or REVOKED.") String status,
+                    description = "ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED or REVOKED.") String status,
 
             @Schema(example = "11111111-1111-1111-1111-111111111111") UUID tenantId,
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789") UUID merchantId,
@@ -103,7 +103,7 @@ public final class VoucherReportDtos {
             @Schema(example = "8420.00", description = "Sum of every voucher's face value, in USD (the platform base currency), so a mixed-currency scope totals in one unit.") BigDecimal totalFaceValue,
             @Schema(example = "388") long redeemedCount,
             @Schema(example = "2110.00") BigDecimal redeemedFaceValue,
-            @Schema(example = "760", description = "Live vouchers (ISSUED + DELIVERED + VIEWED + PARTIALLY_USED).") long outstandingCount,
+            @Schema(example = "760", description = "Live vouchers (ISSUED + VIEWED + PARTIALLY_USED).") long outstandingCount,
             @Schema(example = "88") long expiredCount,
             @Schema(example = "4") long revokedCount,
             @Schema(example = "31.3", description = "redeemedCount / totalIssued as a percentage.") double redemptionRatePct

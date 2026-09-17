@@ -52,9 +52,14 @@ class InnbucksValidateProvisioningCheckTest {
     }
 
     private void run(boolean sweepEnabled, String validatePath, boolean clientConfigured) {
+        run(sweepEnabled, false, validatePath, clientConfigured);
+    }
+
+    private void run(boolean sweepEnabled, boolean onDemandEnabled,
+                     String validatePath, boolean clientConfigured) {
         InnbucksCustomerValidateClient client = mock(InnbucksCustomerValidateClient.class);
         when(client.isConfigured()).thenReturn(clientConfigured);
-        new InnbucksValidateProvisioningCheck(sweepEnabled, validatePath, client)
+        new InnbucksValidateProvisioningCheck(sweepEnabled, onDemandEnabled, validatePath, client)
                 .checkSweepProvisioning();
     }
 
@@ -104,5 +109,59 @@ class InnbucksValidateProvisioningCheckTest {
             assertThat(e.getLevel()).isEqualTo(Level.WARN);
             assertThat(e.getFormattedMessage()).contains("ENABLED");
         });
+    }
+
+    // ---- The on-demand check, enabled independently of the sweep ----
+    //
+    // Its half-provisioned failure is QUIETER than the sweep's: it has no runs
+    // to log, so it simply never promotes anyone and every affected customer
+    // sees the ordinary USER_PENDING — indistinguishable from a phone that
+    // genuinely is not a customer. Boot is the only place that can say so.
+
+    @Test
+    @DisplayName("on-demand off + sweep off → still silent")
+    void bothOff_isSilent() {
+        run(false, false, GOOD_PATH, false);
+        assertThat(events()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("on-demand enabled + no credentials → HALF-PROVISIONED error naming its own flag")
+    void onDemandEnabledButUnconfigured_isHalfProvisionedError() {
+        run(false, true, GOOD_PATH, false);
+
+        assertThat(events()).singleElement().satisfies(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(e.getFormattedMessage())
+                    .contains("HALF-PROVISIONED")
+                    .contains("ON_DEMAND_ENABLED")
+                    .contains("USER_PENDING");
+        });
+    }
+
+    @Test
+    @DisplayName("on-demand enabled + configured → a WARN that no client involvement is needed")
+    void onDemandEnabledAndConfigured_warnsItIsLive() {
+        run(false, true, GOOD_PATH, true);
+
+        assertThat(events()).singleElement().satisfies(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.WARN);
+            assertThat(e.getFormattedMessage()).contains("ENABLED").contains("No client involvement");
+        });
+    }
+
+    @Test
+    @DisplayName("both enabled and unprovisioned → both errors, because they are provisioned separately")
+    void bothEnabledAndUnconfigured_reportsEach() {
+        // One flag can be set without the other, so one line must not stand in
+        // for the other: an operator who fixed only the sweep would otherwise
+        // read a clean boot while the gate stayed silently off.
+        run(true, true, GOOD_PATH, false);
+
+        assertThat(events()).hasSize(2)
+                .allSatisfy(e -> assertThat(e.getLevel()).isEqualTo(Level.ERROR));
+        assertThat(events()).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(m -> assertThat(m).contains("On-demand"))
+                .anySatisfy(m -> assertThat(m).contains("backlog validate sweep"));
     }
 }

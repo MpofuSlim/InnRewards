@@ -274,6 +274,27 @@ loyalty:
       # enable per host in the gitignored cell.<iso>.local.env alongside the
       # endpoint flag. Sends no customer notification (a bulk backfill texting
       # the whole backlog would be a marketing decision, not a side effect).
+      # On-demand check (OnDemandEligibilityCheck): when a PENDING account is
+      # about to be refused a spend, ASK the directory right then instead of
+      # refusing and waiting for the hourly sweep. This is what makes the
+      # eligibility rule work with NO client involvement — no app has to fire
+      # POST /loyalty/partner/registrations after sign-in, and none can skip it.
+      #
+      # It runs ONLY on the spend-refusal path, so an already-ACTIVE customer
+      # never pays for it, and deliberately NOT on the earn path (a cashier is
+      # waiting at the till there).
+      #
+      # cooldown-seconds throttles per PHONE, claimed before the upstream call,
+      # because a spend attempt is caller-triggered and repeatable — without a
+      # throttle this is a way to make loyalty hammer the InnBucks gateway. With
+      # no Redis to throttle in, the check SKIPS rather than running unthrottled
+      # (watch outcome=no_throttle). An `unavailable` answer shortens the window
+      # to unavailable-cooldown-seconds, since nothing about the phone was
+      # actually decided.
+      on-demand:
+        enabled: ${LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_ENABLED:false}
+        cooldown-seconds: ${LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_COOLDOWN_SECONDS:900}
+        unavailable-cooldown-seconds: ${LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_UNAVAILABLE_COOLDOWN_SECONDS:60}
       sweep:
         enabled: ${LOYALTY_INNBUCKS_VALIDATE_SWEEP_ENABLED:false}
         batch-size: ${LOYALTY_INNBUCKS_VALIDATE_SWEEP_BATCH_SIZE:100}

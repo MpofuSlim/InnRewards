@@ -165,6 +165,31 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * On-demand eligibility checks at the spend gate, tagged by outcome —
+     * {@code customer} (confirmed, promoted on the spot), {@code not_customer},
+     * {@code unavailable} (upstream could not answer), {@code cooldown}
+     * (throttled — another attempt for this phone holds the window),
+     * {@code no_throttle} (skipped: no Redis to throttle with) and
+     * {@code error}.
+     *
+     * <p>Deliberately a SEPARATE meter from the sweeper's
+     * {@code loyalty.registration.backlog.checked} above: mixing them would let
+     * the scheduled backfill's volume drown out this path, and the two answer
+     * different questions. A steady stream of {@code customer} here means
+     * customers are reaching us with nothing having registered them first —
+     * the normal state when no client fires the registration call, which is
+     * exactly what this check exists to make survivable.
+     * {@code no_throttle} is a deployment fault: the check is silently off.
+     */
+    public void incOnDemandEligibilityChecked(String outcome) {
+        Counter.builder("loyalty.registration.ondemand.checked")
+                .description("On-demand InnBucks eligibility checks at the spend gate, grouped by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Loyalty session lifecycle events (V43), tagged by outcome — {@code started}
      * (a refresh chain opened), {@code refreshed} (a rotation), {@code signed_out},
      * {@code revoked}.

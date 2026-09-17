@@ -110,6 +110,39 @@ public class VoucherService {
                 req.senderName(), senderPhone,
                 req.deliveryChannel(), req.campaignSource(), req.value(), req.currency(),
                 voucherTypeOrDefault(req.voucherType()), usageLimit);
+        return finishIssue(v);
+    }
+
+    /**
+     * Issue the voucher a PAID purchase order describes (V47). The caller —
+     * payment-service's S2S confirm, or the staff cash confirmation — has
+     * already established that the money is in; authz was enforced when the
+     * order was CREATED, so there is no caller check here (the S2S path has
+     * no caller at all). Fees, FX freeze, expiry-from-rules and both
+     * notifications ride the ordinary issue path unchanged.
+     */
+    public Dtos.VoucherResponse issueFromOrder(
+            com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder order) {
+        Merchant merchant = merchants.requireMerchant(order.getTenantId(), order.getMerchantId());
+        Voucher v = createVoucher(order.getTenantId(), merchant, null,
+                order.getAssignedUserId(), order.getAssigneePhone(), order.getAssigneeName(),
+                order.getSenderName(), order.getSenderPhone(),
+                order.getDeliveryChannel(), order.getCampaignSource(),
+                order.getAmount(), order.getCurrency(),
+                order.getVoucherType(), order.getUsageLimit());
+        // The confirm has no useful caller JWT (S2S, or a cashier who is not
+        // the issuer) — replace the CallerDetails stamps with the identity
+        // snapshotted when the order was created.
+        v.setShopId(order.getShopId());
+        v.setIssuerUserId(order.getIssuerUserId());
+        v.setIssuerPhone(order.getIssuerPhone());
+        v.setIssuerEmail(order.getIssuerEmail());
+        return finishIssue(v);
+    }
+
+    /** The shared issue tail: persist, optimistic DELIVERED flip, both
+     *  notifications (recipient delivery + V46 sender copy), metrics. */
+    private Dtos.VoucherResponse finishIssue(Voucher v) {
         vouchers.save(v);
         // Flip status on THIS thread (before the async hand-off reads the entity
         // on the executor thread). Optimistic best-effort: DELIVERED means "we
@@ -160,8 +193,9 @@ public class VoucherService {
         return result;
     }
 
-    /** Absent means SINGLE_USE — the overwhelmingly common case. */
-    private static Voucher.VoucherType voucherTypeOrDefault(Voucher.VoucherType type) {
+    /** Absent means SINGLE_USE — the overwhelmingly common case.
+     *  Package-visible: VoucherPurchaseService applies the same default. */
+    static Voucher.VoucherType voucherTypeOrDefault(Voucher.VoucherType type) {
         return type == null ? Voucher.VoucherType.SINGLE_USE : type;
     }
 
@@ -170,8 +204,10 @@ public class VoucherService {
      * or more. A conflicting pair (SINGLE_USE with a limit above 1, MULTI_USE
      * with 1 or without a limit) is refused rather than silently corrected —
      * the caller plainly meant something this request does not say.
+     * Package-visible: VoucherPurchaseService runs the same contract at order
+     * creation so a purchase never snapshots a request issue would refuse.
      */
-    private static int resolveUsageLimit(Voucher.VoucherType type, Integer usageLimit) {
+    static int resolveUsageLimit(Voucher.VoucherType type, Integer usageLimit) {
         if (voucherTypeOrDefault(type) == Voucher.VoucherType.SINGLE_USE) {
             if (usageLimit != null && usageLimit != 1) {
                 throw LoyaltyException.badRequest("USAGE_LIMIT_CONFLICT",

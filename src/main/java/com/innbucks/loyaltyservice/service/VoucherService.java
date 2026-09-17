@@ -99,8 +99,15 @@ public class VoucherService {
         Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
                 tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
         int usageLimit = resolveUsageLimit(req.voucherType(), req.usageLimit());
+        // The sender phone defaults to the issuing caller's own JWT phone —
+        // a customer gifting from the app gets their confirmation copy without
+        // restating their number. Single-issue only: bulk stock deliberately
+        // has no sender, so the default must not apply there.
+        String senderPhone = req.senderPhone() != null && !req.senderPhone().isBlank()
+                ? req.senderPhone() : CallerDetails.currentPhoneNumber();
         Voucher v = createVoucher(tenantId, merchant, null,
                 req.assignedUserId(), req.assigneePhone(), req.assigneeName(),
+                req.senderName(), senderPhone,
                 req.deliveryChannel(), req.campaignSource(), req.value(), req.currency(),
                 voucherTypeOrDefault(req.voucherType()), usageLimit);
         vouchers.save(v);
@@ -112,7 +119,17 @@ public class VoucherService {
             v.setStatus(Voucher.Status.DELIVERED);
             v.setDeliveredAt(Instant.now());
         }
-        notifications.deliver(v, resolveDeliveryPhone(v));
+        String recipientPhone = resolveDeliveryPhone(v);
+        notifications.deliver(v, recipientPhone);
+        // Sender's confirmation copy (V46): "we should both get the WhatsApp
+        // messages". Issue-path ONLY — the transfer path rotates the code and
+        // deliberately redacts it from the sender, so a sender copy there would
+        // defeat the rotation. Skipped when sender and recipient are the same
+        // phone (self-issue): one message, not two identical ones.
+        String stampedSenderPhone = v.getSenderPhone();
+        if (stampedSenderPhone != null && !stampedSenderPhone.equals(recipientPhone)) {
+            notifications.deliverSenderCopy(v, stampedSenderPhone);
+        }
         metrics.incVouchersIssued();
         return toResponse(v);
     }
@@ -130,8 +147,11 @@ public class VoucherService {
 
         List<Dtos.VoucherResponse> result = new ArrayList<>(req.quantity());
         for (int i = 0; i < req.quantity(); i++) {
+            // No sender identity on bulk: it is unassigned campaign stock, and a
+            // per-voucher sender confirmation would message one phone `quantity`
+            // times over.
             Voucher v = createVoucher(tenantId, merchant, batch.getId(),
-                    null, null, null, req.deliveryChannel(),
+                    null, null, null, null, null, req.deliveryChannel(),
                     req.campaign(), req.value(), req.currency(), type, usageLimit);
             vouchers.save(v);
             result.add(toResponse(v));
@@ -187,6 +207,7 @@ public class VoucherService {
 
     private Voucher createVoucher(UUID tenantId, Merchant merchant, UUID batchId,
                                   UUID assignedUserId, String assigneePhone, String assigneeName,
+                                  String senderName, String senderPhone,
                                   Voucher.DeliveryChannel channel, String campaign,
                                   BigDecimal value, String currency,
                                   Voucher.VoucherType type, int usageLimit) {
@@ -235,6 +256,13 @@ public class VoucherService {
         // Caller-supplied display name — strip any HTML before persisting
         // (stored-XSS hardening). Null-safe; a no-op on legitimate names.
         v.setAssigneeName(HtmlSanitizer.stripAll(assigneeName));
+        // Sender identity (V46) — who the voucher is FROM as it should read to
+        // the recipient. The name is presentation, sanitised like assigneeName.
+        // Distinct from the issuer_* audit columns below, which always come
+        // from the JWT and never the body; the caller (issue) resolves the
+        // default sender phone, so bulk stock stays sender-less.
+        v.setSenderName(HtmlSanitizer.stripAll(senderName));
+        v.setSenderPhone(senderPhone != null && !senderPhone.isBlank() ? senderPhone : null);
         // Stamp WHO issued it (and from which outlet) from the caller's JWT, so
         // reports carry a real issuer number alongside the receiver. All null
         // when there's no authenticated caller (internal / system issuance).
@@ -649,7 +677,8 @@ public class VoucherService {
      *  made, after the code has been rotated to the recipient). */
     private static Dtos.VoucherResponse redactCode(Dtos.VoucherResponse r) {
         return new Dtos.VoucherResponse(r.id(), null, r.status(), r.voucherType(),
-                r.assignedUserId(), r.assigneePhone(), r.usesRemaining(),
+                r.assignedUserId(), r.assigneePhone(),
+                r.senderName(), r.senderPhone(), r.usesRemaining(),
                 r.value(), r.currency(), r.issuedAt(), r.expiresAt(),
                 r.baseValue());
     }
@@ -708,6 +737,7 @@ public class VoucherService {
         return new Dtos.VoucherResponse(v.getId(), v.getCode(), v.getStatus().name(),
                 v.getVoucherType() == null ? null : v.getVoucherType().name(),
                 v.getAssignedUserId(), v.getAssigneePhone(),
+                v.getSenderName(), v.getSenderPhone(),
                 v.getUsesRemaining(),
                 v.getValue(), v.getCurrency(),
                 v.getIssuedAt(), v.getExpiresAt(), v.getBaseValue());

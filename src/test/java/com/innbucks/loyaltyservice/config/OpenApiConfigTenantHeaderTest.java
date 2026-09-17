@@ -45,6 +45,19 @@ class OpenApiConfigTenantHeaderTest {
         public void createTenant() { }
     }
 
+    /**
+     * Shaped like the real PublicTestController: the public marker sits on the
+     * CLASS, not the method. That is exactly the shape the method-level check
+     * did not see, so every public-test operation rendered tenant-header fields
+     * the endpoint ignores.
+     */
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @RequestMapping("/loyalty/public")
+    static class PublicTestLikeController {
+        @PostMapping("/customers/{phoneNumber}/points/send")
+        public void send() { }
+    }
+
     private static HandlerMethod handler(Class<?> controller, String method) throws Exception {
         return new HandlerMethod(controller.getDeclaredConstructor().newInstance(),
                 controller.getDeclaredMethod(method));
@@ -80,6 +93,31 @@ class OpenApiConfigTenantHeaderTest {
         Operation op = customizer.customize(new Operation(), handler(TenantController.class, "createTenant"));
 
         assertThat(op.getParameters()).isNull();
+    }
+
+    @Test
+    void publicTestSurface_classLevelMarker_getsNoTenantHeaders() throws Exception {
+        // The regression from the FE's own screenshot: X-Tenant-Id / X-Tenant-Code
+        // rendered on /loyalty/public/** operations, which take no tenant header.
+        Operation op = customizer.customize(new Operation(), handler(PublicTestLikeController.class, "send"));
+
+        assertThat(op.getParameters()).isNull();
+    }
+
+    @Test
+    void publicTestSurface_getsTheApiKeyHeader_andNothingElseDoes() throws Exception {
+        OperationCustomizer apiKey = new OpenApiConfig().publicTestApiKeyOperationCustomizer();
+
+        Operation pub = apiKey.customize(new Operation(), handler(PublicTestLikeController.class, "send"));
+        assertThat(pub.getParameters()).extracting("$ref")
+                .containsExactly("#/components/parameters/x-api-key");
+
+        Operation shop = apiKey.customize(new Operation(), handler(ShopLikeController.class, "tenantScoped"));
+        assertThat(shop.getParameters()).isNull();
+
+        // Idempotent: a second pass does not stack a duplicate field.
+        pub = apiKey.customize(pub, handler(PublicTestLikeController.class, "send"));
+        assertThat(pub.getParameters()).hasSize(1);
     }
 
     @Test

@@ -87,7 +87,38 @@ public class OpenApiConfig {
                                         .name("X-Tenant-Code")
                                         .description("Tenant short code — required on every tenant-scoped endpoint (alternative to X-Tenant-Id).")
                                         .required(false)
+                                        .schema(new StringSchema()))
+                        .addParameters("x-api-key",
+                                new HeaderParameter()
+                                        .name("x-api-key")
+                                        .description("Shared key for the /loyalty/public/** test surface. "
+                                                + "Missing or wrong: 401. Surface enabled with no key provisioned on the cell: 503.")
+                                        .required(true)
                                         .schema(new StringSchema())));
+    }
+
+    /**
+     * Renders the {@code x-api-key} input field on the {@code /loyalty/public/**}
+     * operations. Those carry an empty {@code @SecurityRequirements} (no bearer
+     * token), which is still true — but they are NOT credential-free, and a
+     * Try-it-out form with nowhere to type the key makes the whole surface look
+     * broken from Swagger UI: every call comes back 401 with no hint why. Same
+     * failure the tenant-header customizer above exists to fix.
+     */
+    @Bean
+    public OperationCustomizer publicTestApiKeyOperationCustomizer() {
+        return (operation, handlerMethod) -> {
+            RequestMapping classMapping = handlerMethod.getBeanType().getAnnotation(RequestMapping.class);
+            boolean isPublicTest = classMapping != null && classMapping.value().length > 0
+                    && classMapping.value()[0].startsWith("/loyalty/public");
+            if (!isPublicTest) {
+                return operation;
+            }
+            if (!declares(operation, "x-api-key")) {
+                operation.addParametersItem(new Parameter().$ref("#/components/parameters/x-api-key"));
+            }
+            return operation;
+        };
     }
 
     /**
@@ -123,20 +154,45 @@ public class OpenApiConfig {
                     && classMapping.value()[0].startsWith("/loyalty/internal")) {
                 return operation;
             }
+            // The public-test surface takes NO tenant header — its controller
+            // resolves the tenant from the phone's own projection or the voucher
+            // row, and says so. It marks itself public at the CLASS level, which
+            // the method-level check below never saw, so every one of its
+            // operations rendered X-Tenant-Id / X-Tenant-Code fields that the
+            // endpoint ignores. Skip it by prefix, the same way the internal
+            // surface is skipped: a field the FE fills in and we discard is a
+            // doc that lies.
+            if (classMapping != null && classMapping.value().length > 0
+                    && classMapping.value()[0].startsWith("/loyalty/public")) {
+                return operation;
+            }
             io.swagger.v3.oas.annotations.security.SecurityRequirements publicMarker =
                     handlerMethod.getMethodAnnotation(
                             io.swagger.v3.oas.annotations.security.SecurityRequirements.class);
             if (publicMarker != null && publicMarker.value().length == 0) {
                 return operation;
             }
-            boolean alreadyDeclared = operation.getParameters() != null
-                    && operation.getParameters().stream()
-                            .anyMatch(p -> "X-Tenant-Id".equals(p.getName()));
-            if (!alreadyDeclared) {
+            if (!declares(operation, "X-Tenant-Id")) {
                 operation.addParametersItem(new Parameter().$ref("#/components/parameters/X-Tenant-Id"));
                 operation.addParametersItem(new Parameter().$ref("#/components/parameters/X-Tenant-Code"));
             }
             return operation;
         };
+    }
+
+    /**
+     * True when the operation already carries the named header — declared
+     * inline (a named parameter) OR as a {@code $ref} to the component. The
+     * refs these customizers add have a null name, so matching on name alone
+     * never sees them, and a second customizer pass over the same operation
+     * stacks a duplicate field.
+     */
+    private static boolean declares(io.swagger.v3.oas.models.Operation operation, String header) {
+        if (operation.getParameters() == null) {
+            return false;
+        }
+        String ref = "#/components/parameters/" + header;
+        return operation.getParameters().stream()
+                .anyMatch(p -> header.equals(p.getName()) || ref.equals(p.get$ref()));
     }
 }

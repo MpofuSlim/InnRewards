@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.config;
 
 import com.innbucks.loyaltyservice.security.JwtFilter;
 import com.innbucks.loyaltyservice.security.MetricsScrapeAuthFilter;
+import com.innbucks.loyaltyservice.security.PublicTestApiKeyFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,6 +20,7 @@ public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
     private final MetricsScrapeAuthFilter metricsScrapeAuthFilter;
+    private final PublicTestApiKeyFilter publicTestApiKeyFilter;
 
     // CORS lives exclusively on the api-gateway (globalcors + RemoveResponseHeader
     // filters per PR #182). Browsers only ever talk to the gateway, so a per-service
@@ -115,6 +117,13 @@ public class SecurityConfig {
                         // false, and being set per-host in the gitignored
                         // cell.<iso>.local.env rather than the shared ConfigMap, is
                         // what keeps that off production.
+                        //
+                        // permitAll here means "no JWT", NOT "no credential":
+                        // PublicTestApiKeyFilter gates the whole prefix on an
+                        // x-api-key header whenever the surface is enabled. It runs
+                        // before this chain reaches a handler and refuses outright,
+                        // so a mapping added under /loyalty/public later is gated
+                        // by shape rather than by someone remembering to gate it.
                         .requestMatchers("/loyalty/public/**").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who
@@ -141,7 +150,13 @@ public class SecurityConfig {
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 // Static-token auth for the Prometheus scraper on /actuator/prometheus
                 // (see MetricsScrapeAuthFilter). No-ops for every other request.
-                .addFilterBefore(metricsScrapeAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(metricsScrapeAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                // x-api-key gate on /loyalty/public/** (see PublicTestApiKeyFilter).
+                // Unlike the two filters above it REFUSES rather than falling
+                // through — the prefix is permitAll, so falling through would be
+                // the un-gated behaviour it exists to replace. Inert on every
+                // other path, and on every path when the surface is switched off.
+                .addFilterBefore(publicTestApiKeyFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 }

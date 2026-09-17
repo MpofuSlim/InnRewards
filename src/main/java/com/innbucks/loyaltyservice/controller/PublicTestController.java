@@ -51,7 +51,7 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * <b>TEST-ONLY, UNAUTHENTICATED endpoints.</b> Everything under
+ * <b>TEST-ONLY endpoints, with no USER authentication.</b> Everything under
  * {@code /loyalty/public/**} is reachable with <b>no JWT, no bearer token, no
  * tenant header and no role</b> — it exists so a frontend can be built and
  * demoed against real data before its auth flow is wired up.
@@ -59,6 +59,13 @@ import java.util.function.Supplier;
  * <p>This lives in its own controller, under its own path prefix and its own
  * Swagger tag, purely so the split is impossible to miss: everything in the
  * other controllers is authenticated, everything here is not.
+ *
+ * <p><b>One credential IS required: {@code x-api-key}</b>, checked for the whole
+ * prefix by {@link com.innbucks.loyaltyservice.security.PublicTestApiKeyFilter}
+ * before any method here runs. It authenticates the APP, not the customer — the
+ * key ships in a client, so it is a throttle and a kill switch (rotatable from
+ * Firebase Remote Config without an app release), not access control. Everything
+ * this class says below about there being no caller still holds.
  *
  * <h2>How identity works without a token</h2>
  *
@@ -90,6 +97,10 @@ import java.util.function.Supplier;
  *   <li><b>Off unless explicitly switched on.</b> Gated by
  *       {@code loyalty.public-test.enabled}, default {@code false}. A cell that
  *       forgets to set it serves 404s, which is the safe direction.</li>
+ *   <li><b>Nothing here re-checks the api-key.</b> The filter covers the prefix
+ *       by shape, so a mapping added to this class is gated the moment it
+ *       exists — which is the point. Don't move that check into the methods,
+ *       where the one that forgets it is a live un-gated endpoint.</li>
  *   <li><b>Never call a service method this controller re-implements.</b> The
  *       point of these endpoints is to exercise the real behaviour; a
  *       convenience shortcut that skips a guard would make the test surface
@@ -109,11 +120,17 @@ import java.util.function.Supplier;
 @Slf4j
 @Tag(name = "Public (TEST ONLY — no auth)",
      description = """
-             **Unauthenticated endpoints for frontend testing. No bearer token, no tenant header, no role.**
+             **Endpoints for frontend testing. No bearer token, no tenant header, no role — but an \
+             `x-api-key` header IS required.**
 
-             Send NOTHING but the request itself — no `Authorization`, no `X-Tenant-Id`. These exist so \
-             the app can be built against real data before its auth flow is wired up, and they are \
-             disabled unless the cell sets `LOYALTY_PUBLIC_TEST_ENABLED=true`.
+             Send the shared key as `x-api-key` and nothing else — no `Authorization`, no \
+             `X-Tenant-Id`. The key comes from Firebase Remote Config; a missing or wrong one is a \
+             `401`, and a `503` means the cell has the surface on but no key provisioned. These exist \
+             so the app can be built against real data before its auth flow is wired up, and they are \
+             disabled (404) unless the cell sets `LOYALTY_PUBLIC_TEST_ENABLED=true`.
+
+             The key identifies the APP, not the customer — it is a throttle and a kill switch, and it \
+             does not make these endpoints safe to point a production build at.
 
              The phone number in the URL is the identity. Each endpoint runs the same production \
              service method as its authenticated twin, so the real rules (ownership, single-hop voucher \
@@ -185,9 +202,10 @@ public class PublicTestController {
     @PostConstruct
     void warnIfEnabled() {
         if (enabled) {
-            log.warn("PUBLIC TEST endpoints are ENABLED (/loyalty/public/**). Unauthenticated reads AND "
-                    + "WRITES against customer wallets and vouchers are live on this cell. "
-                    + "This must NOT be a production cell.");
+            log.warn("PUBLIC TEST endpoints are ENABLED (/loyalty/public/**). Reads AND WRITES against "
+                    + "customer wallets and vouchers are live on this cell behind an x-api-key, which "
+                    + "authenticates the APP and not the customer — a key holder can still spend any "
+                    + "phone's points. This must NOT be a production cell.");
         }
     }
 

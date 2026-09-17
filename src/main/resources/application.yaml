@@ -391,6 +391,21 @@ loyalty:
     # change the outcome.
     tenant-id: ${LOYALTY_PUBLIC_TEST_TENANT_ID:}
     merchant-id: ${LOYALTY_PUBLIC_TEST_MERCHANT_ID:}
+    # Shared key the caller presents as `x-api-key` (PublicTestApiKeyFilter).
+    # The super app reads it from Firebase Remote Config, which is what makes it
+    # rotatable and killable without an app release.
+    #
+    # It authenticates the APP, not the customer: the key ships in a client, so
+    # anyone who can read that client's config can read the key. Treat it as a
+    # throttle and a kill switch — it is NOT what makes this surface safe. The
+    # phone number in the URL is still the only identity, so a key holder can
+    # still spend any phone's points. `enabled: false` on production remains the
+    # control that matters.
+    #
+    # Blank while `enabled` is true fails CLOSED: every call is refused 503 and
+    # the boot check logs HALF-PROVISIONED. A blank key must never read as "no
+    # key required" — that is the state this gate exists to end.
+    api-key: ${LOYALTY_PUBLIC_TEST_API_KEY:}
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}

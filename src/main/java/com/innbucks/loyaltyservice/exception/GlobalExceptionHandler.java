@@ -212,6 +212,38 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * The path exists but not for that verb — a {@code POST} to a read-only
+     * endpoint. The last member of the shadowed-by-the-catch-all family, and a
+     * 500 for the same reason as the three above it.
+     *
+     * <p>The {@code Allow} header is the load-bearing half: a 405 without it
+     * tells the caller only that they were wrong, never what would be right,
+     * and it is what an HTTP client or a generated SDK actually reads. It is
+     * set from OUR mapping, so nothing caller-supplied reaches the response —
+     * the attempted method is a caller-controlled token and is deliberately
+     * neither echoed in the body nor named in the message. An empty or absent
+     * supported set emits no header rather than a blank one.
+     */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResult<Void>> handle(
+            org.springframework.web.HttpRequestMethodNotSupportedException ex) {
+        java.util.Set<org.springframework.http.HttpMethod> supported = ex.getSupportedHttpMethods();
+        log.warn("Method not allowed: supported={}", supported);
+
+        String message = supported == null || supported.isEmpty()
+                ? "That HTTP method isn't supported on this path."
+                : "That HTTP method isn't supported on this path. Allowed: "
+                        + supported.stream().map(org.springframework.http.HttpMethod::name).sorted()
+                                .collect(java.util.stream.Collectors.joining(", ")) + ".";
+
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        if (supported != null && !supported.isEmpty()) {
+            response.allow(supported.toArray(new org.springframework.http.HttpMethod[0]));
+        }
+        return response.body(ApiResult.error(HttpStatus.METHOD_NOT_ALLOWED, message));
+    }
+
+    /**
      * No route matched the request path (e.g. a removed or mistyped endpoint).
      * Spring raises NoResourceFoundException; without this it hits the Exception
      * catch-all and surfaces as a 500. A missing route is a client error → 404.

@@ -1177,7 +1177,7 @@ could never succeed.
   make an unknown value and a blank one behave alike. Pinned by
   `aBlankStatusIs400_andSaysWhatToDoAboutIt`.
 - **This class of bug is invisible to a unit test of the handler**: the defect
-  was in *which* handler Spring picks. `GlobalExceptionHandlerParameterBindingTest`
+  was in *which* handler Spring picks. `GlobalExceptionHandlerDispatchTest`
   therefore goes through real dispatch (standalone MockMvc + the advice), and it
   is the pattern to copy — it fails with `expected:<400> but was:<500>` the
   moment the handler is removed, which is how the 500 was confirmed rather than
@@ -1186,15 +1186,25 @@ could never succeed.
   (`ResponseStatusException`, `HttpMessageNotReadableException`,
   `NoResourceFoundException`). Treat the catch-all as *hostile to Spring's
   defaults*: when adding an endpoint whose failure mode is a standard Spring MVC
-  exception, check there is a handler for it, or it will 500. The
-  request-binding family is covered here too — `ServletRequestBindingException`
-  catches a missing required header, cookie or matrix variable (no live caller:
-  nothing in `src/main` declares a `@RequestHeader`, so it is there to make the
-  next one correct by default). **Still shadowed and still answering 500: a
-  wrong HTTP method on a real path** (`HttpRequestMethodNotSupportedException`,
-  should be a 405 carrying `Allow`) — measured the same way and left out of
-  V48's scope deliberately rather than undiscovered. It is one more handler of
-  the same shape.
+  exception, check there is a handler for it, or it will 500.
+- **The whole shadowed family is now mapped**, each measured at 500 first and
+  each with a handler carrying its own rationale comment: a mistyped parameter
+  or path variable (400), a blank or absent required parameter (400), the rest
+  of the request-binding family via `ServletRequestBindingException` — missing
+  header, cookie, matrix variable (400; no live caller, since nothing in
+  `src/main` declares a `@RequestHeader`, so it is there to make the next one
+  correct by default), and **the wrong HTTP verb on a real path (405)**. The
+  405 sets `Allow` from OUR mapping, because a 405 without it tells the caller
+  they were wrong and never what would be right; the attempted method is a
+  caller-controlled token and is deliberately neither echoed nor named.
+- **The durable rule, which outlives this list: treat that catch-all as hostile
+  to Spring's defaults.** It is a `@RestControllerAdvice`, and the
+  `@ExceptionHandler` resolver runs before `DefaultHandlerExceptionResolver`, so
+  every standard Spring MVC exception without its own handler here becomes a 500
+  no matter what Spring would have returned. When you add an endpoint whose
+  failure mode is one of those, check for a handler — and add the test to
+  `GlobalExceptionHandlerDispatchTest`, not to the unit test, because the defect
+  is never in the handler's body.
 
 ## Cryptography & key management (OWASP A02)
 

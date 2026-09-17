@@ -19,27 +19,29 @@ import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * A request parameter the client spelled wrong is a 400, not a 500.
+ * A request the client got wrong gets a 4xx, not a 500.
  *
  * <p>This is about the RESOLVER CHAIN, not about any one endpoint, which is why
  * it runs against a stub controller: {@code @ExceptionHandler} methods are
  * consulted before Spring's {@code DefaultHandlerExceptionResolver}, so
  * {@link GlobalExceptionHandler}'s {@code Exception} catch-all was shadowing
- * Spring's own 400 for {@code MethodArgumentTypeMismatchException} and every
- * unconvertible parameter came back as "Something went wrong on our end. Please
- * try again." — a message that invites a retry which cannot succeed, on an
- * endpoint that was working fine. Asserting the handler in isolation (as
+ * Spring's own status mapping for a whole family of standard MVC exceptions.
+ * Every one of them — a mistyped parameter, a blank one, an absent one, the
+ * wrong HTTP verb — came back as "Something went wrong on our end. Please try
+ * again.", a message that invites a retry which cannot succeed, on an endpoint
+ * that was working fine. Asserting the handler in isolation (as
  * {@link GlobalExceptionHandlerTest} does) cannot catch that: the bug was in
  * which handler Spring picks, so the test has to go through Spring's dispatch.
  *
  * <p>It also pins the V48 status alias end-to-end, through real parameter
  * binding rather than a direct call on the converter.
  */
-class GlobalExceptionHandlerParameterBindingTest {
+class GlobalExceptionHandlerDispatchTest {
 
     /**
      * Stands in for the seven real endpoints that take a {@code Voucher.Status}
@@ -147,6 +149,20 @@ class GlobalExceptionHandlerParameterBindingTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("script"))));
+    }
+
+    @Test
+    void theWrongMethodIs405_andSaysWhichMethodsAreAllowed() throws Exception {
+        // The path exists, the verb does not. `Allow` is the load-bearing half:
+        // a 405 without it tells the caller they were wrong but never what
+        // would be right, and it is what an HTTP client or generated SDK reads.
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/probe/vouchers"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", "GET"))
+                .andExpect(jsonPath("$.code").value("405 METHOD_NOT_ALLOWED"))
+                .andExpect(jsonPath("$.message").value(
+                        "That HTTP method isn't supported on this path. Allowed: GET."));
     }
 
     @Test

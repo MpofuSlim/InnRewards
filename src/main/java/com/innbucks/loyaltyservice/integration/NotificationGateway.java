@@ -132,19 +132,19 @@ public class NotificationGateway {
         String ref = "VOUCHER-SENDER-" + voucher.getId();
         try {
             whatsApp.sendCustomNotification(senderPhone, message);
-            log.info("Voucher id={} sender copy delivered via WhatsApp -> {}",
+            log.info("Sender copy sent (WhatsApp) voucherId={} to {}",
                     voucher.getId(), MsisdnMasking.mask(senderPhone));
             return;
         } catch (RuntimeException e) {
-            log.warn("Voucher id={} sender-copy WhatsApp delivery failed for {}, falling back to SMS: {}",
+            log.warn("Sender copy WhatsApp attempt failed voucherId={} to {}, retrying as SMS: {}",
                     voucher.getId(), MsisdnMasking.mask(senderPhone), e.getMessage());
         }
         try {
             sms.sendSms(senderPhone, message, ref);
-            log.info("Voucher id={} sender copy delivered via SMS -> {}",
+            log.info("Sender copy sent (SMS) voucherId={} to {}",
                     voucher.getId(), MsisdnMasking.mask(senderPhone));
         } catch (RuntimeException e) {
-            log.warn("Voucher id={} sender copy failed on both channels for {} (voucher unaffected): {}",
+            log.warn("Sender copy undeliverable on either channel voucherId={} to {} (voucher unaffected): {}",
                     voucher.getId(), MsisdnMasking.mask(senderPhone), e.getMessage());
         }
     }

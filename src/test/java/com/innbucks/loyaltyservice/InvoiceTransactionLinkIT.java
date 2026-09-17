@@ -10,7 +10,6 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
@@ -20,7 +19,6 @@ import com.innbucks.loyaltyservice.service.RuleAdminService;
 import com.innbucks.loyaltyservice.service.TransactionService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -63,7 +61,6 @@ class InvoiceTransactionLinkIT extends PostgresIntegrationTestBase {
     @Autowired InvoicingService invoicingService;
     @Autowired LoyaltyTransactionRepository transactions;
     @Autowired VoucherService voucherService;
-    @Autowired VoucherTemplateService voucherTemplateService;
 
     @MockitoBean UserServiceClient userServiceClient;
 
@@ -190,15 +187,10 @@ class InvoiceTransactionLinkIT extends PostgresIntegrationTestBase {
      * {@link #pointsAloneRaiseNoInvoice_soTheirRowsStayUnlinked}.
      */
     private void issueVoucher() {
-        VoucherTemplate tpl = voucherTemplateService.create(tenantId, merchantId,
-                new Dtos.VoucherTemplateRequest(null, "Invoice link tpl",
-                        VoucherTemplate.VoucherType.SINGLE_USE,
-                        VoucherTemplate.ValueType.PERCENT,
-                        "USD", null, 1, 30, null));
         voucherService.issue(tenantId,
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                new Dtos.IssueVoucherRequest(merchantId, null, new BigDecimal("10"), "USD", null,
                         null, null, userId,
-                        Voucher.DeliveryChannel.NONE, null, null, null));
+                        Voucher.DeliveryChannel.NONE, null));
     }
 
     private void earn(int amount, String ref) {

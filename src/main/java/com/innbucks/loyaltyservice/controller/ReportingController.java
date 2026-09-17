@@ -1176,7 +1176,7 @@ public class ReportingController {
                       "receiverUserId": "33333333-3333-3333-3333-333333333333",
                       "receiverPhone": "+263771234567",
                       "receiverName": "Jane Moyo",
-                      "valueType": "AMOUNT",
+                      "voucherType": "SINGLE_USE",
                       "faceValue": 5.00,
                       "currency": "USD",
                       "usesRemaining": 0,
@@ -1307,7 +1307,7 @@ public class ReportingController {
                                         "issuerEmail": "shopadmin@westgate.co.zw",
                                         "receiverPhone": "+263771234567",
                                         "receiverName": "Jane Moyo",
-                                        "valueType": "AMOUNT",
+                                        "voucherType": "SINGLE_USE",
                                         "faceValue": 5.00,
                                         "currency": "USD",
                                         "issuedAt": "2026-06-01T08:00:00Z",
@@ -1349,7 +1349,7 @@ public class ReportingController {
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
             content = @Content(mediaType = "text/csv", examples = @ExampleObject(name = "CSV", value =
                     "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
-                    + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,valueType,"
+                    + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,voucherType,"
                     + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
                     + "redeemedAt,expiresAt,expired,redemptionCount\\n"
                     + "d2c8f0a1-0123-4567-1234-567890123456,VCH-AB12CD34,REDEEMED,11111111-1111-1111-1111-111111111111,"

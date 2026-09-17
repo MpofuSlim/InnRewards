@@ -46,7 +46,7 @@ class VoucherTransferNotificationTest {
         // parameter for it, which is the strongest form this guarantee can
         // take. This test pins the resulting message so a future "make it more
         // helpful" edit can't quietly add one.
-        notifier.notifyVoucherReceived(PHONE, "PERCENT", new BigDecimal("10"), "USD",
+        notifier.notifyVoucherReceived(PHONE, new BigDecimal("10"), "USD",
                 LocalDate.of(2027, 8, 20));
 
         String body = sentBody();
@@ -57,22 +57,16 @@ class VoucherTransferNotificationTest {
     // ---- recipient message content ----
 
     @Test
-    void aPercentVoucherReadsAsPercentOff() {
-        notifier.notifyVoucherReceived(PHONE, "PERCENT", new BigDecimal("10"), "USD", null);
-        assertThat(sentBody()).contains("10% off");
-    }
-
-    @Test
     void anAmountVoucherCarriesItsCurrency() {
-        notifier.notifyVoucherReceived(PHONE, "AMOUNT", new BigDecimal("5"), "USD", null);
+        notifier.notifyVoucherReceived(PHONE, new BigDecimal("5"), "USD", null);
         assertThat(sentBody()).contains("USD 5 off");
     }
 
     @Test
-    void aFreeItemVoucherDegradesToAGenericNoun_ratherThanPrintingNull() {
-        // FREE_ITEM and COMBO carry no numeric value. Formatting them like the
-        // numeric types would text a customer "null off" or "0 off".
-        notifier.notifyVoucherReceived(PHONE, "FREE_ITEM", null, null, null);
+    void aVoucherWithNoValueDegradesToAGenericNoun_ratherThanPrintingNull() {
+        // A legacy row can carry no numeric value. Formatting it like the money
+        // vouchers would text a customer "null off" or "0 off".
+        notifier.notifyVoucherReceived(PHONE, null, null, null);
 
         String body = sentBody();
         assertThat(body).contains("a voucher");
@@ -85,14 +79,14 @@ class VoucherTransferNotificationTest {
         // Vouchers still expire even though points no longer do, so a silent
         // transfer can simply lapse unused — the date is the part that makes
         // the message actionable.
-        notifier.notifyVoucherReceived(PHONE, "PERCENT", new BigDecimal("10"), "USD",
+        notifier.notifyVoucherReceived(PHONE, new BigDecimal("10"), "USD",
                 LocalDate.of(2027, 8, 20));
         assertThat(sentBody()).contains("2027-08-20");
     }
 
     @Test
     void aNonExpiringVoucherOmitsTheExpirySentenceEntirely() {
-        notifier.notifyVoucherReceived(PHONE, "PERCENT", new BigDecimal("10"), "USD", null);
+        notifier.notifyVoucherReceived(PHONE, new BigDecimal("10"), "USD", null);
         assertThat(sentBody()).doesNotContain("expires on");
     }
 
@@ -102,7 +96,7 @@ class VoucherTransferNotificationTest {
     void theSenderIsToldItCannotBeSentOnAgain() {
         // Sets the expectation at the moment it matters — the sender has just
         // used the voucher's one and only hop.
-        notifier.notifyVoucherSent(PHONE, "PERCENT", new BigDecimal("10"), "USD");
+        notifier.notifyVoucherSent(PHONE, new BigDecimal("10"), "USD");
 
         String body = sentBody();
         assertThat(body).contains("You sent");
@@ -113,8 +107,8 @@ class VoucherTransferNotificationTest {
 
     @Test
     void aBlankPhoneSendsNothing() {
-        notifier.notifyVoucherReceived("  ", "PERCENT", new BigDecimal("10"), "USD", null);
-        notifier.notifyVoucherSent(null, "PERCENT", new BigDecimal("10"), "USD");
+        notifier.notifyVoucherReceived("  ", new BigDecimal("10"), "USD", null);
+        notifier.notifyVoucherSent(null, new BigDecimal("10"), "USD");
 
         verify(sms, never()).sendSms(any(), any(), any());
         verify(whatsApp, never()).sendCustomNotification(any(), any());
@@ -127,7 +121,7 @@ class VoucherTransferNotificationTest {
         org.mockito.Mockito.doThrow(new RuntimeException("gateway down"))
                 .when(sms).sendSms(anyString(), anyString(), any());
 
-        notifier.notifyVoucherReceived(PHONE, "PERCENT", new BigDecimal("10"), "USD", null);
+        notifier.notifyVoucherReceived(PHONE, new BigDecimal("10"), "USD", null);
 
         verify(whatsApp).sendCustomNotification(anyString(), anyString());
     }
@@ -140,7 +134,7 @@ class VoucherTransferNotificationTest {
                 .when(whatsApp).sendCustomNotification(anyString(), anyString());
 
         // No exception escapes — that is the whole assertion.
-        notifier.notifyVoucherReceived(PHONE, "PERCENT", new BigDecimal("10"), "USD", null);
-        notifier.notifyVoucherSent(PHONE, "PERCENT", new BigDecimal("10"), "USD");
+        notifier.notifyVoucherReceived(PHONE, new BigDecimal("10"), "USD", null);
+        notifier.notifyVoucherSent(PHONE, new BigDecimal("10"), "USD");
     }
 }

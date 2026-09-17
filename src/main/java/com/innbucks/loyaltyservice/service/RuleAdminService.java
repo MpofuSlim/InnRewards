@@ -182,6 +182,15 @@ public class RuleAdminService {
             r.setFeeRedeemedFixed(MerchantService.nz(req.feeRedeemed().fixed()));
             r.setFeeRedeemedPercentage(MerchantService.nz(req.feeRedeemed().percentage()));
         }
+        // V45: voucher expiry as commercial config — tenant standard on a
+        // global rule, per-merchant override on a merchant rule. Null =
+        // inherit; a non-positive value is refused (the DTO @Positive is the
+        // first line, this the defence-in-depth behind the onboarding path).
+        if (req.voucherValidityDays() != null && req.voucherValidityDays() <= 0) {
+            throw LoyaltyException.badRequest("BAD_VOUCHER_VALIDITY",
+                    "voucherValidityDays must be greater than zero when set.");
+        }
+        r.setVoucherValidityDays(req.voucherValidityDays());
         return r;
     }
 

@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V44**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V45**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -710,7 +710,7 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
 - **`SupportedCurrencies` is the allowlist** — configured set
   (`LOYALTY_SUPPORTED_CURRENCIES`, default `USD`) ∪ BASE ∪ the cell currency
   (`INNBUCKS_CURRENCY`). Every write entry point that accepts or defaults a
-  currency (merchant create, QR issue, voucher template, earn, redeem)
+  currency (merchant create, QR issue, voucher issue, earn, redeem)
   resolves through it and FAILS CLOSED (`UNSUPPORTED_CURRENCY`) on anything
   outside — the currency analogue of `KNOWN_COUNTRIES`.
 - **`exchange_rates` (V36) is append-only + effective-dated** (the
@@ -776,11 +776,11 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   *when it was issued*, because that is when the platform makes the promise.
   Revaluing the outstanding book at today's rate would swing the liability
   daily on FX alone, with nothing issued and nothing redeemed.
-  **Only `valueType = AMOUNT` is converted** — a PERCENT voucher's value is a
-  *percentage* and FREE_ITEM/COMBO have no money face value, so running them
-  through a rate would mint a confident, meaningless figure. Those stay NULL
-  forever, which is why a liability report must filter on value type rather
-  than treating NULL as zero.
+  **Since V45 every voucher is a money AMOUNT, so the conversion is
+  unconditional at issue.** Legacy PERCENT/FREE_ITEM/COMBO rows keep a NULL
+  `base_value` forever — a percentage run through a rate would have minted a
+  confident, meaningless figure — which is why a liability report still must
+  never read NULL as zero.
 - **QR needs no FX code of its own.** A QR carries an amount + currency and
   `consume` hands both to `TransactionService.post`, so it converts at
   scan time through the earn path above — correct, since the earn happens
@@ -927,6 +927,62 @@ config and the existing merchant-beats-global precedence applies unchanged.
 already depends on `MerchantService` — that edge back would be a bean cycle) and
 shares the mapping/validation through the static `RuleAdminService.build`. Add
 new rule fields there, not in a second mapper.
+
+## Vouchers are TEMPLATE-LESS, amount-only, two types (V45)
+
+**Owner decision (2026-09-17): voucher templates are retired.** A voucher is
+issued directly — `POST /loyalty/vouchers/issue` / `/issue-bulk` carry the
+type, the money value and the currency; there is no template between the
+operator and the voucher. The `voucher_templates` table is dormant history
+(same call as `event_outbox`), kept mapped ONLY as a read model so pre-V45
+vouchers can resolve a template name in reports. **Do not add a template write
+path back.**
+
+- **Value types are GONE.** `VoucherTemplate.ValueType` (PERCENT / FREE_ITEM /
+  COMBO) no longer exists on the issue path: a voucher's `value` is always a
+  money AMOUNT in an explicit `currency`. This is also what makes the
+  per-voucher fee arithmetic sound — `EffectiveFees.faceValue` multiplies
+  money now, never a percentage masquerading as one. `vouchers.value_type`
+  stays as an unmapped legacy column.
+- **Two voucher types only: `SINGLE_USE` and `MULTI_USE`** (`Voucher.VoucherType`,
+  stamped on the voucher at issue — V45 backfilled legacy rows from their
+  template's usage limit). SINGLE_USE is exactly one use (a conflicting
+  `usageLimit` is refused, `USAGE_LIMIT_CONFLICT`); MULTI_USE requires an
+  explicit `usageLimit >= 2` (`USAGE_LIMIT_REQUIRED`). CAMPAIGN / REFERRAL /
+  CORPORATE were distribution labels, not redemption semantics, and are gone.
+- **Expiry is commercial config on `loyalty_rules.voucher_validity_days`**,
+  with the same two-tier inheritance as the floor and the fees: merchant rule
+  → tenant's global rule → the platform default
+  (`loyalty.voucher.default-validity-days`, 365). Resolution lives in
+  `EffectiveFees.resolveVoucherValidityDays` — one home, same time-valid +
+  merchant-first filters as the fee sides. Resolved per ISSUE, so a rule
+  change applies to the next voucher, never retroactively. There is no
+  per-issue validity override.
+- **Currency is per issue, allowlist-validated, fail closed.** Absent inherits
+  the merchant's currency; anything outside `SupportedCurrencies` refuses
+  (`UNSUPPORTED_CURRENCY`), and a supported non-USD currency with no in-force
+  exchange rate refuses (`NO_FX_RATE`) — the ZW cell ships
+  `LOYALTY_SUPPORTED_CURRENCIES=USD,ZAR,ZWG`, but **supported is not rated**:
+  post a rate before issuing in ZAR/ZWG or the issue fails closed.
+  `base_value` conversion is now unconditional (every voucher is money).
+- **Issue is object-level authorized now, and that is a tightening.** The
+  template check was tenant-scoped only, so a MERCHANT_ADMIN could issue from
+  a sibling merchant's template. Issue resolves the merchant via
+  `CallerDetails.resolveMerchantId` and runs
+  `MerchantAuthz.requireCallerAdministersMerchant` (SUPER_ADMIN exempt,
+  SHOP_ADMIN pinned by the JWT claim).
+- **The signature payload is back-compat by construction.**
+  `VoucherService.signPayload` signs `tenant:templateId:code` when the stored
+  row has a template id (every pre-V45 voucher) and `tenant:-:code` when it
+  does not, and verify/rotate sites always recompute from the STORED row — so
+  legacy vouchers keep verifying with no re-signing pass.
+  `VoucherSignatureTamperingTest.legacyTemplateSignedVoucherStillVerifies`
+  pins it; do not "simplify" the payload to drop the stored template id.
+- **Response shapes changed**: `VoucherResponse` lost `templateId`/`valueType`
+  and gained `voucherType`; `RedemptionResponse` lost `valueType`; the voucher
+  report/CSV column `valueType` became `voucherType`. `MerchantRuleOverride`
+  and `RuleRequest` gained `voucherValidityDays` (back-compat constructors for
+  the old arities exist on both).
 
 ## Cryptography & key management (OWASP A02)
 

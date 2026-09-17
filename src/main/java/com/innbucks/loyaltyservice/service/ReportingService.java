@@ -828,7 +828,7 @@ public class ReportingService {
                 v.getBatchId(),
                 v.getIssuerUserId(), v.getIssuerPhone(), v.getIssuerEmail(),
                 v.getAssignedUserId(), v.getAssigneePhone(), v.getAssigneeName(),
-                v.getValueType() == null ? null : v.getValueType().name(),
+                v.getVoucherType() == null ? null : v.getVoucherType().name(),
                 v.getValue(), v.getCurrency(), v.getUsesRemaining(),
                 v.getDeliveryChannel() == null ? null : v.getDeliveryChannel().name(),
                 v.getCampaignSource(),
@@ -880,7 +880,7 @@ public class ReportingService {
         StringBuilder sb = new StringBuilder(
                 "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
                         + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
-                        + "valueType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
+                        + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
                         + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount\n");
         int pageNum = 0;
         int pageSize = 500;
@@ -905,7 +905,7 @@ public class ReportingService {
                         .append(csvField(d.receiverUserId())).append(',')
                         .append(csvField(d.receiverPhone())).append(',')
                         .append(csvField(d.receiverName())).append(',')
-                        .append(csvField(d.valueType())).append(',')
+                        .append(csvField(d.voucherType())).append(',')
                         .append(csvField(d.faceValue())).append(',')
                         .append(csvField(d.currency())).append(',')
                         .append(d.usesRemaining()).append(',')

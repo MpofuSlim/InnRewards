@@ -199,4 +199,45 @@ class EffectiveFeesTest {
     void applicableToleratesANullRuleList() {
         assertThat(EffectiveFees.applicable(null, MERCHANT_ID, TransactionType.PURCHASE)).isEmpty();
     }
+
+    // ------------------------------------------------------------------
+    // Voucher validity resolution (V45) — merchant rule → global → default
+    // ------------------------------------------------------------------
+
+    private static LoyaltyRule withValidity(LoyaltyRule r, Integer days) {
+        r.setVoucherValidityDays(days);
+        return r;
+    }
+
+    @Test
+    void validity_defaultsWhenNoRuleSetsOne() {
+        assertThat(EffectiveFees.resolveVoucherValidityDays(
+                List.of(rule(MERCHANT_ID), rule(null)), NOW, 365)).isEqualTo(365);
+    }
+
+    @Test
+    void validity_globalRuleIsTheTenantStandard() {
+        assertThat(EffectiveFees.resolveVoucherValidityDays(
+                List.of(rule(MERCHANT_ID), withValidity(rule(null), 60)), NOW, 365)).isEqualTo(60);
+    }
+
+    @Test
+    void validity_merchantRuleOverridesTheGlobalStandard() {
+        assertThat(EffectiveFees.resolveVoucherValidityDays(
+                List.of(withValidity(rule(MERCHANT_ID), 14), withValidity(rule(null), 60)),
+                NOW, 365)).isEqualTo(14);
+    }
+
+    @Test
+    void validity_anInactiveOrExpiredMerchantRuleIsIgnored() {
+        LoyaltyRule stale = withValidity(rule(MERCHANT_ID), 14);
+        stale.setEndsAt(NOW.minusSeconds(60));
+        assertThat(EffectiveFees.resolveVoucherValidityDays(
+                List.of(stale, withValidity(rule(null), 60)), NOW, 365)).isEqualTo(60);
+    }
+
+    @Test
+    void validity_toleratesANullRuleList() {
+        assertThat(EffectiveFees.resolveVoucherValidityDays(null, NOW, 365)).isEqualTo(365);
+    }
 }

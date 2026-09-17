@@ -7,13 +7,11 @@ import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.service.MerchantService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,7 +54,6 @@ class ConcurrentVoucherRedemptionIT extends PostgresIntegrationTestBase {
     @Autowired TenantRepository tenantRepository;
     @Autowired MerchantService merchantService;
     @Autowired UserService userService;
-    @Autowired VoucherTemplateService voucherTemplateService;
     @Autowired VoucherService voucherService;
 
     @MockitoBean UserServiceClient userServiceClient;
@@ -86,16 +83,12 @@ class ConcurrentVoucherRedemptionIT extends PostgresIntegrationTestBase {
         LoyaltyUser u = userService.findOrEnrol(tenantId, "+263770099911", merchantId);
         final UUID userId = u.getId();
 
-        VoucherTemplate tpl = voucherTemplateService.create(tenantId, merchantId,
-                new Dtos.VoucherTemplateRequest(null, "Race off",
-                        VoucherTemplate.VoucherType.SINGLE_USE,
-                        VoucherTemplate.ValueType.PERCENT,
-                        "USD", null, 1, 30, null));
-
+        // Issued directly since V45 (no template); the base class's SUPER_ADMIN
+        // fixture context satisfies the merchant authz.
         var issued = voucherService.issue(tenantId,
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                new Dtos.IssueVoucherRequest(merchantId, null, new BigDecimal("10"), "USD", null,
                         null, null, userId,
-                        Voucher.DeliveryChannel.NONE, null, null, null));
+                        Voucher.DeliveryChannel.NONE, null));
         final String code = issued.code();
 
         // Fire N parallel redemption attempts. CountDownLatch gates them all at

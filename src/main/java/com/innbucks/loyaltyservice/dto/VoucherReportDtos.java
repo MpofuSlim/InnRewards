@@ -75,7 +75,7 @@ public final class VoucherReportDtos {
             @Schema(example = "Jane Moyo", nullable = true) String receiverName,
 
             // Value snapshot frozen at issuance.
-            @Schema(example = "AMOUNT") String valueType,
+            @Schema(example = "SINGLE_USE") String voucherType,
             @Schema(example = "5.00") BigDecimal faceValue,
             @Schema(example = "USD") String currency,
             @Schema(example = "0", description = "Remaining redemptions (multi-use vouchers).") int usesRemaining,

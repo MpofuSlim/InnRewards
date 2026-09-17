@@ -56,8 +56,11 @@ class VoucherServiceTest {
     private final VoucherRepository vouchers = mock(VoucherRepository.class);
     private final VoucherBatchRepository batches = mock(VoucherBatchRepository.class);
     private final VoucherRedemptionRepository redemptions = mock(VoucherRedemptionRepository.class);
-    private final VoucherTemplateService templateService = mock(VoucherTemplateService.class);
     private final MerchantService merchants = mock(MerchantService.class);
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz =
+            mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class);
+    private final com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules =
+            mock(com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository.class);
     private final LoyaltyUserRepository users = mock(LoyaltyUserRepository.class);
     private final UserService userService = mock(UserService.class);
     private final NotificationGateway notifications = mock(NotificationGateway.class);
@@ -65,7 +68,9 @@ class VoucherServiceTest {
     private final LoyaltyMetrics metrics = mock(LoyaltyMetrics.class);
 
     private final VoucherService service = new VoucherService(
-            vouchers, batches, redemptions, templateService, merchants, users, userService,
+            vouchers, batches, redemptions, merchants, merchantAuthz,
+            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+            rules, users, userService,
             notifications, fraud, metrics,
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
             new LoyaltyProperties(null, null, null, null, null, null, null), usdOnlyFx());

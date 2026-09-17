@@ -24,7 +24,8 @@ public class VoucherBatch {
     @Column(name = "tenant_id", nullable = false)
     private UUID tenantId;
 
-    @Column(name = "template_id", nullable = false)
+    /** Pre-V45 rows only — batches are template-less since templates retired. */
+    @Column(name = "template_id")
     private UUID templateId;
 
     @Column(nullable = false)

@@ -1,7 +1,6 @@
 package com.innbucks.loyaltyservice.controller;
 
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.testsupport.ControllerSecurityTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -23,13 +22,12 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     // Mock the services so we never exercise their logic — these tests are
     // about the security filter chain + @PreAuthorize, not about voucher math.
     @MockitoBean VoucherService voucherService;
-    @MockitoBean VoucherTemplateService voucherTemplateService;
 
     private static final String EMPTY_JSON = "{}";
 
     @Test
-    void post_template_without_token_returns_401() throws Exception {
-        mockMvc.perform(post("/loyalty/vouchers/templates")
+    void post_issue_without_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/vouchers/issue")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(EMPTY_JSON))
                 .andExpect(status().isUnauthorized());
@@ -118,8 +116,8 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void post_template_with_malformed_token_returns_401() throws Exception {
-        mockMvc.perform(post("/loyalty/vouchers/templates")
+    void post_issue_with_malformed_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/vouchers/issue")
                         .header("Authorization", "Bearer not-a-real-jwt")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(EMPTY_JSON))
@@ -127,10 +125,10 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void post_template_with_expired_token_returns_401() throws Exception {
+    void post_issue_with_expired_token_returns_401() throws Exception {
         String expired = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.builder("admin@test.local")
                 .role("MERCHANT_ADMIN").expired().sign(jwtSecret);
-        mockMvc.perform(post("/loyalty/vouchers/templates")
+        mockMvc.perform(post("/loyalty/vouchers/issue")
                         .header("Authorization", bearer(expired))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(EMPTY_JSON))
@@ -140,25 +138,12 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     // Bodies below pass @Valid so the request reaches the @PreAuthorize gate
     // (which is what we're actually asserting). The mocked services would
     // never be invoked because the role check rejects first.
-    private static final String VALID_TEMPLATE_BODY = """
-            {"name":"x","type":"SINGLE_USE","valueType":"AMOUNT","usageLimit":1}
-            """;
     private static final String VALID_ISSUE_BODY = """
-            {"templateId":"d6e2f4a5-4567-8901-bcde-f01234567890"}
+            {"value":5.00}
             """;
     private static final String VALID_BULK_BODY = """
-            {"templateId":"d6e2f4a5-4567-8901-bcde-f01234567890","quantity":1}
+            {"value":5.00,"quantity":1}
             """;
-
-    @Test
-    void customer_cannot_create_template() throws Exception {
-        String customerToken = jwt("customer@test.local", "CUSTOMER");
-        mockMvc.perform(post("/loyalty/vouchers/templates")
-                        .header("Authorization", bearer(customerToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(VALID_TEMPLATE_BODY))
-                .andExpect(status().isForbidden());
-    }
 
     @Test
     void customer_cannot_issue_voucher() throws Exception {
@@ -189,9 +174,9 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void customer_cannot_list_templates() throws Exception {
+    void customer_cannot_list_vouchers() throws Exception {
         String customerToken = jwt("customer@test.local", "CUSTOMER");
-        mockMvc.perform(get("/loyalty/vouchers/templates")
+        mockMvc.perform(get("/loyalty/vouchers")
                         .header("Authorization", bearer(customerToken))
                         .header("X-Tenant-Id", UUID.randomUUID().toString()))
                 .andExpect(status().isForbidden());
@@ -200,14 +185,14 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     @Test
     void admin_without_tenant_header_returns_400() throws Exception {
         String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
-        mockMvc.perform(get("/loyalty/vouchers/templates")
+        mockMvc.perform(get("/loyalty/vouchers")
                         .header("Authorization", bearer(admin)))
                 .andExpect(status().isBadRequest());
     }
 
     // --- SHOP_USER — till-operations role ---
     // SHOP_USER does the daily voucher ops at the till (list / redeem / mark-viewed)
-    // but cannot create templates, issue vouchers, or revoke. These pin both sides.
+    // but cannot issue vouchers or revoke. These pin both sides.
 
     private static final String VALID_REDEEM_BODY = """
             {"code":"VCH-AB12-CD34-EF56"}
@@ -221,7 +206,7 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
                 org.mockito.ArgumentMatchers.any(com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest.class)))
                 .thenReturn(new com.innbucks.loyaltyservice.dto.Dtos.RedemptionResponse(
                         UUID.randomUUID(), UUID.randomUUID(), "REDEEMED",
-                        0, new java.math.BigDecimal("5.00"), "AMOUNT",
+                        0, new java.math.BigDecimal("5.00"),
                         java.time.Instant.now()));
 
         UUID tenant = newTenant("vch-shopuser-redeem");
@@ -271,17 +256,6 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void shop_user_cannot_create_voucher_template() throws Exception {
-        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
-                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
-        mockMvc.perform(post("/loyalty/vouchers/templates")
-                        .header("Authorization", bearer(token))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(VALID_TEMPLATE_BODY))
-                .andExpect(status().isForbidden());
-    }
-
-    @Test
     void shop_user_cannot_issue_voucher() throws Exception {
         String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
                 "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
@@ -307,7 +281,7 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
         UUID otherTenant = newTenant("voucher-cross");
         // Caller email NOT added to tenant_members.
         String stranger = jwt("stranger@test.local", "MERCHANT_ADMIN");
-        mockMvc.perform(get("/loyalty/vouchers/templates")
+        mockMvc.perform(get("/loyalty/vouchers")
                         .header("Authorization", bearer(stranger))
                         .header("X-Tenant-Id", otherTenant.toString()))
                 .andExpect(status().isForbidden());

@@ -305,10 +305,9 @@ public class PublicTestController {
                     Vouchers in an active state (ISSUED / DELIVERED / VIEWED / PARTIALLY_USED) held by \
                     the phone, across every tenant.
 
-                    `valueType` drives rendering: PERCENT → "10% off", AMOUNT → currency-formatted using \
-                    `currency`, FREE_ITEM / COMBO → ignore `value`, it may be null. `value` and \
-                    `currency` are a snapshot frozen at issuance, so render what the voucher carries \
-                    rather than re-deriving from the template.
+                    `value` is always a money amount in `currency` (V45 — value types are retired; \
+                    `voucherType` is SINGLE_USE or MULTI_USE). Both are a snapshot frozen at \
+                    issuance, so render what the voucher carries.
 
                     **Authenticated equivalent:** \
                     `GET /loyalty/vouchers/users/by-phone/{phoneNumber}/active` (which is scoped to the \
@@ -512,7 +511,6 @@ public class PublicTestController {
                                         "status": "REDEEMED",
                                         "usesRemaining": 0,
                                         "value": 10.0000,
-                                        "valueType": "PERCENT",
                                         "redeemedAt": "2026-08-25T14:02:00Z"
                                       }
                                     }

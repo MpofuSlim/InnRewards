@@ -101,11 +101,11 @@ public class MemberActivityNotifier {
      * merchant issuing the voucher, not by another customer.
      */
     @Async("notificationExecutor")
-    public void notifyVoucherReceived(String phone, String valueType, BigDecimal value,
+    public void notifyVoucherReceived(String phone, BigDecimal value,
                                       String currency, LocalDate expiresOn) {
         if (isBlank(phone)) return;
         StringBuilder body = new StringBuilder("Someone sent you ")
-                .append(describeVoucher(valueType, value, currency))
+                .append(describeVoucher(value, currency))
                 .append(" on InnBucks.");
         if (expiresOn != null) {
             body.append(" It expires on ").append(expiresOn).append('.');
@@ -116,26 +116,22 @@ public class MemberActivityNotifier {
 
     /** Confirms to the sender that the voucher left their wallet. */
     @Async("notificationExecutor")
-    public void notifyVoucherSent(String phone, String valueType, BigDecimal value, String currency) {
+    public void notifyVoucherSent(String phone, BigDecimal value, String currency) {
         if (isBlank(phone)) return;
-        dispatch(phone, "You sent " + describeVoucher(valueType, value, currency)
+        dispatch(phone, "You sent " + describeVoucher(value, currency)
                 + " from your InnBucks wallet. It can't be sent on again.");
     }
 
     /**
-     * Human phrasing for a voucher's frozen value snapshot. FREE_ITEM and COMBO
-     * carry no numeric value at all, so they degrade to a generic noun rather
-     * than printing a bare "null" or "0" at a customer.
+     * Human phrasing for a voucher's frozen value snapshot — always a money
+     * amount since V45. A row with no value (legacy) degrades to a generic
+     * noun rather than printing a bare "null" at a customer.
      */
-    private static String describeVoucher(String valueType, BigDecimal value, String currency) {
-        if (value == null || valueType == null) {
+    private static String describeVoucher(BigDecimal value, String currency) {
+        if (value == null) {
             return "a voucher";
         }
-        return switch (valueType) {
-            case "PERCENT" -> fmt(value) + "% off";
-            case "AMOUNT" -> (isBlank(currency) ? "" : currency + " ") + fmt(value) + " off";
-            default -> "a voucher";
-        };
+        return (isBlank(currency) ? "" : currency + " ") + fmt(value) + " off";
     }
 
     /** SMS-primary, WhatsApp-fallback; best-effort — never throws. */

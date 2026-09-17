@@ -8,7 +8,6 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
@@ -20,7 +19,6 @@ import com.innbucks.loyaltyservice.service.TransactionService;
 import com.innbucks.loyaltyservice.service.TransferService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.service.WalletService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,7 +54,6 @@ class PhoneKeyedWalletTest {
     @Autowired UserService userService;
     @Autowired TransactionService transactionService;
     @Autowired RedemptionService redemptionService;
-    @Autowired VoucherTemplateService voucherTemplateService;
     @Autowired VoucherService voucherService;
     @Autowired WalletService walletService;
     @Autowired LoyaltyUserRepository users;
@@ -105,20 +102,17 @@ class PhoneKeyedWalletTest {
 
         // 2) Admin issues a voucher to the same phone — the same PENDING user
         // is reused (no duplicate row).
-        VoucherTemplate tpl = voucherTemplateService.create(t.getId(), mr.id(),
-                new Dtos.VoucherTemplateRequest(null, "Welcome 10",
-                        VoucherTemplate.VoucherType.SINGLE_USE,
-                        VoucherTemplate.ValueType.PERCENT,
-                        "USD", null, 1, 30, null));
-        var voucher = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
-                        phone, "Pending Pat", null,
-                        Voucher.DeliveryChannel.NONE, null, null, null));
+        var voucherHolder = new Dtos.VoucherResponse[1];
+        withSecurityContext("+263770000001", "SUPER_ADMIN", () ->
+                voucherHolder[0] = voucherService.issue(t.getId(),
+                        new Dtos.IssueVoucherRequest(mr.id(), null, new BigDecimal("10"), "USD", null,
+                                phone, "Pending Pat", null,
+                                Voucher.DeliveryChannel.NONE, null)));
+        var voucher = voucherHolder[0];
         assertThat(voucher.code()).isNotBlank();
-        // The voucher response snapshots its template's value (V7 migration).
-        // Editing the template later must NOT change what's already issued, so
-        // these three fields are stored on the Voucher row, not looked up live.
-        assertThat(voucher.valueType()).isEqualTo("PERCENT");
+        // The value snapshot is stored on the Voucher row at issue time —
+        // always a money AMOUNT in an explicit currency since V45.
+        assertThat(voucher.voucherType()).isEqualTo("SINGLE_USE");
         assertThat(voucher.value()).isEqualByComparingTo("10");
         assertThat(voucher.currency()).isEqualTo("USD");
 

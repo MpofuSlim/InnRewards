@@ -171,6 +171,41 @@ public final class EffectiveFees {
         };
     }
 
+    /**
+     * Voucher validity (days from issue until expiry) under the same two-tier
+     * inheritance as the fees and the earning floor (V45): the first
+     * time-valid MERCHANT rule that sets it wins, else the first time-valid
+     * GLOBAL rule (the tenant standard), else {@code defaultDays} — the
+     * platform's {@code loyalty.voucher.default-validity-days}.
+     *
+     * <p>Lives here, not in VoucherService, so "which rule level applies" has
+     * ONE definition in the codebase — the same reason the fee sides resolve
+     * here. Takes the PURCHASE applicable-rule list every other commercial
+     * lookup rides.
+     */
+    public static int resolveVoucherValidityDays(List<LoyaltyRule> applicableRules,
+                                                 Instant now, int defaultDays) {
+        List<LoyaltyRule> timeValid = applicableRules == null ? List.of() : applicableRules.stream()
+                .filter(LoyaltyRule::isActive)
+                .filter(r -> r.getStartsAt() == null || !now.isBefore(r.getStartsAt()))
+                .filter(r -> r.getEndsAt() == null || !now.isAfter(r.getEndsAt()))
+                .toList();
+        Integer merchantLevel = firstValidity(timeValid, false);
+        if (merchantLevel != null) {
+            return merchantLevel;
+        }
+        Integer globalLevel = firstValidity(timeValid, true);
+        return globalLevel != null ? globalLevel : defaultDays;
+    }
+
+    private static Integer firstValidity(List<LoyaltyRule> rules, boolean global) {
+        return rules.stream()
+                .filter(r -> global == (r.getMerchantId() == null))
+                .map(LoyaltyRule::getVoucherValidityDays)
+                .filter(v -> v != null && v > 0)
+                .findFirst().orElse(null);
+    }
+
     public BigDecimal feeForIssued(Voucher v) {
         return MerchantFeeCalculator.compute(issued.type(), issued.fixed(), issued.percentage(), faceValue(v));
     }

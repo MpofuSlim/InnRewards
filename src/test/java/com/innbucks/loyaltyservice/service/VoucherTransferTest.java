@@ -71,8 +71,10 @@ class VoucherTransferTest {
                 vouchers,
                 mock(VoucherBatchRepository.class),
                 mock(VoucherRedemptionRepository.class),
-                mock(VoucherTemplateService.class),
                 mock(MerchantService.class),
+                mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class),
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
+                mock(com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository.class),
                 mock(LoyaltyUserRepository.class),
                 userService,
                 mock(NotificationGateway.class),
@@ -288,9 +290,9 @@ class VoucherTransferTest {
         service.transfer(TENANT, v.getId(),
                 new Dtos.VoucherTransferRequest(null, RECIPIENT_PHONE, null));
 
-        verify(memberNotifier).notifyVoucherReceived(eq(RECIPIENT_PHONE), eq("PERCENT"),
+        verify(memberNotifier).notifyVoucherReceived(eq(RECIPIENT_PHONE),
                 eq(new BigDecimal("10.0000")), eq("USD"), any());
-        verify(memberNotifier).notifyVoucherSent(eq(HOLDER_PHONE), eq("PERCENT"),
+        verify(memberNotifier).notifyVoucherSent(eq(HOLDER_PHONE),
                 eq(new BigDecimal("10.0000")), eq("USD"));
     }
 
@@ -306,8 +308,8 @@ class VoucherTransferTest {
                 new Dtos.VoucherTransferRequest(null, RECIPIENT_PHONE, null)))
                 .isInstanceOf(LoyaltyException.class);
 
-        verify(memberNotifier, never()).notifyVoucherReceived(any(), any(), any(), any(), any());
-        verify(memberNotifier, never()).notifyVoucherSent(any(), any(), any(), any());
+        verify(memberNotifier, never()).notifyVoucherReceived(any(), any(), any(), any());
+        verify(memberNotifier, never()).notifyVoucherSent(any(), any(), any());
     }
 
     @Test
@@ -340,7 +342,7 @@ class VoucherTransferTest {
         v.setUsesRemaining(1);
         v.setIssuedAt(Instant.now().minus(5, ChronoUnit.DAYS));
         v.setExpiresAt(Instant.now().plus(30, ChronoUnit.DAYS));
-        v.setValueType(com.innbucks.loyaltyservice.entity.VoucherTemplate.ValueType.PERCENT);
+        v.setVoucherType(Voucher.VoucherType.SINGLE_USE);
         v.setValue(new BigDecimal("10.0000"));
         v.setCurrency("USD");
         return v;

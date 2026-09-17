@@ -1,7 +1,6 @@
 package com.innbucks.loyaltyservice.integration;
 
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +40,6 @@ class NotificationGatewayTest {
         v.setCode("VCH-AB12CD34");
         v.setAssigneeName("Tariro");
         v.setDeliveryChannel(channel);
-        v.setValueType(VoucherTemplate.ValueType.AMOUNT);
         v.setValue(new BigDecimal("5.00"));
         v.setCurrency("USD");
         v.setExpiresAt(Instant.parse("2026-08-01T00:00:00Z"));

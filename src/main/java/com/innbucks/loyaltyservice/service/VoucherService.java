@@ -4,12 +4,14 @@ import com.innbucks.loyaltyservice.config.LoyaltyProperties;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.FraudAttempt;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
+import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherBatch;
 import com.innbucks.loyaltyservice.entity.VoucherRedemption;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.integration.NotificationGateway;
+import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.VoucherBatchRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
@@ -39,8 +41,10 @@ public class VoucherService {
     private final VoucherRepository vouchers;
     private final VoucherBatchRepository batches;
     private final VoucherRedemptionRepository redemptions;
-    private final VoucherTemplateService templateService;
     private final MerchantService merchants;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
+    private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
+    private final LoyaltyRuleRepository rules;
     private final LoyaltyUserRepository users;
     private final UserService userService;
     private final NotificationGateway notifications;
@@ -49,12 +53,16 @@ public class VoucherService {
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final CryptoSigner signer;
     private final ExchangeRateService fx;
+    /** Platform fallback for voucher expiry when no rule sets one (V45). */
+    private final int defaultValidityDays;
 
     public VoucherService(VoucherRepository vouchers,
                           VoucherBatchRepository batches,
                           VoucherRedemptionRepository redemptions,
-                          VoucherTemplateService templateService,
                           MerchantService merchants,
+                          com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
+                          com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
+                          LoyaltyRuleRepository rules,
                           LoyaltyUserRepository users,
                           UserService userService,
                           NotificationGateway notifications,
@@ -66,8 +74,10 @@ public class VoucherService {
         this.vouchers = vouchers;
         this.batches = batches;
         this.redemptions = redemptions;
-        this.templateService = templateService;
         this.merchants = merchants;
+        this.merchantAuthz = merchantAuthz;
+        this.supportedCurrencies = supportedCurrencies;
+        this.rules = rules;
         this.users = users;
         this.userService = userService;
         this.notifications = notifications;
@@ -76,15 +86,23 @@ public class VoucherService {
         this.memberNotifier = memberNotifier;
         this.signer = new CryptoSigner(props.voucher().secret());
         this.fx = fx;
+        this.defaultValidityDays = props.voucher().defaultValidityDays();
     }
 
     public Dtos.VoucherResponse issue(UUID tenantId, Dtos.IssueVoucherRequest req) {
-        VoucherTemplate tpl = templateService.require(tenantId, req.templateId());
-        BigDecimal value = requireValueIfNumeric(tpl, req.value());
-        Voucher v = createFromTemplate(tenantId, tpl, null,
+        // Object-level authz replaces the retired template's tenant check, and
+        // is STRICTER than what it replaces: the template was only ever
+        // tenant-scoped, so a MERCHANT_ADMIN could issue from a sibling
+        // merchant's template. Now the caller must administer the issuing
+        // merchant (SUPER_ADMIN bypasses; SHOP_ADMIN is pinned by the JWT
+        // claim CallerDetails already merged over the body value).
+        Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
+                tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
+        int usageLimit = resolveUsageLimit(req.voucherType(), req.usageLimit());
+        Voucher v = createVoucher(tenantId, merchant, null,
                 req.assignedUserId(), req.assigneePhone(), req.assigneeName(),
-                req.deliveryChannel(), req.campaignSource(), value,
-                req.usesOverride(), req.validityDaysOverride());
+                req.deliveryChannel(), req.campaignSource(), req.value(), req.currency(),
+                voucherTypeOrDefault(req.voucherType()), usageLimit);
         vouchers.save(v);
         // Flip status on THIS thread (before the async hand-off reads the entity
         // on the executor thread). Optimistic best-effort: DELIVERED means "we
@@ -100,20 +118,21 @@ public class VoucherService {
     }
 
     public List<Dtos.VoucherResponse> issueBulk(UUID tenantId, Dtos.BulkIssueRequest req) {
-        VoucherTemplate tpl = templateService.require(tenantId, req.templateId());
-        BigDecimal value = requireValueIfNumeric(tpl, req.value());
+        Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
+                tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
+        int usageLimit = resolveUsageLimit(req.voucherType(), req.usageLimit());
+        Voucher.VoucherType type = voucherTypeOrDefault(req.voucherType());
         VoucherBatch batch = new VoucherBatch();
         batch.setTenantId(tenantId);
-        batch.setTemplateId(tpl.getId());
         batch.setQuantity(req.quantity());
         batch.setCampaign(req.campaign());
         batches.save(batch);
 
         List<Dtos.VoucherResponse> result = new ArrayList<>(req.quantity());
         for (int i = 0; i < req.quantity(); i++) {
-            Voucher v = createFromTemplate(tenantId, tpl, batch.getId(),
+            Voucher v = createVoucher(tenantId, merchant, batch.getId(),
                     null, null, null, req.deliveryChannel(),
-                    req.campaign(), value, null, null);
+                    req.campaign(), req.value(), req.currency(), type, usageLimit);
             vouchers.save(v);
             result.add(toResponse(v));
         }
@@ -121,14 +140,33 @@ public class VoucherService {
         return result;
     }
 
+    /** Absent means SINGLE_USE — the overwhelmingly common case. */
+    private static Voucher.VoucherType voucherTypeOrDefault(Voucher.VoucherType type) {
+        return type == null ? Voucher.VoucherType.SINGLE_USE : type;
+    }
+
     /**
-     * AMOUNT and PERCENT vouchers are meaningless without a numeric value
-     * and we used to enforce this at template-create time. After the
-     * value-on-issuance refactor (V14), enforcement moves to the issue
-     * call site — the template only declares the *shape* of the value.
-     * FREE_ITEM / COMBO templates ignore the field entirely and pass
-     * null through.
+     * SINGLE_USE is exactly one use; MULTI_USE takes an explicit limit of two
+     * or more. A conflicting pair (SINGLE_USE with a limit above 1, MULTI_USE
+     * with 1 or without a limit) is refused rather than silently corrected —
+     * the caller plainly meant something this request does not say.
      */
+    private static int resolveUsageLimit(Voucher.VoucherType type, Integer usageLimit) {
+        if (voucherTypeOrDefault(type) == Voucher.VoucherType.SINGLE_USE) {
+            if (usageLimit != null && usageLimit != 1) {
+                throw LoyaltyException.badRequest("USAGE_LIMIT_CONFLICT",
+                        "A SINGLE_USE voucher has exactly one use — omit usageLimit or send 1, "
+                                + "or issue it as MULTI_USE.");
+            }
+            return 1;
+        }
+        if (usageLimit == null || usageLimit < 2) {
+            throw LoyaltyException.badRequest("USAGE_LIMIT_REQUIRED",
+                    "A MULTI_USE voucher needs usageLimit of 2 or more.");
+        }
+        return usageLimit;
+    }
+
     /**
      * The phone we can actually reach the recipient on: the explicit assignee
      * phone, else the assigned LoyaltyUser's phone. Null when the voucher has no
@@ -147,21 +185,23 @@ public class VoucherService {
         return null;
     }
 
-    private static BigDecimal requireValueIfNumeric(VoucherTemplate tpl, BigDecimal value) {
-        VoucherTemplate.ValueType vt = tpl.getValueType();
-        if ((vt == VoucherTemplate.ValueType.AMOUNT || vt == VoucherTemplate.ValueType.PERCENT)
-                && value == null) {
+    private Voucher createVoucher(UUID tenantId, Merchant merchant, UUID batchId,
+                                  UUID assignedUserId, String assigneePhone, String assigneeName,
+                                  Voucher.DeliveryChannel channel, String campaign,
+                                  BigDecimal value, String currency,
+                                  Voucher.VoucherType type, int usageLimit) {
+        if (value == null || value.signum() <= 0) {
+            // Defence-in-depth behind the DTO @NotNull @Positive — a voucher's
+            // face value is always money now (V45), so a missing or
+            // non-positive one is never issuable.
             throw LoyaltyException.badRequest("MISSING_VALUE",
-                    vt.name() + " vouchers require value at issue time");
+                    "A voucher's face value must be a positive amount.");
         }
-        return value;
-    }
-
-    private Voucher createFromTemplate(UUID tenantId, VoucherTemplate tpl, UUID batchId,
-                                       UUID assignedUserId, String assigneePhone, String assigneeName,
-                                       Voucher.DeliveryChannel channel, String campaign,
-                                       BigDecimal value,
-                                       Integer usesOverride, Integer validityOverride) {
+        // Fail closed on currency, like every other write entry point that
+        // accepts or defaults one: absent inherits the merchant's currency,
+        // anything outside the cell's allowlist is refused.
+        String resolvedCurrency = supportedCurrencies.requireSupported(
+                currency != null && !currency.isBlank() ? currency : merchant.getCurrency());
         if (assignedUserId != null) {
             LoyaltyUser u = users.findById(assignedUserId)
                     .orElseThrow(() -> LoyaltyException.notFound("user"));
@@ -176,7 +216,7 @@ public class VoucherService {
             // is linked to a real row from issue time. The promote-on-registration
             // webhook can then flip the user to ACTIVE without scanning vouchers
             // for unmatched phones.
-            LoyaltyUser pending = userService.findOrCreatePending(tenantId, assigneePhone, tpl.getMerchantId());
+            LoyaltyUser pending = userService.findOrCreatePending(tenantId, assigneePhone, merchant.getId());
             assignedUserId = pending.getId();
             // Store the canonical E.164 the LoyaltyUser now holds, not the raw
             // caller spelling, so voucher.assignee_phone + delivery both align.
@@ -186,11 +226,10 @@ public class VoucherService {
         String code = uniqueCode();
         Voucher v = new Voucher();
         v.setTenantId(tenantId);
-        v.setMerchantId(tpl.getMerchantId());
-        v.setTemplateId(tpl.getId());
+        v.setMerchantId(merchant.getId());
         v.setBatchId(batchId);
         v.setCode(code);
-        v.setSignature(signer.sign(tenantId + ":" + tpl.getId() + ":" + code));
+        v.setSignature(signer.sign(signPayload(tenantId, null, code)));
         v.setAssignedUserId(assignedUserId);
         v.setAssigneePhone(assigneePhone);
         // Caller-supplied display name — strip any HTML before persisting
@@ -205,40 +244,48 @@ public class VoucherService {
         v.setIssuerEmail(CallerDetails.currentEmail());
         v.setDeliveryChannel(channel);
         v.setCampaignSource(campaign);
-        // Snapshot the caller-supplied value onto the voucher. The template
-        // dictates the *shape* (AMOUNT, PERCENT, FREE_ITEM, COMBO); the
-        // numeric value itself is set per issuance, so a "Coffee voucher"
-        // template can be issued at $5 or $10 without spinning up two
-        // templates. Once stamped here it's frozen — the original value at
-        // issuance time — so a later template edit won't retroactively
-        // change the worth of vouchers already in customers' hands.
-        v.setValueType(tpl.getValueType());
+        // The face value is frozen here — the worth at the moment of issue,
+        // like an invoice line capturing the price at the moment of sale.
+        // Always a money AMOUNT in an explicit currency since V45.
+        v.setVoucherType(type);
         v.setValue(value);
-        v.setCurrency(tpl.getCurrency());
+        v.setCurrency(resolvedCurrency);
         // Multi-currency liability freeze (V38). An outstanding voucher is a
         // promise the platform hasn't paid yet, and that promise is priced when
         // it is MADE — so the USD worth is pinned here, at issuance, not
         // recomputed at redemption. Otherwise the outstanding-voucher book would
         // move every day on FX alone, with nothing issued and nothing redeemed.
-        //
-        // ONLY for AMOUNT: a PERCENT voucher's value is a percentage and a
-        // FREE_ITEM/COMBO has no money face value at all. "10% off" is not 10 of
-        // anything, so converting it would mint a confident, meaningless
-        // liability figure — those stay null by design.
-        if (tpl.getValueType() == VoucherTemplate.ValueType.AMOUNT
-                && value != null && value.signum() >= 0) {
-            ExchangeRateService.Conversion base =
-                    fx.toBaseWithRate(tenantId, value, v.getCurrency());
-            v.setBaseValue(base.amount());
-            v.setFxRateId(base.rateId());
-        }
-        int uses = usesOverride != null ? usesOverride : tpl.getUsageLimit();
-        v.setUsesRemaining(Math.max(1, uses));
-        Integer validity = validityOverride != null ? validityOverride : tpl.getValidityDays();
-        if (validity != null && validity > 0) {
+        // Unconditional since V45: every voucher's value is money. A supported
+        // currency with no in-force rate refuses (NO_FX_RATE) rather than
+        // silently pricing at 1.0 — provision the rate before selling in it.
+        ExchangeRateService.Conversion base =
+                fx.toBaseWithRate(tenantId, value, resolvedCurrency);
+        v.setBaseValue(base.amount());
+        v.setFxRateId(base.rateId());
+        v.setUsesRemaining(usageLimit);
+        // Expiry is commercial config now (V45): merchant rule → tenant's
+        // global rule → the platform default. Resolved per issue so a rule
+        // change applies to the NEXT voucher, never retroactively.
+        int validity = EffectiveFees.resolveVoucherValidityDays(
+                rules.findApplicable(tenantId, merchant.getId(), TransactionType.PURCHASE),
+                Instant.now(), defaultValidityDays);
+        if (validity > 0) {
             v.setExpiresAt(Instant.now().plus(validity, ChronoUnit.DAYS));
         }
         return v;
+    }
+
+    /**
+     * The HMAC payload behind every voucher signature. Pre-V45 vouchers were
+     * signed over {@code tenant:templateId:code}; templates are retired, so
+     * new vouchers sign over {@code tenant:-:code}. Verification recomputes
+     * from the STORED row — legacy rows still carry their template id, so both
+     * generations keep verifying with no re-signing pass. The stored
+     * template id (or its absence) is exactly what the signature binds, which
+     * is why verify sites must always pass {@code v.getTemplateId()}.
+     */
+    private static String signPayload(UUID tenantId, UUID templateId, String code) {
+        return tenantId + ":" + (templateId == null ? "-" : templateId) + ":" + code;
     }
 
     private String uniqueCode() {
@@ -307,7 +354,7 @@ public class VoucherService {
             throw LoyaltyException.notFound("voucher");
         }
 
-        String expectedSig = signer.sign(tenantId + ":" + v.getTemplateId() + ":" + v.getCode());
+        String expectedSig = signer.sign(signPayload(tenantId, v.getTemplateId(), v.getCode()));
         if (!expectedSig.equals(v.getSignature())) {
             fraud.record(tenantId, req.userId(), merchantId, req.code(),
                     FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature",
@@ -413,13 +460,10 @@ public class VoucherService {
 
         VoucherRedemption r = recordRedemption(v, merchantId, req, VoucherRedemption.Result.SUCCESS, null);
         metrics.incVouchersRedeemed();
-        // Read value/valueType straight off the voucher — they were
-        // snapshotted at issue time and the template is no longer the
-        // source of truth for them.
+        // Read the value straight off the voucher — snapshotted at issue time,
+        // always a money amount since V45.
         return new Dtos.RedemptionResponse(r.getId(), v.getId(), v.getStatus().name(),
-                v.getUsesRemaining(), v.getValue(),
-                v.getValueType() == null ? null : v.getValueType().name(),
-                r.getRedeemedAt());
+                v.getUsesRemaining(), v.getValue(), r.getRedeemedAt());
     }
 
     private VoucherRedemption recordRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
@@ -556,7 +600,7 @@ public class VoucherService {
         // customer app reads.
         String rotatedCode = uniqueCode();
         v.setCode(rotatedCode);
-        v.setSignature(signer.sign(tenantId + ":" + v.getTemplateId() + ":" + rotatedCode));
+        v.setSignature(signer.sign(signPayload(tenantId, v.getTemplateId(), rotatedCode)));
 
         // Clear the pre-expiry warning stamp. It records that the PREVIOUS
         // holder was warned; leaving it set would make ExpiryWarningSweeper skip
@@ -579,13 +623,12 @@ public class VoucherService {
         //
         // Both are @Async and best-effort: a notification failure must never
         // roll back a transfer that has already happened.
-        String valueType = v.getValueType() == null ? null : v.getValueType().name();
         java.time.LocalDate expiresOn = v.getExpiresAt() == null
                 ? null
                 : v.getExpiresAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
-        memberNotifier.notifyVoucherReceived(recipient.getPhoneNumber(), valueType,
+        memberNotifier.notifyVoucherReceived(recipient.getPhoneNumber(),
                 v.getValue(), v.getCurrency(), expiresOn);
-        memberNotifier.notifyVoucherSent(fromPhone, valueType, v.getValue(), v.getCurrency());
+        memberNotifier.notifyVoucherSent(fromPhone, v.getValue(), v.getCurrency());
 
         // Hand the ROTATED code to the new holder the same way issuance does —
         // best-effort WhatsApp/SMS. The sender's old code is now dead, so the
@@ -605,9 +648,9 @@ public class VoucherService {
      *  caller must not see the code (e.g. the sender's view of a transfer they just
      *  made, after the code has been rotated to the recipient). */
     private static Dtos.VoucherResponse redactCode(Dtos.VoucherResponse r) {
-        return new Dtos.VoucherResponse(r.id(), null, r.status(), r.templateId(),
+        return new Dtos.VoucherResponse(r.id(), null, r.status(), r.voucherType(),
                 r.assignedUserId(), r.assigneePhone(), r.usesRemaining(),
-                r.valueType(), r.value(), r.currency(), r.issuedAt(), r.expiresAt(),
+                r.value(), r.currency(), r.issuedAt(), r.expiresAt(),
                 r.baseValue());
     }
 
@@ -663,9 +706,9 @@ public class VoucherService {
 
     public static Dtos.VoucherResponse toResponse(Voucher v) {
         return new Dtos.VoucherResponse(v.getId(), v.getCode(), v.getStatus().name(),
-                v.getTemplateId(), v.getAssignedUserId(), v.getAssigneePhone(),
+                v.getVoucherType() == null ? null : v.getVoucherType().name(),
+                v.getAssignedUserId(), v.getAssigneePhone(),
                 v.getUsesRemaining(),
-                v.getValueType() == null ? null : v.getValueType().name(),
                 v.getValue(), v.getCurrency(),
                 v.getIssuedAt(), v.getExpiresAt(), v.getBaseValue());
     }

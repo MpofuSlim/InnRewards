@@ -38,21 +38,32 @@ import java.security.MessageDigest;
  * false on production is what keeps that off production; this key narrows who can
  * reach the surface on the cells that deliberately have it on.
  *
- * <h2>Three states, and only one of them is quiet</h2>
+ * <h2>The gate is OPT-IN: no key configured means no gate</h2>
  * <ul>
  *   <li><b>Surface off</b> — this filter is inert. The controller answers 404
  *       ("this endpoint does not exist here"), and a 401 here would contradict
  *       that by confirming there is something behind the path.</li>
- *   <li><b>Surface on, no key configured</b> — every call is refused
- *       <b>503</b>, and the boot check logs HALF-PROVISIONED. Fail closed: a
- *       blank key must never become "no key required", which is exactly the
- *       state this filter exists to end. 503 (rather than 401) says the fault is
- *       the deployment's, so an operator reading the client's logs is not sent
- *       hunting for a wrong key.</li>
+ *   <li><b>Surface on, no key configured</b> — the filter is <b>inert</b> and the
+ *       endpoints answer exactly as they did before this class existed. See
+ *       below for why that is not a silent downgrade.</li>
  *   <li><b>Surface on, key configured</b> — one opaque <b>401</b> for a missing
  *       key and a wrong key alike. The metric tag distinguishes them for us; the
  *       caller learns nothing either way.</li>
  * </ul>
+ *
+ * <p><b>This deliberately does NOT fail closed on a blank key</b>, and the
+ * reason is that the switch above it already does. {@code public-test.enabled}
+ * defaults to false and its whole documented meaning is "this cell serves an
+ * unauthenticated surface where the phone in the URL is the identity" — an
+ * operator who sets it has already accepted that anyone who can reach the cell
+ * can spend any phone's points. A blank key therefore returns the surface to its
+ * own documented baseline rather than weakening anything, and the gate switches
+ * on the moment a key is provisioned. An earlier version refused every call with
+ * a 503 instead, which made merging this class a breaking change for a client
+ * that had never needed a key (operator's call, 2026-09-17).
+ *
+ * <p>What still fails closed is everything that matters: {@code enabled} itself,
+ * and — once a key IS set — every call that does not present it.
  *
  * <p>{@code OPTIONS} is never gated: a CORS preflight carries no custom headers
  * by construction, so gating it would 401 the preflight and break the browser
@@ -82,6 +93,13 @@ public class PublicTestApiKeyFilter extends OncePerRequestFilter {
         if (!enabled) {
             return true;
         }
+        if (apiKey.length == 0) {
+            // Opt-in: no key provisioned, no gate. Checked HERE rather than in
+            // doFilterInternal so the request never enters this filter's body at
+            // all — there is no refusal to accidentally reach, and no per-call
+            // counter to drown the metric in on a cell that simply has no key.
+            return true;
+        }
         if (HttpMethod.OPTIONS.matches(request.getMethod())) {
             return true;
         }
@@ -102,13 +120,6 @@ public class PublicTestApiKeyFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
-        if (apiKey.length == 0) {
-            metrics.incPublicTestRejected("unconfigured");
-            refuse(response, 503, "503 SERVICE_UNAVAILABLE",
-                    "Public test endpoints are not available on this deployment");
-            return;
-        }
-
         String presented = request.getHeader(API_KEY_HEADER);
         if (presented == null || presented.isBlank()) {
             metrics.incPublicTestRejected("missing_key");

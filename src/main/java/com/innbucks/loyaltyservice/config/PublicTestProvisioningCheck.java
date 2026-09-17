@@ -77,23 +77,24 @@ public class PublicTestProvisioningCheck {
     }
 
     /**
-     * The half-provisioned state, called out the way the ZimSwitch rail's is:
-     * the surface is switched ON but has no {@code x-api-key} to check, so
-     * {@code PublicTestApiKeyFilter} refuses every call 503. That looks
-     * identical to an outage from the client's side, and the operator's only
-     * clue that it is a config gap rather than a broken service is this line.
+     * Says which of the two live states the surface is in, because they differ
+     * in who can reach it and nothing else announces that.
      *
-     * <p>ERROR, never a boot failure, for the same reason as the rest of this
-     * class — a test affordance must not stop a cell starting.
+     * <p>A blank key is NOT reported as a fault: the gate is opt-in, so blank
+     * means the surface behaves exactly as its own {@code enabled} switch already
+     * promises — reachable by anyone who can reach the cell. That still deserves
+     * a WARN rather than an INFO, because it is the state in which a guessed
+     * phone number can spend that customer's points, and the line reads as the
+     * answer to "is anything in front of this surface right now".
      */
     private void checkApiKey() {
         String key = apiKey == null ? "" : apiKey.trim();
         if (key.isEmpty()) {
-            log.error("Public test surface is HALF-PROVISIONED: /loyalty/public/** is ENABLED but "
-                    + "LOYALTY_PUBLIC_TEST_API_KEY is blank, so every call is refused 503. Set the key "
-                    + "(openssl rand -base64 32) in this host's gitignored cell.<iso>.local.env and "
-                    + "publish the same value to the app's Firebase Remote Config, or switch the "
-                    + "surface off.");
+            log.warn("Public test surface is UNGATED: /loyalty/public/** is ENABLED and "
+                    + "LOYALTY_PUBLIC_TEST_API_KEY is blank, so any caller who can reach this cell can "
+                    + "read and SPEND any phone's points. To gate it, set the key "
+                    + "(openssl rand -base64 32) in this host's gitignored cell.<iso>.local.env and give "
+                    + "the same value to the app.");
         } else {
             log.info("Public test surface is enabled and gated by an x-api-key.");
         }

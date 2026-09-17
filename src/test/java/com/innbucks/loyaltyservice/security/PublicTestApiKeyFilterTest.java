@@ -20,8 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>the surface being OFF keeps the filter inert, so the path still answers
  *       the controller's 404 rather than a 401 that would confirm something is
  *       there;</li>
- *   <li>ON with a blank key fails CLOSED — 503 for everyone, and in particular
- *       a blank key is never matched by a blank header;</li>
+ *   <li>ON with a blank key leaves the surface UNGATED — the gate is opt-in, so
+ *       merging it was not a breaking change for a client that never sent a key;</li>
  *   <li>ON with a key admits an exact match and refuses everything else with one
  *       opaque 401, never passing the request down the chain;</li>
  *   <li>the gate is exactly one prefix wide, and never covers a CORS preflight;</li>
@@ -87,25 +87,28 @@ class PublicTestApiKeyFilterTest {
     }
 
     @Test
-    void enabledWithBlankKeyRefusesEverythingWith503() throws Exception {
-        PublicTestApiKeyFilter filter = filter(true, "  ");
+    void enabledWithBlankKeyLeavesTheSurfaceUngated() throws Exception {
+        // The gate is OPT-IN. A cell that has never configured a key gets the
+        // behaviour it had before this filter existed — which is what the
+        // `enabled` switch already promises on its own. Merging the filter must
+        // not be a breaking change for a client that never needed a key.
+        for (String configured : new String[]{"", "  ", null}) {
+            PublicTestApiKeyFilter filter = filter(true, configured);
 
-        Run noHeader = run(filter, publicRequest(null));
-        assertThat(noHeader.chainCalled()).isFalse();
-        assertThat(noHeader.response().getStatus()).isEqualTo(503);
+            Run noHeader = run(filter, publicRequest(null));
+            assertThat(noHeader.chainCalled()).as("configured=%s", configured).isTrue();
+            assertThat(noHeader.response().getStatus()).isEqualTo(200);
 
-        // The one that matters: a blank configured key must not be matchable by
-        // a blank header, which would turn "unprovisioned" into "no key needed".
-        Run blankHeader = run(filter, publicRequest(""));
-        assertThat(blankHeader.chainCalled()).isFalse();
-        assertThat(blankHeader.response().getStatus()).isEqualTo(503);
+            // And a caller who DOES send something is not refused for it either.
+            Run someKey = run(filter, publicRequest(KEY));
+            assertThat(someKey.chainCalled()).isTrue();
+            assertThat(someKey.response().getStatus()).isEqualTo(200);
+        }
 
-        Run someKey = run(filter, publicRequest(KEY));
-        assertThat(someKey.chainCalled()).isFalse();
-        assertThat(someKey.response().getStatus()).isEqualTo(503);
-
-        assertThat(rejections("unconfigured")).isEqualTo(3d);
-        assertThat(rejections("bad_key")).isZero();
+        // Nothing is counted: an ungated cell never enters the filter body, so
+        // the meter stays a signal about real refusals rather than ordinary
+        // traffic on a cell with no key.
+        assertThat(registry.find("loyalty.public.test.rejected").counters()).isEmpty();
     }
 
     @Test

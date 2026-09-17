@@ -101,9 +101,7 @@ public class VoucherPurchaseService {
         // The rails collect whole CENTS; a sub-cent face value could never be
         // charged exactly, so it is refused HERE, on the staff caller — never
         // as a confirm-time explosion after the customer paid.
-        try {
-            req.value().movePointRight(2).longValueExact();
-        } catch (ArithmeticException e) {
+        if (req.value().stripTrailingZeros().scale() > 2) {
             throw LoyaltyException.badRequest("AMOUNT_PRECISION",
                     "A purchasable voucher's value cannot carry fractions of a cent.");
         }

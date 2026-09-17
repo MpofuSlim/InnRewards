@@ -128,9 +128,12 @@ public class OnDemandEligibilityCheck {
                 return true;
             }
             if (outcome instanceof InnbucksCustomerValidateClient.Unavailable u) {
-                // Shorten the window: the next attempt should be able to retry
-                // soon, because nothing about this phone was actually decided.
-                shortenCooldown(e164Phone);
+                if (!isRequestLevelRefusal(u.reason())) {
+                    // Shorten the window: nothing about this phone was decided
+                    // and the fault will clear, so a real customer should not
+                    // wait out the full cooldown after an outage ends.
+                    shortenCooldown(e164Phone);
+                }
                 metrics.incOnDemandEligibilityChecked("unavailable");
                 log.warn("On-demand eligibility check could not be answered for phone={} ({})",
                         MsisdnMasking.mask(e164Phone), u.reason());
@@ -166,6 +169,41 @@ public class OnDemandEligibilityCheck {
             return false;
         }
         return true;
+    }
+
+    /**
+     * True when an {@code Unavailable} came from the platform answering our
+     * request with a 4xx — a statement about <em>this request</em> rather than
+     * a fault that will clear, so retrying it sooner buys nothing.
+     *
+     * <p>This distinction is not hypothetical on the ZW cell. Its
+     * {@code validate-path} is overridden to {@code /details} (the documented
+     * {@code /validate} 403s with our credentials), and that path answers
+     * <b>400 for a number it does not know</b> — which the client correctly
+     * refuses to read as a verdict, since a 4xx can equally mean our request was
+     * malformed. The upshot is that on this cell the ordinary "not a customer"
+     * arrives as {@code Unavailable(http_400)}. Shortening the window for it
+     * would put the most common negative answer on a 60-second retry instead of
+     * the full cooldown — a fifteen-fold upstream rate for exactly the phones
+     * that can never succeed. So a 4xx serves the full cooldown; {@code io_error},
+     * {@code credentials_rejected}, {@code malformed_2xx}, a login failure and
+     * any 5xx still get the short one.
+     *
+     * <p>It deliberately stays an {@code Unavailable}: reclassifying a 400 as
+     * {@code NotACustomer} would be an unmeasured assumption about a payment
+     * platform's error shape, and getting it wrong means silently refusing real
+     * customers. This only changes how soon we ask again.
+     */
+    private static boolean isRequestLevelRefusal(String reason) {
+        if (reason == null || !reason.startsWith("http_")) {
+            return false;
+        }
+        try {
+            int status = Integer.parseInt(reason.substring("http_".length()));
+            return status >= 400 && status < 500;
+        } catch (NumberFormatException ex) {
+            return false;
+        }
     }
 
     private void shortenCooldown(String e164Phone) {

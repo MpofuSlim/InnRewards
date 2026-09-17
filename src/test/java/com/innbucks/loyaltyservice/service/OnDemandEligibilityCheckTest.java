@@ -30,9 +30,11 @@ import static org.mockito.Mockito.when;
  *   <li>with no Redis to throttle in it SKIPS rather than asking unthrottled —
  *       the deliberate choice, since the throttle is what stops a
  *       caller-triggered path hammering a shared upstream;</li>
- *   <li>only a positive {@code Customer} answer returns true; an
+ *   <li>only a positive {@code Customer} answer returns true; a transient
  *       {@code Unavailable} shortens the window and returns false, so an outage
- *       neither promotes anyone nor locks the phone out for the full cooldown;</li>
+ *       neither promotes anyone nor locks the phone out for the full cooldown —
+ *       while a 4xx {@code Unavailable} (this cell's ordinary "not a customer",
+ *       see below) serves the full one;</li>
  *   <li><b>nothing throws</b> — this runs inside a customer's spend
  *       transaction, so a fault must degrade to the ordinary refusal.</li>
  * </ul>
@@ -137,7 +139,7 @@ class OnDemandEligibilityCheckTest {
     }
 
     @Test
-    void unavailableShortensTheCooldownAndPromotesNobody() {
+    void aTransientUnavailableShortensTheCooldownAndPromotesNobody() {
         // Nothing about this phone was decided, so the next attempt should be
         // able to retry soon — but it must not be read as "not a customer".
         cooldownIsFree();
@@ -147,6 +149,44 @@ class OnDemandEligibilityCheckTest {
         assertThat(check(true, redis).confirmsCustomer(PHONE)).isFalse();
         assertThat(checks("unavailable")).isEqualTo(1d);
         verify(redis).expire(KEY, Duration.ofSeconds(60));
+    }
+
+    /**
+     * The ZW cell's shape, and the reason the shortening is conditional.
+     *
+     * <p>Its validate-path is overridden to {@code /details}, which answers 400
+     * for a number it does not know — so the ordinary "not a customer" arrives
+     * here as {@code Unavailable(http_400)}. Shortening the window for it would
+     * put the most common negative answer on a 60-second retry rather than the
+     * full 15 minutes, a fifteen-fold upstream rate for phones that can never
+     * succeed. A 4xx is the platform answering THIS request, so it serves the
+     * full cooldown.
+     */
+    @Test
+    void a4xxUnavailableServesTheFullCooldown() {
+        cooldownIsFree();
+        when(client.checkCustomer(PHONE))
+                .thenReturn(new InnbucksCustomerValidateClient.Unavailable("http_400"));
+
+        assertThat(check(true, redis).confirmsCustomer(PHONE)).isFalse();
+
+        assertThat(checks("unavailable")).isEqualTo(1d);
+        verify(redis, never()).expire(anyString(), any(Duration.class));
+    }
+
+    @Test
+    void a5xxOrIoUnavailableStillShortensIt() {
+        // These clear on their own, so a real customer must not wait out the
+        // full window after the outage ends.
+        cooldownIsFree();
+        for (String reason : new String[]{"http_503", "io_error", "credentials_rejected",
+                "malformed_2xx", "unconfigured"}) {
+            when(client.checkCustomer(PHONE))
+                    .thenReturn(new InnbucksCustomerValidateClient.Unavailable(reason));
+
+            assertThat(check(true, redis).confirmsCustomer(PHONE)).as(reason).isFalse();
+        }
+        verify(redis, org.mockito.Mockito.times(5)).expire(KEY, Duration.ofSeconds(60));
     }
 
     @Test

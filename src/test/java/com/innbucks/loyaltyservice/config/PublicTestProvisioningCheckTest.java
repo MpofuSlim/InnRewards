@@ -21,8 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       {@code PublicTestController.parseUuidOrNull} swallows so it behaves
  *       identically to an unset one;</li>
  *   <li>the surface switched ON with no {@code x-api-key} provisioned, which
- *       {@code PublicTestApiKeyFilter} turns into a 503 on every call —
- *       indistinguishable from an outage unless boot says otherwise.</li>
+ *       leaves it reachable by anyone who can reach the cell — not a fault (the
+ *       gate is opt-in), but the one line that answers "is anything in front of
+ *       this right now".</li>
  * </ul>
  *
  * <p>These assert on the emitted level, because "does it shout" is the entire
@@ -125,19 +126,21 @@ class PublicTestProvisioningCheckTest {
     }
 
     @Test
-    @DisplayName("enabled with no api-key is an ERROR — every call is 503 until it is set")
-    void missingApiKey_isAnError() {
-        // The half-provisioned state. From a client it looks exactly like an
-        // outage, so this line is the operator's only clue it is a config gap.
+    @DisplayName("enabled with no api-key is a WARN that the surface is UNGATED — not an error")
+    void missingApiKey_warnsItIsUngated() {
+        // The gate is opt-in, so a blank key is a supported configuration, not a
+        // fault — an ERROR here would be a permanent false alarm on every cell
+        // that never wanted a key. It is still a WARN, because this is the state
+        // in which a guessed phone number can spend that customer's points.
         for (String blank : new String[]{"", "   ", null}) {
             appender.list.clear();
             run(true, "", blank);
 
             assertThat(keyEvents()).as("key=%s", blank).singleElement()
                     .satisfies(e -> {
-                        assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                        assertThat(e.getLevel()).isEqualTo(Level.WARN);
                         assertThat(e.getFormattedMessage())
-                                .contains("HALF-PROVISIONED")
+                                .contains("UNGATED")
                                 .contains("LOYALTY_PUBLIC_TEST_API_KEY");
                     });
         }

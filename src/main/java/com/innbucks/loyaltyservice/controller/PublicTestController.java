@@ -120,17 +120,18 @@ import java.util.function.Supplier;
 @Slf4j
 @Tag(name = "Public (TEST ONLY — no auth)",
      description = """
-             **Endpoints for frontend testing. No bearer token, no tenant header, no role — but an \
-             `x-api-key` header IS required.**
+             **Endpoints for frontend testing. No bearer token, no tenant header, no role.**
 
-             Send the shared key as `x-api-key` and nothing else — no `Authorization`, no \
-             `X-Tenant-Id`. The key comes from Firebase Remote Config; a missing or wrong one is a \
-             `401`, and a `503` means the cell has the surface on but no key provisioned. These exist \
+             Send nothing but the request itself — no `Authorization`, no `X-Tenant-Id`. These exist \
              so the app can be built against real data before its auth flow is wired up, and they are \
              disabled (404) unless the cell sets `LOYALTY_PUBLIC_TEST_ENABLED=true`.
 
-             The key identifies the APP, not the customer — it is a throttle and a kill switch, and it \
-             does not make these endpoints safe to point a production build at.
+             **Optional `x-api-key`.** A cell MAY put a shared key in front of this whole prefix \
+             (`LOYALTY_PUBLIC_TEST_API_KEY`). Where one is set, every call needs the header and a \
+             missing or wrong value is a `401`; where it is blank — the default — no header is needed. \
+             Ask which applies to the cell you are pointed at. The key identifies the APP, not the \
+             customer, so it is a throttle and a kill switch and does not make these endpoints safe to \
+             point a production build at.
 
              The phone number in the URL is the identity. Each endpoint runs the same production \
              service method as its authenticated twin, so the real rules (ownership, single-hop voucher \

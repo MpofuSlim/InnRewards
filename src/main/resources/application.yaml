@@ -423,9 +423,13 @@ loyalty:
     # still spend any phone's points. `enabled: false` on production remains the
     # control that matters.
     #
-    # Blank while `enabled` is true fails CLOSED: every call is refused 503 and
-    # the boot check logs HALF-PROVISIONED. A blank key must never read as "no
-    # key required" — that is the state this gate exists to end.
+    # The gate is OPT-IN. Blank (the default) means NO gate: the endpoints
+    # behave exactly as they did before the filter existed, which is what
+    # `enabled: true` already promises on its own — so setting the key is a
+    # tightening, and leaving it blank is not a downgrade. Deliberately not
+    # fail-closed: a cell already serving this surface must not have every call
+    # start failing because a new key appeared in the config. The boot check
+    # logs UNGATED so the state is never silent.
     api-key: ${LOYALTY_PUBLIC_TEST_API_KEY:}
 
 innbucks:

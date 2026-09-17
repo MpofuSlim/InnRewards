@@ -686,6 +686,75 @@ public class Dtos {
             Voucher.DeliveryChannel deliveryChannel
     ) {}
 
+    /**
+     * Create a voucher PURCHASE ORDER (V47) — the same shape as
+     * {@link IssueVoucherRequest} plus the payer's phone. Nothing is issued
+     * yet: the order must be paid (EcoCash / InnBucks code / card via
+     * payment-service, or cash confirmed by staff) and the voucher is minted
+     * at confirmation.
+     */
+    public record PurchaseVoucherRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
+            UUID merchantId,
+            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE", "MULTI_USE"})
+            Voucher.VoucherType voucherType,
+            @Schema(example = "5.0000", description = "The voucher's money face value — also the amount the payer is charged.")
+            @NotNull @Positive BigDecimal value,
+            @Schema(example = "USD", nullable = true,
+                    description = "ISO 4217 currency of the face value AND of the payment. Defaults to the " +
+                                  "merchant's currency; allowlist-validated, fail closed. Note the EcoCash rail " +
+                                  "only collects USD/ZWG.")
+            String currency,
+            @Schema(example = "3", nullable = true,
+                    description = "SINGLE_USE: omit or 1. MULTI_USE: required, >= 2.")
+            Integer usageLimit,
+            @Schema(example = "+263786546765", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
+            String assigneePhone,
+            @Schema(example = "Sedrick Nyanyiwa", nullable = true)
+            @Size(max = 200) String assigneeName,
+            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
+                    description = "Loyalty user ID of the recipient. Takes priority over assigneePhone.")
+            UUID assignedUserId,
+            @Schema(example = "Tawanda Mpofu", nullable = true,
+                    description = "Display name of the person the voucher is FROM (V46).")
+            @Size(max = 200) String senderName,
+            @Schema(example = "+263782608767", nullable = true,
+                    description = "Sender's phone (V46). Gets the WhatsApp/SMS confirmation copy at issue. " +
+                                  "Defaults to the creating caller's own JWT phone when omitted.")
+            @Size(max = 32) String senderPhone,
+            @Schema(example = "+263782608767", nullable = true,
+                    description = "The phone the payment instrument targets — the EcoCash PIN prompt goes " +
+                                  "HERE. Defaults to the sender's phone, else the assignee's; required when " +
+                                  "neither is present.")
+            @Size(max = 32) String payerPhone,
+            @Schema(example = "WHATSAPP", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
+            Voucher.DeliveryChannel deliveryChannel,
+            @Schema(example = "WINTER_PROMO_2026", nullable = true)
+            String campaignSource
+    ) {}
+
+    /**
+     * A voucher purchase order's state (V47). {@code voucher} is null until
+     * the order is PAID; the console polls this until it appears. An order
+     * past its {@code expiresAt} while still unpaid reports EXPIRED (lazy).
+     */
+    public record VoucherPurchaseOrderResponse(
+            @Schema(example = "VCH-4F9A1C22B7D3",
+                    description = "The order handle to pass to POST /payments as orderType=LOYALTY_VOUCHER + orderRef.")
+            String orderRef,
+            @Schema(example = "PENDING_PAYMENT", allowableValues = {"PENDING_PAYMENT", "PAID", "EXPIRED", "CANCELLED"})
+            String status,
+            BigDecimal amount, String currency,
+            @Schema(example = "+263782608767") String payerPhone,
+            Instant expiresAt,
+            @Schema(example = "GATEWAY", nullable = true, allowableValues = {"GATEWAY", "CASH"})
+            String paidVia,
+            Instant paidAt,
+            @Schema(nullable = true, description = "The issued voucher — present once status is PAID.")
+            VoucherResponse voucher
+    ) {}
+
     public record VoucherResponse(UUID id, String code, String status,
                                   // SINGLE_USE or MULTI_USE (V45). Null only on legacy rows the
                                   // migration backfill could not resolve.

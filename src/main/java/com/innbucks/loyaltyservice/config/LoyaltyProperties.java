@@ -53,7 +53,23 @@ public record LoyaltyProperties(
     public record EarnRate(java.math.BigDecimal maxPointsPerUnit,
                            java.math.BigDecimal maxMultiplier) {}
 
-    public record Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold, int fraudWindowSeconds) {}
+    /**
+     * @param purchaseOrderTtl how long a voucher purchase order (V47) stays
+     *                         payable before it lapses. payment-service
+     *                         extends it while a payment instrument is live.
+     */
+    public record Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold,
+                          int fraudWindowSeconds, java.time.Duration purchaseOrderTtl) {
+        public Voucher {
+            if (purchaseOrderTtl == null) purchaseOrderTtl = java.time.Duration.ofMinutes(30);
+        }
+
+        /** Back-compat for callers built against the pre-V47 arity. */
+        public Voucher(String secret, int defaultValidityDays,
+                       int fraudVelocityThreshold, int fraudWindowSeconds) {
+            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, null);
+        }
+    }
 
     /**
      * Ceilings on manual point adjustments — the ONE path that mints points

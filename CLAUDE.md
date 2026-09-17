@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V46**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V47**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -1002,6 +1002,62 @@ path back.**
   rotation right back; transfer keeps its code-less `notifyVoucherSent`.
   Skipped when sender == recipient phone (one message, not two). Pinned by
   `VoucherSenderIdentityTest` + the sender cases in `NotificationGatewayTest`.
+
+## Vouchers are PAID FOR before they exist (V47)
+
+**Owner decision (2026-09-17): the console's issue flow collects payment
+first.** `voucher_purchase_orders` snapshots one issue request (V46 sender
+identity AND the creating caller's JWT identity — the confirmation arrives S2S
+with no caller context) plus the money to collect; the voucher is minted only
+at confirmation, through the SAME `createVoucher` path as a direct issue
+(fees, FX freeze, expiry-from-rules, recipient WhatsApp + sender copy all ride
+along via `VoucherService.issueFromOrder` → `finishIssue`).
+
+- **Flow:** `POST /loyalty/vouchers/purchase` (staff, same object-level authz
+  as issue) → pay: electronic rails via ticketing payment-service's
+  `POST /payments` with `orderType=LOYALTY_VOUCHER` + the `orderRef`
+  (`VCH-<12 hex>`; InnBucks 2D code+QR default, `ECOCASH` PIN prompt,
+  `ZIMSWITCH_CARD` widget), or CASH via
+  `POST /loyalty/vouchers/purchase/{ref}/confirm-cash` (staff-only — the
+  cashier's confirmation IS the payment proof, and WHO confirmed is recorded
+  in `cash_confirmed_by`) → console polls `GET .../​{ref}` until `PAID`, which
+  carries the issued voucher. **`POST /loyalty/vouchers/issue` remains** for
+  direct/promotional issuance — the payment gate is a business flow, not a
+  security boundary (staff who can issue could always issue).
+- **Everything issue would refuse is refused at CREATE**, on the staff caller
+  — never after the customer paid: type/usageLimit contract, currency
+  allowlist, in-force FX rate (`NO_FX_RATE` probed at creation), positive
+  whole-cent value (`AMOUNT_PRECISION` — the rails collect integer cents).
+  `payerPhone` (the EcoCash prompt target) defaults sender → assignee and is
+  required (`PAYER_PHONE_REQUIRED`).
+- **The S2S surface** (`/loyalty/internal/voucher-orders/{ref}` get /
+  `extend-expiry` / `confirm-payment`) mirrors marketplace-service's internal
+  order endpoints so payment-service's `LoyaltyVoucherOrderGateway` is a
+  near-clone of its marketplace one. Loyalty serves DECIMAL major units —
+  payment-service's gateway is the major↔minor conversion point, per its
+  OrderGateway contract. Confirm is idempotent by `paymentRef`; a different
+  ref on a paid order is 409, a cents mismatch is **422 AMOUNT_MISMATCH**
+  (the 100x guard's confirm leg), and the voucher is issued IN the confirm
+  transaction — a 200 means the voucher exists, and an issue failure rolls
+  the PAID flip back for payment-service's retry sweep.
+- **Expiry is LAZY and asymmetric, deliberately.** Nothing is reserved by an
+  order, so no sweeper: past `expires_at` it just stops being payable /
+  extendable / cash-confirmable (create a fresh order). But a LATE
+  `confirm-payment` on an expired-yet-uncancelled order is HONOURED — the
+  customer's money has already moved, and refusing would strand them on an
+  operator queue for a bookkeeping deadline. Cash on an expired order IS
+  refused: that money is being taken now, and a fresh order costs nothing.
+  Pinned by `confirmPayment_lateButUncancelled_isStillHonoured` /
+  `confirmCash_onAnExpiredOrder_isRefused`.
+- **Double-payment guards:** confirm-cash on an order already paid
+  electronically is 409 (`ORDER_ALREADY_PAID`) and vice versa; both
+  confirmation writers take a pessimistic lock (`lockByOrderRef`) so a cash
+  confirm racing a gateway confirm cannot issue two vouchers.
+- Config: `loyalty.voucher.purchase-order-ttl` (`LOYALTY_VOUCHER_ORDER_TTL`,
+  default PT30M); payment-service extends the window past its instrument TTL
+  via extend-expiry (1..60 min, never shortens). No gateway route changes:
+  `/loyalty/vouchers/purchase/**` rides `loyalty-service-route`, the internal
+  surface is already covered by `loyalty-internal-deny`.
 
 ## Cryptography & key management (OWASP A02)
 

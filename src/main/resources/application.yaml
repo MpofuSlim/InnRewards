@@ -367,6 +367,10 @@ loyalty:
   voucher:
     secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
     default-validity-days: ${LOYALTY_VOUCHER_DEFAULT_VALIDITY_DAYS:365}
+    # How long a voucher purchase order (V47) stays payable before it lapses.
+    # payment-service extends it while a payment instrument is live, so the
+    # effective window always outlives the code/prompt the customer is shown.
+    purchase-order-ttl: ${LOYALTY_VOUCHER_ORDER_TTL:PT30M}
     fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
     fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
   qr:

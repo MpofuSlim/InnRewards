@@ -114,10 +114,7 @@ public class OpenApiConfig {
             if (!isPublicTest) {
                 return operation;
             }
-            boolean alreadyDeclared = operation.getParameters() != null
-                    && operation.getParameters().stream()
-                            .anyMatch(p -> "x-api-key".equals(p.getName()));
-            if (!alreadyDeclared) {
+            if (!declares(operation, "x-api-key")) {
                 operation.addParametersItem(new Parameter().$ref("#/components/parameters/x-api-key"));
             }
             return operation;
@@ -157,20 +154,45 @@ public class OpenApiConfig {
                     && classMapping.value()[0].startsWith("/loyalty/internal")) {
                 return operation;
             }
+            // The public-test surface takes NO tenant header — its controller
+            // resolves the tenant from the phone's own projection or the voucher
+            // row, and says so. It marks itself public at the CLASS level, which
+            // the method-level check below never saw, so every one of its
+            // operations rendered X-Tenant-Id / X-Tenant-Code fields that the
+            // endpoint ignores. Skip it by prefix, the same way the internal
+            // surface is skipped: a field the FE fills in and we discard is a
+            // doc that lies.
+            if (classMapping != null && classMapping.value().length > 0
+                    && classMapping.value()[0].startsWith("/loyalty/public")) {
+                return operation;
+            }
             io.swagger.v3.oas.annotations.security.SecurityRequirements publicMarker =
                     handlerMethod.getMethodAnnotation(
                             io.swagger.v3.oas.annotations.security.SecurityRequirements.class);
             if (publicMarker != null && publicMarker.value().length == 0) {
                 return operation;
             }
-            boolean alreadyDeclared = operation.getParameters() != null
-                    && operation.getParameters().stream()
-                            .anyMatch(p -> "X-Tenant-Id".equals(p.getName()));
-            if (!alreadyDeclared) {
+            if (!declares(operation, "X-Tenant-Id")) {
                 operation.addParametersItem(new Parameter().$ref("#/components/parameters/X-Tenant-Id"));
                 operation.addParametersItem(new Parameter().$ref("#/components/parameters/X-Tenant-Code"));
             }
             return operation;
         };
+    }
+
+    /**
+     * True when the operation already carries the named header — declared
+     * inline (a named parameter) OR as a {@code $ref} to the component. The
+     * refs these customizers add have a null name, so matching on name alone
+     * never sees them, and a second customizer pass over the same operation
+     * stacks a duplicate field.
+     */
+    private static boolean declares(io.swagger.v3.oas.models.Operation operation, String header) {
+        if (operation.getParameters() == null) {
+            return false;
+        }
+        String ref = "#/components/parameters/" + header;
+        return operation.getParameters().stream()
+                .anyMatch(p -> header.equals(p.getName()) || ref.equals(p.get$ref()));
     }
 }

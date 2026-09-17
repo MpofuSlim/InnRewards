@@ -8,6 +8,16 @@ import lombok.Setter;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * RETIRED (V45) — a legacy READ model only. Voucher templates are gone as a
+ * concept: vouchers are issued directly with a type, a money value and a
+ * currency ({@code POST /loyalty/vouchers/issue}), and expiry comes from
+ * {@code loyalty_rules.voucher_validity_days}. This entity stays mapped
+ * solely so pre-V45 vouchers (whose {@code template_id} points here) can
+ * still resolve a template name in the voucher reports. There is NO write
+ * path — the create/list endpoints and {@code VoucherTemplateService} were
+ * deleted with V45. Do not add one back.
+ */
 @Entity
 @Table(name = "voucher_templates", indexes = {
         @Index(name = "idx_voucher_tpl_tenant", columnList = "tenant_id")

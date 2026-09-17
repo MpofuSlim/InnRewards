@@ -4,11 +4,9 @@ import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -31,200 +29,37 @@ import java.util.UUID;
 @Slf4j
 @RequestMapping("/loyalty/vouchers")
 @Tag(name = "Vouchers",
-     description = "Voucher templates and individual voucher lifecycle. Each voucher carries an HMAC-SHA256 " +
+     description = "Voucher lifecycle — issued directly with a type (SINGLE_USE / MULTI_USE), a money value " +
+                   "and a currency; templates are retired (V45). Expiry comes from the tenant/merchant " +
+                   "loyalty rules (voucherValidityDays). Each voucher carries an HMAC-SHA256 " +
                    "signature over its code (signed with `loyalty.voucher.secret`) so redemption can be " +
                    "verified offline if needed. Anti-fraud (duplicate, wrong-merchant, blocked-user, " +
                    "blocked-device, velocity) is enforced on every `/redeem`. Requires X-Tenant-Id.")
 public class VoucherController {
 
     private final VoucherService voucherService;
-    private final VoucherTemplateService templateService;
     private final TenantContext tenantContext;
 
     public VoucherController(VoucherService voucherService,
-                             VoucherTemplateService templateService,
                              TenantContext tenantContext) {
         this.voucherService = voucherService;
-        this.templateService = templateService;
         this.tenantContext = tenantContext;
-    }
-
-    @PostMapping("/templates")
-    @Operation(summary = "Create a voucher template",
-            description = "Defines the *kind* of voucher (SINGLE_USE / MULTI_USE / CAMPAIGN / REFERRAL / " +
-                          "CORPORATE) and how its value is expressed (AMOUNT / PERCENT / FREE_ITEM / COMBO). " +
-                          "Templates are reusable — actual vouchers are minted from them via /issue or /issue-bulk.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "201",
-                    description = "Template created",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Template created", value = """
-                                    {
-                                      "code": "201 CREATED",
-                                      "message": "Voucher template created successfully",
-                                      "data": {
-                                        "id": "a9b5c7d8-7890-1234-ef01-234567890123",
-                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                        "name": "$5 Off Coffee",
-                                        "type": "SINGLE_USE",
-                                        "valueType": "AMOUNT",
-                                        "currency": "USD",
-                                        "freeItemSku": null,
-                                        "usageLimit": 1,
-                                        "validityDays": 30,
-                                        "applicableOutlets": [
-                                          "11111111-aaaa-bbbb-cccc-222222222222",
-                                          "33333333-dddd-eeee-ffff-444444444444"
-                                        ],
-                                        "active": true,
-                                        "createdAt": "2026-05-04T10:00:00Z"
-                                      }
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "Validation error",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "name: must not be blank",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "409",
-                    description = "A voucher template with that name already exists for this (tenant, merchant) scope (case-insensitive)",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Name taken", value = """
-                                    {
-                                      "code": "VOUCHER_TEMPLATE_NAME_TAKEN",
-                                      "message": "A voucher template with that name already exists.",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            )
-    })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(
-                    required = true,
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = Dtos.VoucherTemplateRequest.class),
-                            examples = @ExampleObject(name = "Create template", value = """
-                                    {
-                                      "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                      "name": "$5 Off Your Next Coffee",
-                                      "type": "SINGLE_USE",
-                                      "valueType": "AMOUNT",
-                                      "currency": "USD",
-                                      "freeItemSku": null,
-                                      "usageLimit": 1,
-                                      "validityDays": 30,
-                                      "applicableOutlets": [
-                                        "11111111-aaaa-bbbb-cccc-222222222222",
-                                        "33333333-dddd-eeee-ffff-444444444444"
-                                      ]
-                                    }
-                                    """)))
-            @Valid @RequestBody Dtos.VoucherTemplateRequest req) {
-        // Templates may be tenant-wide (null merchantId) so use merchantIdOrBody.
-        VoucherTemplate data = templateService.create(tenantContext.requireTenantId(),
-                CallerDetails.merchantIdOrBody(req.merchantId()), req);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResult.created("Voucher template created successfully", data));
-    }
-
-    @GetMapping("/templates")
-    @Operation(summary = "List voucher templates",
-            description = "Returns every template defined for the current tenant. Used by merchant dashboards " +
-                          "to populate \"issue voucher\" pickers.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200",
-                    description = "Templates returned",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Paginated templates", value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "Voucher templates retrieved successfully",
-                                      "data": {
-                                        "content": [
-                                          {
-                                            "id": "a9b5c7d8-7890-1234-ef01-234567890123",
-                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                            "name": "$5 Off Coffee",
-                                            "type": "SINGLE_USE",
-                                            "valueType": "AMOUNT",
-                                            "currency": "USD",
-                                            "freeItemSku": null,
-                                            "usageLimit": 1,
-                                            "validityDays": 30,
-                                            "applicableOutlets": [
-                                              "11111111-aaaa-bbbb-cccc-222222222222",
-                                              "33333333-dddd-eeee-ffff-444444444444"
-                                            ],
-                                            "active": true,
-                                            "createdAt": "2026-05-04T10:00:00Z"
-                                          },
-                                          {
-                                            "id": "b0a6d8e9-8901-2345-f012-345678901234",
-                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                            "name": "10% Off Pastries",
-                                            "type": "CAMPAIGN",
-                                            "valueType": "PERCENT",
-                                            "currency": "USD",
-                                            "freeItemSku": null,
-                                            "usageLimit": 1,
-                                            "validityDays": 14,
-                                            "applicableOutlets": null,
-                                            "active": true,
-                                            "createdAt": "2026-04-30T09:00:00Z"
-                                          }
-                                        ],
-                                        "page": 0,
-                                        "size": 20,
-                                        "totalElements": 2,
-                                        "totalPages": 1,
-                                        "first": true,
-                                        "last": true
-                                      }
-                                    }
-                                    """)
-                    )
-            )
-    })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<PageResponse<VoucherTemplate>>> listTemplates(@ParameterObject Pageable pageable) {
-        PageResponse<VoucherTemplate> data = PageResponse.from(
-                templateService.list(tenantContext.requireTenantId(), pageable));
-        return ResponseEntity.ok(ApiResult.ok("Voucher templates retrieved successfully", data));
     }
 
     @PostMapping("/issue")
     @Operation(summary = "Issue a single voucher",
-            description = "Mints one voucher from a template. Optionally assign it to a known LoyaltyUser " +
-                          "(`assignedUserId`) or to an arbitrary phone (`assigneePhone`). Returns the signed " +
-                          "voucher code that the customer presents at redemption. Delivery channel (SMS, " +
-                          "WhatsApp, EMAIL, PUSH, POS, NONE) controls how NotificationGateway notifies the customer.")
+            description = "Mints one voucher directly — templates are retired (V45). The body carries the " +
+                          "type (SINGLE_USE default / MULTI_USE with usageLimit >= 2), the money face value " +
+                          "and an optional currency (defaults to the merchant's; allowlist-validated, fail " +
+                          "closed, and a non-USD currency needs an in-force exchange rate). Expiry is NOT a " +
+                          "request field: it resolves from the loyalty rules — the merchant's own rule's " +
+                          "voucherValidityDays, else the tenant's global rule, else the platform default. " +
+                          "The caller must administer the issuing merchant (SUPER_ADMIN exempt; SHOP_ADMIN " +
+                          "is pinned to the merchant in their JWT). Optionally assign it to a known " +
+                          "LoyaltyUser (`assignedUserId`) or to an arbitrary phone (`assigneePhone`). " +
+                          "Returns the signed voucher code the customer presents at redemption. Delivery " +
+                          "channel (SMS, WhatsApp, EMAIL, PUSH, POS, NONE) controls how NotificationGateway " +
+                          "notifies the customer.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -240,15 +75,15 @@ public class VoucherController {
                                         "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                         "code": "VCH-AB12CD34",
                                         "status": "ISSUED",
-                                        "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                        "voucherType": "SINGLE_USE",
                                         "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
-                                        "assigneePhone": "+254700000000",
+                                        "assigneePhone": "+263771234567",
                                         "usesRemaining": 1,
-                                        "valueType": "AMOUNT",
                                         "value": 5.0000,
                                         "currency": "USD",
-                                        "issuedAt": "2026-05-04T10:30:00Z",
-                                        "expiresAt": "2026-06-03T10:30:00Z"
+                                        "issuedAt": "2026-09-17T10:30:00Z",
+                                        "expiresAt": "2026-10-17T10:30:00Z",
+                                        "baseValue": 5.0000
                                       }
                                     }
                                     """)
@@ -256,14 +91,45 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Validation error — missing/non-positive value, an unsupported currency, "
+                            + "a currency with no in-force exchange rate, or a type/usageLimit conflict",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = {
+                                    @ExampleObject(name = "Missing value", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "value: must not be null",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unsupported currency", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Currency GBP is not supported on this cell. Supported: USD, ZAR, ZWG.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "MULTI_USE without a limit", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "A MULTI_USE voucher needs usageLimit of 2 or more.",
+                                              "data": null
+                                            }
+                                            """)}
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Caller does not administer the issuing merchant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not merchant owner", value = """
                                     {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "templateId: must not be null",
+                                      "code": "403 FORBIDDEN",
+                                      "message": "You are not authorised to act on this merchant",
                                       "data": null
                                     }
                                     """)
@@ -271,14 +137,14 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
-                    description = "Template not found in this tenant",
+                    description = "Merchant not found in this tenant",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Voucher template not found",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)
@@ -293,10 +159,11 @@ public class VoucherController {
     }
 
     @PostMapping("/issue-bulk")
-    @Operation(summary = "Bulk-issue vouchers from a template",
-            description = "Mints `quantity` independent unassigned vouchers in one call (campaign / corporate / " +
-                          "referral distributions). Each gets its own unique signed code. Use the returned " +
-                          "`batchId` (via the codes' batch reference) to track the run.")
+    @Operation(summary = "Bulk-issue vouchers",
+            description = "Mints `quantity` independent unassigned vouchers in one call — same direct shape " +
+                          "as /issue (type + money value + currency; expiry from the loyalty rules), applied " +
+                          "to every voucher in the batch. Each gets its own unique signed code. The caller " +
+                          "must administer the issuing merchant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -313,11 +180,10 @@ public class VoucherController {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                           "code": "VCH-AB12CD34",
                                           "status": "ISSUED",
-                                          "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                          "voucherType": "SINGLE_USE",
                                           "assignedUserId": null,
                                           "assigneePhone": null,
                                           "usesRemaining": 1,
-                                          "valueType": "AMOUNT",
                                           "value": 5.0000,
                                           "currency": "USD",
                                           "issuedAt": "2026-05-04T10:30:00Z",
@@ -327,11 +193,10 @@ public class VoucherController {
                                           "id": "d2c8f0a1-0123-4567-1234-567890123456",
                                           "code": "VCH-EF56GH78",
                                           "status": "ISSUED",
-                                          "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                          "voucherType": "SINGLE_USE",
                                           "assignedUserId": null,
                                           "assigneePhone": null,
                                           "usesRemaining": 1,
-                                          "valueType": "AMOUNT",
                                           "value": 5.0000,
                                           "currency": "USD",
                                           "issuedAt": "2026-05-04T10:30:00Z",
@@ -407,7 +272,6 @@ public class VoucherController {
                                         "status": "REDEEMED",
                                         "usesRemaining": 0,
                                         "value": 5.0000,
-                                        "valueType": "AMOUNT",
                                         "redeemedAt": "2026-05-04T14:00:00Z"
                                       }
                                     }
@@ -542,11 +406,10 @@ public class VoucherController {
                                         "id": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
                                         "code": "VCH-AB12CD34",
                                         "status": "VIEWED",
-                                        "templateId": "4d3c2b1a-9876-5432-10fe-dcba98765432",
+                                        "voucherType": "SINGLE_USE",
                                         "assignedUserId": "66666666-7777-8888-9999-000000000000",
                                         "assigneePhone": "+263771234567",
                                         "usesRemaining": 1,
-                                        "valueType": "PERCENT",
                                         "value": 10.0000,
                                         "currency": "USD",
                                         "issuedAt": "2026-08-20T09:00:00Z",
@@ -761,11 +624,10 @@ public class VoucherController {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                             "code": "VCH-AB12CD34",
                                             "status": "ISSUED",
-                                            "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                            "voucherType": "SINGLE_USE",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                             "assigneePhone": "+263771234567",
                                             "usesRemaining": 1,
-                                            "valueType": "AMOUNT",
                                             "value": 5.0000,
                                             "currency": "USD",
                                             "issuedAt": "2026-05-04T10:30:00Z",
@@ -878,11 +740,10 @@ public class VoucherController {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                             "code": "VCH-AB12CD34",
                                             "status": "ISSUED",
-                                            "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                            "voucherType": "SINGLE_USE",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                             "assigneePhone": "+254700000000",
                                             "usesRemaining": 1,
-                                            "valueType": "AMOUNT",
                                             "value": 5.0000,
                                             "currency": "USD",
                                             "issuedAt": "2026-05-04T10:30:00Z",
@@ -892,11 +753,10 @@ public class VoucherController {
                                             "id": "f4eab2c3-2345-6789-3456-789012345678",
                                             "code": "VCH-IJ90KL12",
                                             "status": "ISSUED",
-                                            "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                            "voucherType": "SINGLE_USE",
                                             "assignedUserId": null,
                                             "assigneePhone": "+254711111111",
                                             "usesRemaining": 1,
-                                            "valueType": "AMOUNT",
                                             "value": 5.0000,
                                             "currency": "USD",
                                             "issuedAt": "2026-05-03T14:00:00Z",

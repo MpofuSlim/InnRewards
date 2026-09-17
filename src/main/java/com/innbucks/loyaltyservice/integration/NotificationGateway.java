@@ -1,7 +1,6 @@
 package com.innbucks.loyaltyservice.integration;
 
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -127,21 +126,19 @@ public class NotificationGateway {
         return sb.toString();
     }
 
-    /** Short human description of the voucher's worth, or null if not applicable. */
+    /**
+     * Short human description of the voucher's worth, or null when the row
+     * carries no value. Amount-only since V45 — a voucher's value is always
+     * money in its currency; the legacy PERCENT/FREE_ITEM/COMBO rows this
+     * used to render are historical and no longer delivered.
+     */
     private String describeValue(Voucher voucher) {
-        VoucherTemplate.ValueType type = voucher.getValueType();
-        if (type == null) {
+        BigDecimal v = voucher.getValue();
+        if (v == null) {
             return null;
         }
-        BigDecimal v = voucher.getValue();
-        return switch (type) {
-            case AMOUNT -> v == null ? null
-                    : ((voucher.getCurrency() == null || voucher.getCurrency().isBlank())
-                            ? "" : voucher.getCurrency() + " ")
-                        + v.stripTrailingZeros().toPlainString() + " off";
-            case PERCENT -> v == null ? null : v.stripTrailingZeros().toPlainString() + "% off";
-            case FREE_ITEM -> "free item";
-            case COMBO -> "combo deal";
-        };
+        String currency = (voucher.getCurrency() == null || voucher.getCurrency().isBlank())
+                ? "" : voucher.getCurrency() + " ";
+        return currency + v.stripTrailingZeros().toPlainString() + " off";
     }
 }

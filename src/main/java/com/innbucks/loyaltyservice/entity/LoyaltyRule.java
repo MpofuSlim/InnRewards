@@ -56,6 +56,17 @@ public class LoyaltyRule extends Auditable {
     @Column(name = "min_transaction_amount", precision = 19, scale = 2)
     private BigDecimal minTransactionAmount;
 
+    /**
+     * Days from issue until a voucher issued under this rule expires (V45 —
+     * replaces the retired template's validityDays). Same inheritance as the
+     * floor and the fees: set on the GLOBAL rule it is the tenant standard;
+     * set on a merchant rule it overrides the standard for that merchant;
+     * null = not configured at this level. When no rule anywhere sets it, the
+     * platform default applies (loyalty.voucher.default-validity-days).
+     */
+    @Column(name = "voucher_validity_days")
+    private Integer voucherValidityDays;
+
     // Voucher fee schedules at rule level (V29) — the tenant STANDARD when set
     // on a global rule, a per-merchant override when set on a merchant rule.
     // All nullable: null type = "not configured at this level, inherit"

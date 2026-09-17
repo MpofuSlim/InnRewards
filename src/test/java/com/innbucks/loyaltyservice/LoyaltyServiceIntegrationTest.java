@@ -9,7 +9,6 @@ import com.innbucks.loyaltyservice.entity.QrToken;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.service.InvoicingService;
@@ -20,7 +19,6 @@ import com.innbucks.loyaltyservice.service.TransactionService;
 import com.innbucks.loyaltyservice.service.TransferService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.service.WalletService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,7 +50,6 @@ class LoyaltyServiceIntegrationTest {
     @Autowired TransactionService transactionService;
     @Autowired TransferService transferService;
     @Autowired WalletService walletService;
-    @Autowired VoucherTemplateService voucherTemplateService;
     @Autowired VoucherService voucherService;
     @Autowired QrService qrService;
     @Autowired InvoicingService invoicingService;
@@ -89,17 +86,12 @@ class LoyaltyServiceIntegrationTest {
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
 
-        // Issue + redeem voucher
-        VoucherTemplate tpl = voucherTemplateService.create(t.getId(), mr.id(),
-                new Dtos.VoucherTemplateRequest(null, "10% off",
-                        VoucherTemplate.VoucherType.SINGLE_USE,
-                        VoucherTemplate.ValueType.PERCENT,
-                        "USD", null, 1, 30, null));
-
-        var v = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+        // Issue + redeem voucher — issued directly since V45 (no template);
+        // the fixture's SUPER_ADMIN context satisfies the merchant authz.
+        var v = issueAsAdmin(t.getId(),
+                new Dtos.IssueVoucherRequest(mr.id(), null, new BigDecimal("10"), "USD", null,
                         null, null, u.getId(),
-                        Voucher.DeliveryChannel.NONE, null, null, null));
+                        Voucher.DeliveryChannel.NONE, null));
 
         var redemption = voucherService.redeem(t.getId(), mr.id(),
                 new Dtos.RedeemVoucherRequest(null, v.code(), u.getId(),
@@ -254,6 +246,22 @@ class LoyaltyServiceIntegrationTest {
     // context. SUPER_ADMIN with no CallerDetails leaves attribution untouched
     // (every current*Id stays null) and save/restores the prior context so it
     // never disturbs the per-caller contexts the assertions install.
+    private Dtos.VoucherResponse issueAsAdmin(java.util.UUID tenantId,
+                                              Dtos.IssueVoucherRequest req) {
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                "it-fixture", null, java.util.List.of(
+                        new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+        ctx.setAuthentication(auth);
+        var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
+        try {
+            return voucherService.issue(tenantId, req);
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
+    }
+
     private void createRuleAsAdmin(java.util.UUID tenantId, java.util.UUID merchantId,
                                    Dtos.RuleRequest req) {
         var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(

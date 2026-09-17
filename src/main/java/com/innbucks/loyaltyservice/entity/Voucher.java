@@ -40,8 +40,25 @@ public class Voucher {
     @Column(name = "shop_id")
     private UUID shopId;
 
-    @Column(name = "template_id", nullable = false)
+    /**
+     * The retired template this voucher was minted from — pre-V45 rows only.
+     * Templates are gone as a concept; vouchers are issued directly with a
+     * type, value and currency. NULL on every voucher issued after V45. Kept
+     * because it still feeds the legacy signature payload (see
+     * {@code VoucherService.signPayload}) and legacy report name lookups.
+     */
+    @Column(name = "template_id")
     private UUID templateId;
+
+    /**
+     * SINGLE_USE or MULTI_USE — stamped at issue (V45), now that no template
+     * carries it. NULL only on pre-V45 rows the backfill could not resolve.
+     * The redemption mechanics ride {@link #usesRemaining} as they always
+     * did; this is the declared shape, kept for reporting and the client.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "voucher_type", length = 20)
+    private VoucherType voucherType;
 
     @Column(name = "batch_id")
     private UUID batchId;
@@ -82,14 +99,13 @@ public class Voucher {
     @Column(name = "delivery_channel", length = 20)
     private DeliveryChannel deliveryChannel;
 
-    // Snapshot of the template's value at issuance time. Frozen here so a
-    // merchant editing the template later (e.g. $5 → $10 discount) can't
-    // retroactively change the worth of already-issued vouchers — like an
-    // invoice line that captures the price at the moment of sale.
-    @Enumerated(EnumType.STRING)
-    @Column(name = "value_type", length = 20)
-    private VoucherTemplate.ValueType valueType;
-
+    // The voucher's face value, frozen at issuance — like an invoice line that
+    // captures the price at the moment of sale. Since V45 this is ALWAYS a
+    // money amount in {@link #currency}: value types (PERCENT / FREE_ITEM /
+    // COMBO) are retired, and the vouchers.value_type column is unmapped
+    // legacy history. That is also what makes the per-voucher fee arithmetic
+    // sound — a fee percentage now always multiplies money, never a
+    // percentage masquerading as one.
     @Column(name = "face_value", precision = 19, scale = 4)
     private BigDecimal value;
 
@@ -168,4 +184,13 @@ public class Voucher {
 
     public enum Status { ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED }
     public enum DeliveryChannel { SMS, WHATSAPP, EMAIL, PUSH, POS, NONE }
+
+    /**
+     * The only two voucher shapes since V45. The old CAMPAIGN / REFERRAL /
+     * CORPORATE values were distribution labels, not redemption semantics —
+     * how a voucher behaves at the till was always {@code usesRemaining}.
+     * SINGLE_USE fixes the usage limit at 1; MULTI_USE takes an explicit
+     * limit of 2 or more at issue.
+     */
+    public enum VoucherType { SINGLE_USE, MULTI_USE }
 }

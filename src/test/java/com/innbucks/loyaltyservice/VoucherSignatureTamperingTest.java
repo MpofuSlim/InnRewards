@@ -8,7 +8,6 @@ import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.Voucher;
-import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
@@ -16,7 +15,6 @@ import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.service.MerchantService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
-import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,10 +49,11 @@ class VoucherSignatureTamperingTest {
     @Autowired TenantRepository tenantRepository;
     @Autowired MerchantService merchantService;
     @Autowired UserService userService;
-    @Autowired VoucherTemplateService voucherTemplateService;
     @Autowired VoucherService voucherService;
     @Autowired VoucherRepository voucherRepository;
+    @Autowired com.innbucks.loyaltyservice.repository.VoucherTemplateRepository voucherTemplateRepository;
     @Autowired FraudAttemptRepository fraudAttemptRepository;
+    @Autowired com.innbucks.loyaltyservice.config.LoyaltyProperties loyaltyProperties;
 
     @MockitoBean UserServiceClient userServiceClient;
 
@@ -80,18 +79,12 @@ class VoucherSignatureTamperingTest {
 
         LoyaltyUser user = userService.findOrEnrol(t.getId(), "+263770099999", mr.id());
 
-        VoucherTemplate tpl = voucherTemplateService.create(t.getId(), mr.id(),
-                new Dtos.VoucherTemplateRequest(null, "20% off",
-                        VoucherTemplate.VoucherType.SINGLE_USE,
-                        VoucherTemplate.ValueType.PERCENT,
-                        "USD", null, 1, 30, null));
-
-        // Issue a legitimate voucher. Its signature is computed correctly by
-        // VoucherService.createFromTemplate.
-        var issued = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("20"),
+        // Issue a legitimate voucher (directly since V45 — no template). Its
+        // signature is computed correctly by VoucherService.createVoucher.
+        var issued = issueAsSuperAdmin(t.getId(),
+                new Dtos.IssueVoucherRequest(mr.id(), null, new BigDecimal("20"), "USD", null,
                         null, null, user.getId(),
-                        Voucher.DeliveryChannel.NONE, null, null, null));
+                        Voucher.DeliveryChannel.NONE, null));
 
         // Now reach into the DB and overwrite the signature with garbage —
         // simulating a malicious mutation through any non-application path.
@@ -116,5 +109,78 @@ class VoucherSignatureTamperingTest {
                 .orElseThrow();
         assertThat(last.getReason()).isEqualTo(FraudAttempt.Reason.BAD_SIGNATURE);
         assertThat(last.getVoucherCode()).isEqualTo(issued.code());
+    }
+
+    /**
+     * Pre-V45 vouchers were signed over {@code tenant:templateId:code};
+     * template-less vouchers sign over {@code tenant:-:code}. Verification
+     * recomputes from the STORED row, so a legacy row must keep verifying with
+     * no re-signing pass — this is the back-compat the signPayload helper
+     * exists for, and this test is what fails if someone "simplifies" the
+     * payload to drop the stored template id.
+     */
+    @Test
+    @Transactional
+    void legacyTemplateSignedVoucherStillVerifies() {
+        Tenant draft = new Tenant();
+        draft.setCode("sig-legacy-" + System.nanoTime());
+        draft.setName("Legacy Signature Test");
+        final Tenant t = tenantRepository.save(draft);
+
+        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+                new Dtos.MerchantRequest("Legacy Cafe", "F&B", "USD",
+                        Merchant.BillingCycle.MONTHLY,
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.05"), null),
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null)));
+        LoyaltyUser user = userService.findOrEnrol(t.getId(), "+263770088888", mr.id());
+
+        // Hand-craft a row exactly as the pre-V45 issue path persisted it: a
+        // template id on the row and a signature over tenant:templateId:code.
+        // vouchers.template_id still carries its FK (kept for legacy
+        // integrity), so the fixture needs a REAL template row — saved through
+        // the retained legacy read-model repository, which is fixture setup,
+        // not a resurrected write path.
+        com.innbucks.loyaltyservice.entity.VoucherTemplate legacyTemplate =
+                new com.innbucks.loyaltyservice.entity.VoucherTemplate();
+        legacyTemplate.setTenantId(t.getId());
+        legacyTemplate.setMerchantId(mr.id());
+        legacyTemplate.setName("Legacy 5 off " + System.nanoTime());
+        java.util.UUID legacyTemplateId = voucherTemplateRepository.save(legacyTemplate).getId();
+        String code = "LEGACY-" + System.nanoTime();
+        var signer = new com.innbucks.loyaltyservice.security.CryptoSigner(
+                loyaltyProperties.voucher().secret());
+        Voucher legacy = new Voucher();
+        legacy.setTenantId(t.getId());
+        legacy.setMerchantId(mr.id());
+        legacy.setTemplateId(legacyTemplateId);
+        legacy.setCode(code);
+        legacy.setSignature(signer.sign(t.getId() + ":" + legacyTemplateId + ":" + code));
+        legacy.setAssignedUserId(user.getId());
+        legacy.setAssigneePhone(user.getPhoneNumber());
+        legacy.setValue(new BigDecimal("5.00"));
+        legacy.setCurrency("USD");
+        legacy.setUsesRemaining(1);
+        voucherRepository.save(legacy);
+
+        var redemption = voucherService.redeem(t.getId(), mr.id(),
+                new Dtos.RedeemVoucherRequest(null, code, user.getId(),
+                        "OUTLET-1", "device-legacy", "127.0.0.1"));
+        assertThat(redemption.status()).isEqualTo(Voucher.Status.REDEEMED.name());
+    }
+
+    private Dtos.VoucherResponse issueAsSuperAdmin(java.util.UUID tenantId,
+                                                   Dtos.IssueVoucherRequest req) {
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                "test-fixture", null, java.util.List.of(
+                        new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+        ctx.setAuthentication(auth);
+        var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
+        try {
+            return voucherService.issue(tenantId, req);
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
     }
 }

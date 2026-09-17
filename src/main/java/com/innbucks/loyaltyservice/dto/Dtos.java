@@ -86,8 +86,22 @@ public class Dtos {
             @Schema(nullable = true,
                     description = "Voucher-redeem fee for this merchant, overriding the tenant standard. "
                             + "Omit to inherit the global rule's fee.")
-            FeeModel feeRedeemed
-    ) {}
+            FeeModel feeRedeemed,
+            @Schema(example = "30", nullable = true,
+                    description = "Days until this merchant's vouchers expire, overriding the tenant "
+                            + "standard. Omit to inherit the global rule's validity (or the platform "
+                            + "default of 365 when no rule sets one).")
+            @Positive Integer voucherValidityDays
+    ) {
+        /** Back-compat constructor for the pre-V45 shape (no voucher validity). */
+        public MerchantRuleOverride(TransactionType transactionType, BigDecimal pointsPerUnit,
+                                    BigDecimal multiplier, BigDecimal maxPointsPerTxn, String pocket,
+                                    BigDecimal minTransactionAmount, FeeModel feeIssued,
+                                    FeeModel feeRedeemed) {
+            this(transactionType, pointsPerUnit, multiplier, maxPointsPerTxn, pocket,
+                    minTransactionAmount, feeIssued, feeRedeemed, null);
+        }
+    }
 
     public record MerchantRequest(
             @Schema(example = "Innbucks Westgate", description = "Display name of the merchant outlet (e.g. \"Chicken Inn Westgate\").")
@@ -329,14 +343,29 @@ public class Dtos {
             FeeModel feeIssued,
             @Schema(nullable = true,
                     description = "Voucher-redeem fee schedule at rule level — same inheritance as feeIssued.")
-            FeeModel feeRedeemed
+            FeeModel feeRedeemed,
+            @Schema(example = "30", nullable = true,
+                    description = "Days from issue until a voucher expires (V45 — replaces the retired "
+                            + "template's validityDays). On a GLOBAL rule this is the tenant STANDARD; on a "
+                            + "merchant rule it overrides the standard for that merchant. Null = inherit; "
+                            + "null everywhere = the platform default (365).")
+            @Positive Integer voucherValidityDays
     ) {
         /** Back-compat constructor for the pre-V29 shape (no floor, no rule-level fees). */
         public RuleRequest(UUID merchantId, TransactionType transactionType, BigDecimal pointsPerUnit,
                            BigDecimal multiplier, BigDecimal maxPointsPerTxn, String pocket,
                            Instant startsAt, Instant endsAt) {
             this(merchantId, transactionType, pointsPerUnit, multiplier, maxPointsPerTxn,
-                    pocket, startsAt, endsAt, null, null, null);
+                    pocket, startsAt, endsAt, null, null, null, null);
+        }
+
+        /** Back-compat constructor for the pre-V45 shape (no voucher validity). */
+        public RuleRequest(UUID merchantId, TransactionType transactionType, BigDecimal pointsPerUnit,
+                           BigDecimal multiplier, BigDecimal maxPointsPerTxn, String pocket,
+                           Instant startsAt, Instant endsAt, BigDecimal minTransactionAmount,
+                           FeeModel feeIssued, FeeModel feeRedeemed) {
+            this(merchantId, transactionType, pointsPerUnit, multiplier, maxPointsPerTxn,
+                    pocket, startsAt, endsAt, minTransactionAmount, feeIssued, feeRedeemed, null);
         }
     }
 
@@ -579,50 +608,26 @@ public class Dtos {
     }
 
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); null means tenant-wide template.
-    public record VoucherTemplateRequest(
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
-                    description = "Merchant the template belongs to. Required for MERCHANT_ADMIN unless " +
-                                  "creating a tenant-wide template. Ignored when JWT carries merchantId.")
-            UUID merchantId,
-            @Schema(example = "$5 Off Your Next Coffee")
-            @NotBlank @Size(max = 200) String name,
-            @Schema(example = "SINGLE_USE",
-                    allowableValues = {"SINGLE_USE", "MULTI_USE", "CAMPAIGN", "REFERRAL", "CORPORATE"})
-            @NotNull VoucherTemplate.VoucherType type,
-            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENT", "FREE_ITEM", "COMBO"},
-                    description = "Shape of the discount the template represents. The numeric value " +
-                                  "(e.g. $5, 10%) is supplied per issuance in IssueVoucherRequest.value.")
-            @NotNull VoucherTemplate.ValueType valueType,
-            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
-            String currency,
-            @Schema(example = "COFFEE-001", nullable = true, description = "SKU of the free item (FREE_ITEM type only).")
-            String freeItemSku,
-            @Schema(example = "1", description = "How many times this voucher can be used before it expires.")
-            @Min(1) int usageLimit,
-            @Schema(example = "30", nullable = true, description = "Days from issue until the voucher expires.")
-            Integer validityDays,
-            @ArraySchema(
-                    arraySchema = @Schema(
-                            nullable = true,
-                            description = "Shop IDs where this voucher can be redeemed. Null or empty = every " +
-                                          "shop under the merchant (or every shop in the tenant for tenant-wide " +
-                                          "templates)."),
-                    schema = @Schema(type = "string", format = "uuid",
-                            example = "11111111-aaaa-bbbb-cccc-222222222222"))
-            List<UUID> applicableOutlets
-    ) {}
-
     public record IssueVoucherRequest(
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
             UUID merchantId,
-            @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890", description = "Template to issue from.")
-            @NotNull UUID templateId,
-            @Schema(example = "5.0000", nullable = true,
-                    description = "Per-issuance face value (e.g. 5 for $5 off, 10 for 10% off). Required for " +
-                                  "AMOUNT and PERCENT value-types; ignored for FREE_ITEM / COMBO. The " +
-                                  "value is snapshotted onto the issued voucher and cannot be changed.")
-            BigDecimal value,
+            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE", "MULTI_USE"},
+                    description = "Defaults to SINGLE_USE. MULTI_USE requires usageLimit >= 2.")
+            Voucher.VoucherType voucherType,
+            @Schema(example = "5.0000",
+                    description = "The voucher's money face value — always an AMOUNT in `currency`. " +
+                                  "Snapshotted onto the issued voucher and cannot be changed.")
+            @NotNull @Positive BigDecimal value,
+            @Schema(example = "USD", nullable = true,
+                    description = "ISO 4217 currency of the face value. Defaults to the merchant's currency. " +
+                                  "Must be on the cell's supported-currency allowlist and (for non-USD) have an " +
+                                  "in-force exchange rate, or the issue is refused.")
+            String currency,
+            @Schema(example = "3", nullable = true,
+                    description = "How many times the voucher can be redeemed. SINGLE_USE: omit or 1. " +
+                                  "MULTI_USE: required, >= 2.")
+            Integer usageLimit,
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
             @Schema(example = "Alice Moyo", nullable = true)
@@ -633,23 +638,26 @@ public class Dtos {
             @Schema(example = "SMS", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
             Voucher.DeliveryChannel deliveryChannel,
             @Schema(example = "WINTER_PROMO_2026", nullable = true, description = "Campaign tag for reporting.")
-            String campaignSource,
-            @Schema(example = "3", nullable = true, description = "Override the template's usageLimit for this issuance only.")
-            Integer usesOverride,
-            @Schema(example = "14", nullable = true, description = "Override the template's validityDays for this issuance only.")
-            Integer validityDaysOverride
+            String campaignSource
     ) {}
 
     public record BulkIssueRequest(
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
             UUID merchantId,
-            @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890")
-            @NotNull UUID templateId,
-            @Schema(example = "5.0000", nullable = true,
-                    description = "Per-voucher face value applied to every voucher in the batch. Required " +
-                                  "for AMOUNT and PERCENT value-types; ignored for FREE_ITEM / COMBO.")
-            BigDecimal value,
+            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE", "MULTI_USE"},
+                    description = "Applied to every voucher in the batch. Defaults to SINGLE_USE.")
+            Voucher.VoucherType voucherType,
+            @Schema(example = "5.0000",
+                    description = "Per-voucher money face value applied to every voucher in the batch.")
+            @NotNull @Positive BigDecimal value,
+            @Schema(example = "USD", nullable = true,
+                    description = "ISO 4217 currency of the face value. Defaults to the merchant's currency; " +
+                                  "allowlist-validated, fail closed.")
+            String currency,
+            @Schema(example = "3", nullable = true,
+                    description = "Per-voucher usage limit. SINGLE_USE: omit or 1. MULTI_USE: required, >= 2.")
+            Integer usageLimit,
             @Schema(example = "100", description = "Number of vouchers to generate.")
             @Min(1) int quantity,
             @Schema(example = "WINTER_PROMO_2026", nullable = true)
@@ -659,18 +667,19 @@ public class Dtos {
     ) {}
 
     public record VoucherResponse(UUID id, String code, String status,
-                                  UUID templateId, UUID assignedUserId,
+                                  // SINGLE_USE or MULTI_USE (V45). Null only on legacy rows the
+                                  // migration backfill could not resolve.
+                                  String voucherType,
+                                  UUID assignedUserId,
                                   String assigneePhone, int usesRemaining,
-                                  // value snapshot — copied from the template at issuance time and frozen.
-                                  // valueType={AMOUNT, PERCENT, FREE_ITEM, COMBO} tells the client how to
-                                  // render `value` (currency-formatted amount, percent off, etc.).
-                                  String valueType, BigDecimal value, String currency,
+                                  // The voucher's money face value, frozen at issuance. Always an
+                                  // AMOUNT in `currency` — value types are retired (V45).
+                                  BigDecimal value, String currency,
                                   Instant issuedAt, Instant expiresAt,
-                                  // Multi-currency liability (additive, V38): the USD worth of `value`,
-                                  // frozen at the rate in force when the voucher was ISSUED. Null when
-                                  // there is no money figure to convert — a PERCENT/FREE_ITEM/COMBO
-                                  // voucher, or a pre-V38 row — never zero. Display uses `value` +
-                                  // `currency`; this is for liability reporting, not the customer.
+                                  // Multi-currency liability (V38): the USD worth of `value`, frozen
+                                  // at the rate in force when the voucher was ISSUED. Null only on
+                                  // legacy non-AMOUNT / pre-V38 rows — never zero. Display uses
+                                  // `value` + `currency`; this is for liability reporting.
                                   BigDecimal baseValue) {}
 
     /**
@@ -714,7 +723,7 @@ public class Dtos {
     ) {}
 
     public record RedemptionResponse(UUID redemptionId, UUID voucherId, String status,
-                                     int usesRemaining, BigDecimal value, String valueType,
+                                     int usesRemaining, BigDecimal value,
                                      Instant redeemedAt) {}
 
     public record QrIssueRequest(

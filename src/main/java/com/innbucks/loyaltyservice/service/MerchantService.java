@@ -114,7 +114,8 @@ public class MerchantService {
                 null, null,                       // no start/end window at onboarding
                 o.minTransactionAmount(),
                 o.feeIssued(),
-                o.feeRedeemed());
+                o.feeRedeemed(),
+                o.voucherValidityDays());
         // The merchant was just created in this transaction, so the
         // requireMerchant round-trip createRule would do is redundant here.
         return rules.save(RuleAdminService.build(tenantId, merchantId, asRule,

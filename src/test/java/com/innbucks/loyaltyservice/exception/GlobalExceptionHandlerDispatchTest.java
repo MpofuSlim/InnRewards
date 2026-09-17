@@ -19,27 +19,29 @@ import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * A request parameter the client spelled wrong is a 400, not a 500.
+ * A request the client got wrong gets a 4xx, not a 500.
  *
  * <p>This is about the RESOLVER CHAIN, not about any one endpoint, which is why
  * it runs against a stub controller: {@code @ExceptionHandler} methods are
  * consulted before Spring's {@code DefaultHandlerExceptionResolver}, so
  * {@link GlobalExceptionHandler}'s {@code Exception} catch-all was shadowing
- * Spring's own 400 for {@code MethodArgumentTypeMismatchException} and every
- * unconvertible parameter came back as "Something went wrong on our end. Please
- * try again." — a message that invites a retry which cannot succeed, on an
- * endpoint that was working fine. Asserting the handler in isolation (as
+ * Spring's own status mapping for a whole family of standard MVC exceptions.
+ * Every one of them — a mistyped parameter, a blank one, an absent one, the
+ * wrong HTTP verb — came back as "Something went wrong on our end. Please try
+ * again.", a message that invites a retry which cannot succeed, on an endpoint
+ * that was working fine. Asserting the handler in isolation (as
  * {@link GlobalExceptionHandlerTest} does) cannot catch that: the bug was in
  * which handler Spring picks, so the test has to go through Spring's dispatch.
  *
  * <p>It also pins the V48 status alias end-to-end, through real parameter
  * binding rather than a direct call on the converter.
  */
-class GlobalExceptionHandlerParameterBindingTest {
+class GlobalExceptionHandlerDispatchTest {
 
     /**
      * Stands in for the seven real endpoints that take a {@code Voucher.Status}
@@ -58,6 +60,11 @@ class GlobalExceptionHandlerParameterBindingTest {
         @GetMapping("/probe/vouchers/{id}")
         String byId(@PathVariable("id") UUID id) {
             return id.toString();
+        }
+
+        @GetMapping("/probe/required")
+        String required(@RequestParam("since") String since) {
+            return since;
         }
     }
 
@@ -106,6 +113,35 @@ class GlobalExceptionHandlerParameterBindingTest {
     }
 
     @Test
+    void aBlankStatusIs400_andSaysWhatToDoAboutIt() throws Exception {
+        // A filter UI's "All" tab naturally sends `?status=`, and this was a
+        // 500 — measured, and NOT caused by the converter: an empty string
+        // converts to null on both the default and the custom path (Spring's
+        // enum converter factory returns null outright; TypeConverterDelegate
+        // reaches the same answer for ours by catching the refusal and applying
+        // its empty-enum-identifier rule), and
+        // RequestParamMethodArgumentResolver then rejects a required parameter
+        // that is "present but converted to null". A different exception type
+        // from the unknown-value case above, hence a second handler.
+        mvc.perform(get("/probe/vouchers").param("status", ""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400 BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value(
+                        "Parameter 'status' was sent with no value. "
+                                + "Give it a value, or omit the parameter entirely."))
+                .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    void anAbsentRequiredParameterIs400_withADifferentMessageToABlankOne() throws Exception {
+        // The two need different fixes — send it, versus stop sending it empty —
+        // so they must not collapse into one message.
+        mvc.perform(get("/probe/required"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Required parameter 'since' is missing."));
+    }
+
+    @Test
     void theRejectedValueIsNotEchoedBack() throws Exception {
         // It is caller-controlled, so reflecting it into the response body is a
         // gift to anyone probing for one.
@@ -113,6 +149,20 @@ class GlobalExceptionHandlerParameterBindingTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("script"))));
+    }
+
+    @Test
+    void theWrongMethodIs405_andSaysWhichMethodsAreAllowed() throws Exception {
+        // The path exists, the verb does not. `Allow` is the load-bearing half:
+        // a 405 without it tells the caller they were wrong but never what
+        // would be right, and it is what an HTTP client or generated SDK reads.
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/probe/vouchers"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", "GET"))
+                .andExpect(jsonPath("$.code").value("405 METHOD_NOT_ALLOWED"))
+                .andExpect(jsonPath("$.message").value(
+                        "That HTTP method isn't supported on this path. Allowed: GET."));
     }
 
     @Test

@@ -162,6 +162,88 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * A required request parameter that is absent — or, the case that actually
+     * reaches us from a browser, PRESENT BUT BLANK. Both are 400s that the
+     * {@code Exception} catch-all was answering with a 500, for the same
+     * resolver-ordering reason as the handler above.
+     *
+     * <p>The blank case is the one worth knowing about, because it is not a
+     * developer typo: an enum-typed parameter converts an empty string to
+     * {@code null} (Spring's own converter factory does this, and so does the
+     * fallback in {@code TypeConverterDelegate} when a custom converter
+     * refuses), and {@code RequestParamMethodArgumentResolver} then rejects a
+     * required parameter that "is present but converted to null". So a console
+     * sending {@code ?status=} for an "All" tab — a natural thing for a filter
+     * UI to do — got a 500. `VoucherStatusConverter` is NOT the cause; the
+     * default binder produced the identical exception before it existed.
+     *
+     * <p>The two cases get different messages because they need different
+     * fixes: send the parameter, versus stop sending it empty.
+     */
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResult<Void>> handle(
+            org.springframework.web.bind.MissingServletRequestParameterException ex) {
+        String message = ex.isMissingAfterConversion()
+                ? "Parameter '" + ex.getParameterName() + "' was sent with no value. "
+                        + "Give it a value, or omit the parameter entirely."
+                : "Required parameter '" + ex.getParameterName() + "' is missing.";
+        log.warn("Missing request parameter name={} afterConversion={}",
+                ex.getParameterName(), ex.isMissingAfterConversion());
+        return ResponseEntity.badRequest().body(ApiResult.error(HttpStatus.BAD_REQUEST, message));
+    }
+
+    /**
+     * The rest of the request-binding family — a missing required header, cookie
+     * or matrix variable. Spring maps every one of them to 400; the catch-all
+     * was turning them into 500s. Nothing in {@code src/main} declares a
+     * {@code @RequestHeader} today (the tenant headers are read by
+     * {@code TenantContext}, which throws a typed {@link LoyaltyException}), so
+     * this has no live caller — it is here so the next one added is correct by
+     * default rather than by remembering. The message is generic because this
+     * type exposes no accessor for what was missing; the specific case worth a
+     * tailored message has its own handler above.
+     */
+    @ExceptionHandler(org.springframework.web.bind.ServletRequestBindingException.class)
+    public ResponseEntity<ApiResult<Void>> handle(
+            org.springframework.web.bind.ServletRequestBindingException ex) {
+        log.warn("Request binding failed: {}", ex.getMessage());
+        return ResponseEntity.badRequest().body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                "The request is missing something it requires. Check the required headers and parameters."));
+    }
+
+    /**
+     * The path exists but not for that verb — a {@code POST} to a read-only
+     * endpoint. The last member of the shadowed-by-the-catch-all family, and a
+     * 500 for the same reason as the three above it.
+     *
+     * <p>The {@code Allow} header is the load-bearing half: a 405 without it
+     * tells the caller only that they were wrong, never what would be right,
+     * and it is what an HTTP client or a generated SDK actually reads. It is
+     * set from OUR mapping, so nothing caller-supplied reaches the response —
+     * the attempted method is a caller-controlled token and is deliberately
+     * neither echoed in the body nor named in the message. An empty or absent
+     * supported set emits no header rather than a blank one.
+     */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResult<Void>> handle(
+            org.springframework.web.HttpRequestMethodNotSupportedException ex) {
+        java.util.Set<org.springframework.http.HttpMethod> supported = ex.getSupportedHttpMethods();
+        log.warn("Method not allowed: supported={}", supported);
+
+        String message = supported == null || supported.isEmpty()
+                ? "That HTTP method isn't supported on this path."
+                : "That HTTP method isn't supported on this path. Allowed: "
+                        + supported.stream().map(org.springframework.http.HttpMethod::name).sorted()
+                                .collect(java.util.stream.Collectors.joining(", ")) + ".";
+
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        if (supported != null && !supported.isEmpty()) {
+            response.allow(supported.toArray(new org.springframework.http.HttpMethod[0]));
+        }
+        return response.body(ApiResult.error(HttpStatus.METHOD_NOT_ALLOWED, message));
+    }
+
+    /**
      * No route matched the request path (e.g. a removed or mistyped endpoint).
      * Spring raises NoResourceFoundException; without this it hits the Exception
      * catch-all and surfaces as a 500. A missing route is a client error → 404.

@@ -1104,8 +1104,25 @@ REVOKED`.
   `OUTSTANDING` filter, the expiring-soon query, `PublicTestController` — which
   is exactly why retiring one value touched twelve files. The two JPQL `IN`
   lists in `VoucherRepository` can't reference a constant and carry
-  change-together NOTEs instead; `ReportingService.OUTSTANDING` is
+  change-together NOTEs instead — and `VoucherLiveStatusJpqlTest` turns those
+  notes into an enforced invariant, reading the status names straight off the
+  two `@Query` annotations and failing on the commit that changes the constant
+  without them. That matters because a stale list there fails at BOOT (Spring
+  Data validates a declared `@Query` when the repository bean is created), which
+  in this repo is only reachable from a Docker-backed `@SpringBootTest` and so
+  only in CI — and a list left merely *wrong* rather than unparseable boots fine
+  and silently returns the wrong rows. `ReportingService.OUTSTANDING` is
   `EnumSet.copyOf(LIVE_STATUSES)`, derived rather than restated.
+- **`LIVE_STATUSES` is NOT the transfer guard, and must not become it.**
+  Transfer eligibility (`VoucherService.transfer`) is deliberately narrower —
+  `ISSUED` or `VIEWED` only, excluding `PARTIALLY_USED` — because transferring a
+  part-used voucher would split one voucher's value across two holders. "Is this
+  voucher outstanding" and "may this voucher change hands" are different
+  questions; the invitation to unify them is the one real trap this cleanup
+  created. Pinned by `VoucherTransferTest.aPartiallyUsedVoucher_cannotBeTransferred`.
+  Same shape one level down: `markViewed`'s `if (status == ISSUED)` now reads
+  like a tautology with only one pre-view status left, but it is what stops a
+  `PARTIALLY_USED` voucher being downgraded to `VIEWED` by a later view event.
 - **`markDelivered(UUID)` is deleted.** It had no endpoint and no caller —
   nothing ever promoted a voucher to DELIVERED after the fact, which is part of
   why the status could only ever mean "we tried".
@@ -1144,8 +1161,23 @@ could never succeed.
   reflected into the body) and the conversion cause is logged, not returned —
   the narrow, type-bound version of the `IllegalArgumentException` handler this
   file's catch-all notes as removed for leaking library messages.
+- **A BLANK value was a 500 by a second, separate route, and that one has a real
+  client trigger.** `?status=` (a filter UI's "All" tab — a natural thing for a
+  console to send) does not reach the handler above at all: an empty string
+  converts to `null` for an enum target on BOTH paths — Spring's converter
+  factory returns null outright, and `TypeConverterDelegate` reaches the same
+  answer for a custom converter by catching its refusal and applying its
+  empty-enum-identifier rule — and then
+  `RequestParamMethodArgumentResolver` rejects a required parameter that *"is
+  present but converted to null"* with `MissingServletRequestParameterException`.
+  Also now a 400, with a message distinguishing **blank** from **absent**,
+  because the two need different fixes. **`VoucherStatusConverter` is not the
+  cause and returning null for blank would not help** — the default binder
+  produced the identical exception before the converter existed; it would only
+  make an unknown value and a blank one behave alike. Pinned by
+  `aBlankStatusIs400_andSaysWhatToDoAboutIt`.
 - **This class of bug is invisible to a unit test of the handler**: the defect
-  was in *which* handler Spring picks. `GlobalExceptionHandlerParameterBindingTest`
+  was in *which* handler Spring picks. `GlobalExceptionHandlerDispatchTest`
   therefore goes through real dispatch (standalone MockMvc + the advice), and it
   is the pattern to copy — it fails with `expected:<400> but was:<500>` the
   moment the handler is removed, which is how the 500 was confirmed rather than
@@ -1154,15 +1186,25 @@ could never succeed.
   (`ResponseStatusException`, `HttpMessageNotReadableException`,
   `NoResourceFoundException`). Treat the catch-all as *hostile to Spring's
   defaults*: when adding an endpoint whose failure mode is a standard Spring MVC
-  exception, check there is a handler for it, or it will 500. **Three more are
-  still shadowed and still answer 500** — measured the same way, left out of
-  V48's scope deliberately rather than undiscovered:
-  a **missing** required `@RequestParam` (should be 400; live on the 9 endpoints
-  that declare one), a missing required `@RequestHeader` (should be 400; **no
-  live exposure** — nothing in `src/main` uses `@RequestHeader`, the tenant
-  headers are read by `TenantContext`, which throws a proper `LoyaltyException`),
-  and a **wrong HTTP method** on a real path (should be 405; live everywhere).
-  Each is one more `@ExceptionHandler` of the same shape.
+  exception, check there is a handler for it, or it will 500.
+- **The whole shadowed family is now mapped**, each measured at 500 first and
+  each with a handler carrying its own rationale comment: a mistyped parameter
+  or path variable (400), a blank or absent required parameter (400), the rest
+  of the request-binding family via `ServletRequestBindingException` — missing
+  header, cookie, matrix variable (400; no live caller, since nothing in
+  `src/main` declares a `@RequestHeader`, so it is there to make the next one
+  correct by default), and **the wrong HTTP verb on a real path (405)**. The
+  405 sets `Allow` from OUR mapping, because a 405 without it tells the caller
+  they were wrong and never what would be right; the attempted method is a
+  caller-controlled token and is deliberately neither echoed nor named.
+- **The durable rule, which outlives this list: treat that catch-all as hostile
+  to Spring's defaults.** It is a `@RestControllerAdvice`, and the
+  `@ExceptionHandler` resolver runs before `DefaultHandlerExceptionResolver`, so
+  every standard Spring MVC exception without its own handler here becomes a 500
+  no matter what Spring would have returned. When you add an endpoint whose
+  failure mode is one of those, check for a handler — and add the test to
+  `GlobalExceptionHandlerDispatchTest`, not to the unit test, because the defect
+  is never in the handler's body.
 
 ## Cryptography & key management (OWASP A02)
 

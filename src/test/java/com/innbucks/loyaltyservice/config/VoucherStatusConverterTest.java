@@ -67,7 +67,7 @@ class VoucherStatusConverterTest {
         // the same way and a rejection looks identical with or without this
         // class. What that rejection BECOMES on the wire is
         // GlobalExceptionHandler's business, and is pinned separately by
-        // GlobalExceptionHandlerParameterBindingTest (a 400 — it was an opaque
+        // GlobalExceptionHandlerDispatchTest (a 400 — it was an opaque
         // 500 until this change).
         assertThatThrownBy(() -> converter.convert("BOGUS"))
                 .isInstanceOf(IllegalArgumentException.class);

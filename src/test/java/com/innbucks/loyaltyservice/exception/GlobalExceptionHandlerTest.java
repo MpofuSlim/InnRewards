@@ -97,7 +97,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void unconvertibleParameter_withNoKnownTargetType_stillNamesTheParameter() {
         // The enum branch (accepted-values list) and the end-to-end resolver
-        // behaviour are pinned by GlobalExceptionHandlerParameterBindingTest.
+        // behaviour are pinned by GlobalExceptionHandlerDispatchTest.
         // What only a unit test reaches is a null requiredType: Spring declares
         // it @Nullable, so the message builder must not assume a type is known.
         var ex = org.mockito.Mockito.mock(

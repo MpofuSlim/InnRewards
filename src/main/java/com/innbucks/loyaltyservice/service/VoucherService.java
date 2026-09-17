@@ -375,6 +375,9 @@ public class VoucherService {
             requireCallerMayViewVoucher(v);
             if (v.getViewedAt() == null) {
                 v.setViewedAt(Instant.now());
+                // Reads like a tautology since V48 left ISSUED as the only
+                // pre-view status, and is not: it stops a PARTIALLY_USED
+                // voucher being DOWNGRADED to VIEWED by a later view event.
                 if (v.getStatus() == Voucher.Status.ISSUED) {
                     v.setStatus(Voucher.Status.VIEWED);
                 }

@@ -59,6 +59,11 @@ class GlobalExceptionHandlerParameterBindingTest {
         String byId(@PathVariable("id") UUID id) {
             return id.toString();
         }
+
+        @GetMapping("/probe/required")
+        String required(@RequestParam("since") String since) {
+            return since;
+        }
     }
 
     private MockMvc mvc;
@@ -103,6 +108,35 @@ class GlobalExceptionHandlerParameterBindingTest {
                         "Invalid value for 'status'. Accepted values: "
                                 + "ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED."))
                 .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    void aBlankStatusIs400_andSaysWhatToDoAboutIt() throws Exception {
+        // A filter UI's "All" tab naturally sends `?status=`, and this was a
+        // 500 — measured, and NOT caused by the converter: an empty string
+        // converts to null on both the default and the custom path (Spring's
+        // enum converter factory returns null outright; TypeConverterDelegate
+        // reaches the same answer for ours by catching the refusal and applying
+        // its empty-enum-identifier rule), and
+        // RequestParamMethodArgumentResolver then rejects a required parameter
+        // that is "present but converted to null". A different exception type
+        // from the unknown-value case above, hence a second handler.
+        mvc.perform(get("/probe/vouchers").param("status", ""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400 BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value(
+                        "Parameter 'status' was sent with no value. "
+                                + "Give it a value, or omit the parameter entirely."))
+                .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    void anAbsentRequiredParameterIs400_withADifferentMessageToABlankOne() throws Exception {
+        // The two need different fixes — send it, versus stop sending it empty —
+        // so they must not collapse into one message.
+        mvc.perform(get("/probe/required"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Required parameter 'since' is missing."));
     }
 
     @Test

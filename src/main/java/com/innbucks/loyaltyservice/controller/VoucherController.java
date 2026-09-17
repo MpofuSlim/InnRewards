@@ -57,6 +57,10 @@ public class VoucherController {
                           "The caller must administer the issuing merchant (SUPER_ADMIN exempt; SHOP_ADMIN " +
                           "is pinned to the merchant in their JWT). Optionally assign it to a known " +
                           "LoyaltyUser (`assignedUserId`) or to an arbitrary phone (`assigneePhone`). " +
+                          "Optionally name the SENDER (`senderName` + `senderPhone`, V46): the recipient's " +
+                          "message then reads as a personal gift (\"Tawanda Mpofu sent you an InnBucks " +
+                          "voucher\") and the sender's phone gets its own WhatsApp/SMS confirmation copy — " +
+                          "senderPhone defaults to the issuing caller's JWT phone when omitted. " +
                           "Returns the signed voucher code the customer presents at redemption. Delivery " +
                           "channel (SMS, WhatsApp, EMAIL, PUSH, POS, NONE) controls how NotificationGateway " +
                           "notifies the customer.")
@@ -78,6 +82,8 @@ public class VoucherController {
                                         "voucherType": "SINGLE_USE",
                                         "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                         "assigneePhone": "+263771234567",
+                                        "senderName": "Tawanda Mpofu",
+                                        "senderPhone": "+263782608767",
                                         "usesRemaining": 1,
                                         "value": 5.0000,
                                         "currency": "USD",
@@ -627,6 +633,8 @@ public class VoucherController {
                                             "voucherType": "SINGLE_USE",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                             "assigneePhone": "+263771234567",
+                                            "senderName": "Tawanda Mpofu",
+                                            "senderPhone": "+263782608767",
                                             "usesRemaining": 1,
                                             "value": 5.0000,
                                             "currency": "USD",

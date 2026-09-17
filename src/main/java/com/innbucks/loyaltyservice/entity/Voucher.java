@@ -78,6 +78,19 @@ public class Voucher {
     @Column(name = "assignee_name", length = 200)
     private String assigneeName;
 
+    // Sender identity (V46) — who the voucher is FROM, as it should read to the
+    // recipient ("Tawanda Mpofu sent you a voucher"). Presentation facts, not
+    // audit: the issuer_* columns below record who performed the API call (JWT,
+    // never the body), while these may name a customer a staff member issued on
+    // behalf of. Name is caller-supplied and HTML-stripped; phone defaults to
+    // the issuing caller's own JWT phone. Both null on bulk/campaign stock and
+    // pre-V46 rows.
+    @Column(name = "sender_name", length = 200)
+    private String senderName;
+
+    @Column(name = "sender_phone", length = 32)
+    private String senderPhone;
+
     // Who issued this voucher — captured at issue time from the authenticated
     // caller's JWT so reports can show a real issuer number (E.164) alongside
     // the receiver. All nullable: internal/system issuance and pre-migration

@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V45**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V46**; never edit an applied
 migration — add the next version.
 
 ## Registration is a property of the PHONE (V40)
@@ -983,6 +983,25 @@ path back.**
   report/CSV column `valueType` became `voucherType`. `MerchantRuleOverride`
   and `RuleRequest` gained `voucherValidityDays` (back-compat constructors for
   the old arities exist on both).
+- **Sender identity (V46): a voucher knows who it is FROM, and both parties are
+  messaged.** `IssueVoucherRequest` gained optional `senderName` + `senderPhone`
+  (back-compat constructor for the pre-V46 arity); both are stamped on
+  `vouchers.sender_name` / `sender_phone` and surface on `VoucherResponse`.
+  These are PRESENTATION facts, distinct from the `issuer_*` audit columns
+  (always from the JWT, never the body) — a staff member issuing on a
+  customer's behalf makes the two differ legitimately. `senderPhone` defaults
+  to the issuing caller's own JWT phone, resolved in `issue()` — NOT in
+  `createVoucher` — so bulk stock stays sender-less (a per-voucher sender copy
+  would message one phone `quantity` times). A named sender turns the
+  recipient's message into "Tawanda Mpofu sent you an InnBucks voucher …", and
+  `NotificationGateway.deliverSenderCopy` sends the sender their own
+  WhatsApp-first/SMS-fallback confirmation (recipient name + number + the
+  code — no new disclosure at issue: the issuer already holds the code in the
+  API response). **Issue-path ONLY, never transfer** — transfer rotates the
+  code away from the sender by design, and a sender copy there would hand the
+  rotation right back; transfer keeps its code-less `notifyVoucherSent`.
+  Skipped when sender == recipient phone (one message, not two). Pinned by
+  `VoucherSenderIdentityTest` + the sender cases in `NotificationGatewayTest`.
 
 ## Cryptography & key management (OWASP A02)
 

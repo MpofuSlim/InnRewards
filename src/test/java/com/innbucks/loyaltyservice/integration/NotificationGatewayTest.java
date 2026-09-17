@@ -95,4 +95,78 @@ class NotificationGatewayTest {
         // "USD 5 off" (value) and the expiry date both surface in the copy.
         verify(whatsApp).sendCustomNotification(eq(PHONE), contains("off"));
     }
+
+    // ------------------------------------------------------------------
+    // Sender identity (V46) — the recipient's message names the giver, and
+    // the sender's phone gets its own confirmation copy.
+    // ------------------------------------------------------------------
+
+    private Voucher giftedVoucher(Voucher.DeliveryChannel channel) {
+        Voucher v = voucher(channel);
+        v.setAssigneeName("Sedrick Nyanyiwa");
+        v.setAssigneePhone("+263786546765");
+        v.setSenderName("Tawanda Mpofu");
+        v.setSenderPhone("+263782608767");
+        return v;
+    }
+
+    @Test
+    void recipientMessage_namesTheSender_whenPresent() {
+        gateway.deliver(giftedVoucher(Voucher.DeliveryChannel.WHATSAPP), PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("Tawanda Mpofu sent you an InnBucks voucher"));
+    }
+
+    @Test
+    void recipientMessage_withoutASender_keepsThePlatformCopy() {
+        gateway.deliver(voucher(Voucher.DeliveryChannel.WHATSAPP), PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("your InnBucks voucher is ready"));
+    }
+
+    @Test
+    void senderCopy_whatsAppPrimary_namesTheRecipientAndCarriesTheCode() {
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        gateway.deliverSenderCopy(v, v.getSenderPhone());
+
+        verify(whatsApp).sendCustomNotification(eq("+263782608767"),
+                contains("Sedrick Nyanyiwa (+263786546765)"));
+        verify(whatsApp).sendCustomNotification(eq("+263782608767"),
+                contains("VCH-AB12CD34"));
+        verify(sms, never()).sendSms(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void senderCopy_whatsAppFails_fallsBackToSms_withSenderRef() {
+        doThrow(new RuntimeException("wa down"))
+                .when(whatsApp).sendCustomNotification(anyString(), anyString());
+
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        gateway.deliverSenderCopy(v, v.getSenderPhone());
+
+        verify(sms).sendSms(eq("+263782608767"), contains("VCH-AB12CD34"),
+                startsWith("VOUCHER-SENDER-"));
+    }
+
+    @Test
+    void senderCopy_channelNoneOrBlankPhone_isNoOp() {
+        gateway.deliverSenderCopy(giftedVoucher(Voucher.DeliveryChannel.NONE), "+263782608767");
+        gateway.deliverSenderCopy(giftedVoucher(Voucher.DeliveryChannel.WHATSAPP), null);
+        gateway.deliverSenderCopy(giftedVoucher(Voucher.DeliveryChannel.WHATSAPP), "  ");
+        verifyNoInteractions(whatsApp, sms);
+    }
+
+    @Test
+    void senderCopy_bothChannelsFail_doesNotThrow() {
+        doThrow(new RuntimeException("wa down"))
+                .when(whatsApp).sendCustomNotification(anyString(), anyString());
+        doThrow(new RuntimeException("sms down"))
+                .when(sms).sendSms(anyString(), anyString(), anyString());
+
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        assertThatCode(() -> gateway.deliverSenderCopy(v, v.getSenderPhone()))
+                .doesNotThrowAnyException();
+    }
 }

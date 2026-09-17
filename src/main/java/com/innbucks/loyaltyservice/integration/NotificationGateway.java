@@ -109,11 +109,58 @@ public class NotificationGateway {
         }
     }
 
+    /**
+     * The sender's own confirmation copy of an issued voucher (V46) — the
+     * "both get the WhatsApp messages" half. Same channel order (WhatsApp
+     * first, SMS fallback), same {@code NONE}/blank-phone no-op and same
+     * best-effort contract as {@link #deliver}. Includes the code: at issue
+     * time the sender is the party who minted it and already holds it in the
+     * API response, so nothing new is disclosed. <b>Issue-path only</b> — the
+     * transfer path rotates the code away from the sender by design, and a
+     * copy there would hand the rotation right back.
+     */
+    @Async("notificationExecutor")
+    public void deliverSenderCopy(Voucher voucher, String senderPhone) {
+        Voucher.DeliveryChannel channel = voucher.getDeliveryChannel();
+        if (channel == null || channel == Voucher.DeliveryChannel.NONE) {
+            return;
+        }
+        if (senderPhone == null || senderPhone.isBlank()) {
+            return;
+        }
+        String message = buildSenderCopyMessage(voucher);
+        String ref = "VOUCHER-SENDER-" + voucher.getId();
+        try {
+            whatsApp.sendCustomNotification(senderPhone, message);
+            log.info("Voucher id={} sender copy delivered via WhatsApp -> {}",
+                    voucher.getId(), MsisdnMasking.mask(senderPhone));
+            return;
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} sender-copy WhatsApp delivery failed for {}, falling back to SMS: {}",
+                    voucher.getId(), MsisdnMasking.mask(senderPhone), e.getMessage());
+        }
+        try {
+            sms.sendSms(senderPhone, message, ref);
+            log.info("Voucher id={} sender copy delivered via SMS -> {}",
+                    voucher.getId(), MsisdnMasking.mask(senderPhone));
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} sender copy failed on both channels for {} (voucher unaffected): {}",
+                    voucher.getId(), MsisdnMasking.mask(senderPhone), e.getMessage());
+        }
+    }
+
     private String buildMessage(Voucher voucher) {
         String name = (voucher.getAssigneeName() != null && !voucher.getAssigneeName().isBlank())
                 ? voucher.getAssigneeName() : "there";
-        StringBuilder sb = new StringBuilder("Hi ").append(name)
-                .append(", your InnBucks voucher is ready. Code ").append(voucher.getCode());
+        StringBuilder sb = new StringBuilder("Hi ").append(name).append(", ");
+        // A named sender turns the platform's notification into a personal
+        // gift: "Tawanda Mpofu sent you an InnBucks voucher" (V46).
+        if (voucher.getSenderName() != null && !voucher.getSenderName().isBlank()) {
+            sb.append(voucher.getSenderName()).append(" sent you an InnBucks voucher. Code ");
+        } else {
+            sb.append("your InnBucks voucher is ready. Code ");
+        }
+        sb.append(voucher.getCode());
         String worth = describeValue(voucher);
         if (worth != null) {
             sb.append(" (").append(worth).append(")");
@@ -123,6 +170,42 @@ public class NotificationGateway {
             sb.append(" Valid until ").append(EXPIRY_FMT.format(voucher.getExpiresAt())).append(".");
         }
         sb.append(" Show this code at checkout to redeem.");
+        return sb.toString();
+    }
+
+    /**
+     * "Hi Tawanda Mpofu, your InnBucks voucher for Sedrick Nyanyiwa
+     * (+263786546765) has been sent. Code ABC123 (USD 5 off). Valid until
+     * 17 Sep 2027." The recipient's full number is fine in the MESSAGE — the
+     * sender typed it — but never in logs, which stay masked.
+     */
+    private String buildSenderCopyMessage(Voucher voucher) {
+        StringBuilder sb = new StringBuilder("Hi ");
+        sb.append(voucher.getSenderName() != null && !voucher.getSenderName().isBlank()
+                ? voucher.getSenderName() : "there");
+        sb.append(", your InnBucks voucher");
+        boolean hasName = voucher.getAssigneeName() != null && !voucher.getAssigneeName().isBlank();
+        boolean hasPhone = voucher.getAssigneePhone() != null && !voucher.getAssigneePhone().isBlank();
+        if (hasName || hasPhone) {
+            sb.append(" for ");
+            if (hasName) {
+                sb.append(voucher.getAssigneeName());
+                if (hasPhone) {
+                    sb.append(" (").append(voucher.getAssigneePhone()).append(")");
+                }
+            } else {
+                sb.append(voucher.getAssigneePhone());
+            }
+        }
+        sb.append(" has been sent. Code ").append(voucher.getCode());
+        String worth = describeValue(voucher);
+        if (worth != null) {
+            sb.append(" (").append(worth).append(")");
+        }
+        sb.append(".");
+        if (voucher.getExpiresAt() != null) {
+            sb.append(" Valid until ").append(EXPIRY_FMT.format(voucher.getExpiresAt())).append(".");
+        }
         return sb.toString();
     }
 

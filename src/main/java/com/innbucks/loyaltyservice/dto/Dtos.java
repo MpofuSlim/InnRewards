@@ -635,11 +635,31 @@ public class Dtos {
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
                     description = "Loyalty user ID of the recipient. Takes priority over assigneePhone.")
             UUID assignedUserId,
+            @Schema(example = "Tawanda Mpofu", nullable = true,
+                    description = "Display name of the person the voucher is FROM (V46). Shown to the " +
+                                  "recipient (\"Tawanda Mpofu sent you a voucher\") and echoed back on the " +
+                                  "voucher. Presentation only — never an identity claim.")
+            @Size(max = 200) String senderName,
+            @Schema(example = "+263782608767", nullable = true,
+                    description = "Sender's phone (V46). Receives a WhatsApp/SMS confirmation of the " +
+                                  "voucher, including the code. Defaults to the issuing caller's own " +
+                                  "JWT phone when omitted.")
+            @Size(max = 32) String senderPhone,
             @Schema(example = "SMS", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
             Voucher.DeliveryChannel deliveryChannel,
             @Schema(example = "WINTER_PROMO_2026", nullable = true, description = "Campaign tag for reporting.")
             String campaignSource
-    ) {}
+    ) {
+        /** Back-compat for callers built against the pre-V46 (no sender) shape. */
+        public IssueVoucherRequest(UUID merchantId, Voucher.VoucherType voucherType,
+                                   BigDecimal value, String currency, Integer usageLimit,
+                                   String assigneePhone, String assigneeName, UUID assignedUserId,
+                                   Voucher.DeliveryChannel deliveryChannel, String campaignSource) {
+            this(merchantId, voucherType, value, currency, usageLimit,
+                    assigneePhone, assigneeName, assignedUserId,
+                    null, null, deliveryChannel, campaignSource);
+        }
+    }
 
     public record BulkIssueRequest(
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
@@ -671,7 +691,11 @@ public class Dtos {
                                   // migration backfill could not resolve.
                                   String voucherType,
                                   UUID assignedUserId,
-                                  String assigneePhone, int usesRemaining,
+                                  String assigneePhone,
+                                  // Who the voucher is FROM (V46) — display identity for the wallet
+                                  // ("From Tawanda Mpofu"). Both null on bulk stock and pre-V46 rows.
+                                  String senderName, String senderPhone,
+                                  int usesRemaining,
                                   // The voucher's money face value, frozen at issuance. Always an
                                   // AMOUNT in `currency` — value types are retired (V45).
                                   BigDecimal value, String currency,

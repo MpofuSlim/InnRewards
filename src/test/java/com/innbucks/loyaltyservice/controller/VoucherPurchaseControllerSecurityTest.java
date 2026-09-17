@@ -36,10 +36,14 @@ class VoucherPurchaseControllerSecurityTest extends ControllerSecurityTestBase {
     void post_purchase_as_customer_returns_403() throws Exception {
         String customerToken = TestJwtFactory.builder("customer@test.local")
                 .role("CUSTOMER").phoneNumber("+263770000111").sign(jwtSecret);
+        // The body must pass bean validation: argument binding (@Valid) runs
+        // BEFORE method security, so an empty body would answer 400 and never
+        // reach the @PreAuthorize this test exists to pin (the same ordering
+        // that bit the V45 security tests via a missing required param).
         mockMvc.perform(post("/loyalty/vouchers/purchase")
                         .header("Authorization", bearer(customerToken))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(EMPTY_JSON))
+                        .content("{\"value\": 5.00}"))
                 .andExpect(status().isForbidden());
     }
 

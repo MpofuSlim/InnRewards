@@ -203,9 +203,14 @@ public class PublicTestController {
     @PostConstruct
     void warnIfEnabled() {
         if (enabled) {
+            // Deliberately says nothing about the api-key: this class does not
+            // know whether one is configured, and the gate is opt-in. Asserting
+            // "behind an x-api-key" here would be a flat lie on an ungated cell,
+            // and a reassuring one. PublicTestProvisioningCheck knows, and emits
+            // the gated / UNGATED line — one source of truth for that question.
             log.warn("PUBLIC TEST endpoints are ENABLED (/loyalty/public/**). Reads AND WRITES against "
-                    + "customer wallets and vouchers are live on this cell behind an x-api-key, which "
-                    + "authenticates the APP and not the customer — a key holder can still spend any "
+                    + "customer wallets and vouchers are live on this cell, and the phone number in the "
+                    + "URL is the only identity — so whoever can reach these endpoints can spend any "
                     + "phone's points. This must NOT be a production cell.");
         }
     }

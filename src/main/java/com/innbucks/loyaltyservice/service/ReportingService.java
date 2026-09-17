@@ -165,10 +165,9 @@ public class ReportingService {
         long merchantCount = merchants.findByTenantId(tenantId).size();
         long activeCampaigns = campaigns.findByTenantId(tenantId).stream()
                 .filter(Campaign::isActive).count();
-        long outstanding = vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.ISSUED)
-                + vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.DELIVERED)
-                + vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.VIEWED)
-                + vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.PARTIALLY_USED);
+        long outstanding = Voucher.LIVE_STATUSES.stream()
+                .mapToLong(st -> vouchers.countByTenantIdAndStatus(tenantId, st))
+                .sum();
         long expired = vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.EXPIRED);
         // Points are GLOBAL per customer now (wallets aren't tenant-scoped), so a
         // tenant's outstanding points come from the ledger — net points it
@@ -395,9 +394,7 @@ public class ReportingService {
                 fraud.countByMerchantIdAndCreatedAtAfter(id, thirtyDaysAgo),
                 campaignLines.stream().filter(Dtos.CampaignLine::active).count(),
                 vouchers.countByMerchantIdAndExpiresAtBetweenAndStatusIn(id, now,
-                        now.plus(30, ChronoUnit.DAYS),
-                        List.of(Voucher.Status.ISSUED, Voucher.Status.DELIVERED,
-                                Voucher.Status.VIEWED, Voucher.Status.PARTIALLY_USED)));
+                        now.plus(30, ChronoUnit.DAYS), Voucher.LIVE_STATUSES));
 
         return new Dtos.MerchantFullReport(id, m.getTenantId(), m.getName(), m.getCategory(),
                 m.getCurrency(), m.getBillingCycle(), m.getStatus(), m.getAdminEmail(), m.getCreatedAt(),
@@ -658,9 +655,11 @@ public class ReportingService {
     // single-voucher, plus CSV export. See VoucherReportDtos.
     // ==================================================================
 
-    private static final Set<Voucher.Status> OUTSTANDING = EnumSet.of(
-            Voucher.Status.ISSUED, Voucher.Status.DELIVERED,
-            Voucher.Status.VIEWED, Voucher.Status.PARTIALLY_USED);
+    /** A Set view of {@link Voucher#LIVE_STATUSES} for the per-status
+     *  breakdown's {@code contains} check — derived, never restated, so the
+     *  outstanding figure here can't drift from the outstanding queries. */
+    private static final Set<Voucher.Status> OUTSTANDING =
+            EnumSet.copyOf(Voucher.LIVE_STATUSES);
 
     /** Platform-wide voucher report across every real tenant. The internal
      *  ticketing container tenant is excluded, matching the operator dashboard. */

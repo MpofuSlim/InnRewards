@@ -149,9 +149,7 @@ public class PublicTestController {
     private static final int MAX_PAGE_SIZE = 100;
     private static final int DEFAULT_PAGE_SIZE = 20;
 
-    private static final List<Voucher.Status> ACTIVE_VOUCHER_STATUSES = List.of(
-            Voucher.Status.ISSUED, Voucher.Status.DELIVERED,
-            Voucher.Status.VIEWED, Voucher.Status.PARTIALLY_USED);
+    private static final List<Voucher.Status> ACTIVE_VOUCHER_STATUSES = Voucher.LIVE_STATUSES;
 
     private final LoyaltyUserRepository users;
     private final WalletRepository wallets;
@@ -225,8 +223,7 @@ public class PublicTestController {
                     Total points and active-voucher count for the phone, aggregated across every tenant.
 
                     Points are GLOBAL per customer — one wallet keyed by phone — so this needs no tenant \
-                    at all. `totalVouchers` counts vouchers in ISSUED / DELIVERED / VIEWED / \
-                    PARTIALLY_USED.
+                    at all. `totalVouchers` counts vouchers in ISSUED / VIEWED / PARTIALLY_USED.
 
                     **Authenticated equivalent:** `GET /loyalty/users/me/wallet`.""")
     @ApiResponses({
@@ -302,7 +299,7 @@ public class PublicTestController {
     @GetMapping("/customers/{phoneNumber}/vouchers")
     @Operation(summary = "[TEST — no auth] Active vouchers for a customer, by phone number",
             description = """
-                    Vouchers in an active state (ISSUED / DELIVERED / VIEWED / PARTIALLY_USED) held by \
+                    Vouchers in an active state (ISSUED / VIEWED / PARTIALLY_USED) held by \
                     the phone, across every tenant.
 
                     `value` is always a money amount in `currency` (V45 — value types are retired; \
@@ -454,7 +451,7 @@ public class PublicTestController {
 
                     **A voucher can only be transferred ONCE** — a second attempt is refused with \
                     `VOUCHER_ALREADY_TRANSFERRED`. Only an unused, live voucher moves (ISSUED / \
-                    DELIVERED / VIEWED); PARTIALLY_USED and the terminal states are refused, as is an \
+                    VIEWED); PARTIALLY_USED and the terminal states are refused, as is an \
                     expired one. All of that is the production rule, running unchanged.
 
                     The tenant comes from the voucher row, so nothing needs pinning here.

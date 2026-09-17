@@ -170,6 +170,23 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * A client sent {@code status=DELIVERED} to a voucher endpoint — the status
+     * V48 merged into ISSUED. {@link VoucherStatusConverter} answers it as
+     * ISSUED rather than 400ing, and counts it here.
+     *
+     * <p>This meter exists to be watched to ZERO. While it increments, some
+     * client — today the operator console's old DELIVERED filter tab — is still
+     * asking for the retired status. Once it flatlines in production, the
+     * converter and this counter can both be deleted.
+     */
+    public void incLegacyVoucherStatusAlias() {
+        Counter.builder("loyalty.voucher.status.legacy_alias")
+                .description("Requests using the retired DELIVERED voucher status, served as ISSUED (V48)")
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Backlog validate-sweep checks (V44), tagged by outcome — {@code customer}
      * (registered), {@code not_customer} (left PENDING to age out normally),
      * {@code unavailable} (run aborted; upstream could not answer).

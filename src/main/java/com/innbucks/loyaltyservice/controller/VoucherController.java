@@ -383,7 +383,7 @@ public class VoucherController {
                     that circulates and can be sold on — the merchant is billed for issuing it and needs \
                     the link between who was given the incentive and who redeems it to survive.
 
-                    Only an **unused, live** voucher moves: `ISSUED`, `DELIVERED` or `VIEWED`. \
+                    Only an **unused, live** voucher moves: `ISSUED` or `VIEWED`. \
                     `PARTIALLY_USED` is refused along with the terminal states — the original holder has \
                     already consumed part of the value, and splitting the rest across two people makes the \
                     redemption trail ambiguous. An expired voucher is refused too.
@@ -605,7 +605,7 @@ public class VoucherController {
 
     @GetMapping("/users/by-phone/{phoneNumber}/active")
     @Operation(summary = "List a phone's active vouchers in the caller's tenant",
-            description = "Returns every voucher in an active state (ISSUED, DELIVERED, VIEWED, " +
+            description = "Returns every voucher in an active state (ISSUED, VIEWED, " +
                           "PARTIALLY_USED) attached to the given phone's LoyaltyUser **within the tenant on " +
                           "the request** (X-Tenant-Id required). Powers the SuperApp \"my vouchers\" wallet " +
                           "view. Results are strictly tenant-scoped — a phone that also holds vouchers under " +

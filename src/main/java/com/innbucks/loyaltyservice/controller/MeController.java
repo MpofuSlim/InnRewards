@@ -68,7 +68,7 @@ public class MeController {
             description = "Aggregates every LoyaltyUser projection matching the caller's phone into a single " +
                           "wallet view — totalPoints is the sum of all points balances (including PENDING / " +
                           "INACTIVE accruals); totalVouchers is the count of voucher rows currently in any of " +
-                          "ISSUED / DELIVERED / VIEWED / PARTIALLY_USED states. " +
+                          "ISSUED / VIEWED / PARTIALLY_USED states. " +
                           "Requires a JWT carrying a phoneNumber claim (CUSTOMER tokens always do)."
     )
     @ApiResponses({

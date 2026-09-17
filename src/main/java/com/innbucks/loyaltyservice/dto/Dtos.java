@@ -927,7 +927,7 @@ public class Dtos {
     /** Lifetime voucher activity at the merchant. */
     public record VoucherSummary(
             @Schema(example = "412") long total,
-            @Schema(description = "Voucher count per status (ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED).")
+            @Schema(description = "Voucher count per status (ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED).")
             Map<String, Long> byStatus,
             @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued, in USD (the platform base currency). Excludes vouchers with no money face value — PERCENT, FREE_ITEM and COMBO — which are still counted in `byStatus`.")
             BigDecimal valueIssuedAllTime,

@@ -173,8 +173,19 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V47**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V48**; never edit an applied
 migration — add the next version.
+
+> [!IMPORTANT]
+> **Removing a value from a `@Enumerated(EnumType.STRING)` enum is a DATA
+> migration, not a code change.** Hibernate cannot hydrate a row holding a
+> string the Java enum no longer has: it throws per row at query EXECUTION and
+> `GlobalExceptionHandler` renders that as an opaque 500 on every read path
+> that touches the table. **There is no compile, boot or CI signal** — every
+> `@SpringBootTest` applies Flyway first, so the suite stays green and the
+> breakage appears only against a cell with real history. Always ship the
+> `UPDATE` that rewrites existing rows in the same migration, BEFORE narrowing
+> any CHECK constraint (see V48).
 
 ## Registration is a property of the PHONE (V40)
 
@@ -1058,6 +1069,60 @@ along via `VoucherService.issueFromOrder` → `finishIssue`).
   via extend-expiry (1..60 min, never shortens). No gateway route changes:
   `/loyalty/vouchers/purchase/**` rides `loyalty-service-route`, the internal
   surface is already covered by `loyalty-internal-deny`.
+
+## A voucher is ISSUED until it is used — there is no DELIVERED (V48)
+
+**Owner decision (2026-09-17): `DELIVERED` is merged into `ISSUED`.**
+`Voucher.Status` is now `ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED,
+REVOKED`.
+
+- **Why it had to go.** `finishIssue` flipped the status to DELIVERED
+  SYNCHRONOUSLY at save time, before the `@Async` WhatsApp/SMS send ran, and
+  never revised it — so a voucher whose WhatsApp failed AND whose SMS fallback
+  failed still read DELIVERED, as did one with no reachable phone (the
+  gateway's own log line for that case says *"still issued"* while the row said
+  otherwise). It reported an intention as an outcome. And because every
+  voucher issued to a named person carries a channel, the flip was immediate
+  and universal: a single-issued voucher **never spent a moment in ISSUED**, so
+  the console's ISSUED tab was permanently empty except for bulk stock (which
+  `/issue-bulk` never attempts to deliver at all). Two statuses, one meaning,
+  one of them misleading.
+- **`vouchers.delivered_at` STAYS and is still stamped** — the honest version
+  of what DELIVERED reached for ("dispatch was ATTEMPTED at T"), already
+  surfaced as `deliveredAt` on the report row DTO and the report CSV. It is
+  stamped **only inside the same channel guard** that used to set the status;
+  do not "simplify" that away, or the column starts asserting a dispatch for
+  `NONE`/POS vouchers that were never sent anywhere — the same lie, relocated.
+  Pinned by `VoucherIssuedStatusTest.issuingWithChannelNONE_*`.
+- **Do NOT reintroduce a delivery state on `Status`.** An outbound-message
+  outcome is not a stage of a voucher's life. If delivery *confirmation* is
+  ever wanted it needs its own column fed by a gateway receipt (and a resend
+  path — there is none today), not a lifecycle value set optimistically.
+- **`Voucher.LIVE_STATUSES` is now the ONE definition of an outstanding
+  voucher** (`ISSUED, VIEWED, PARTIALLY_USED`). That set had been copy-pasted
+  into six places — three lookups in `VoucherService`, the report's
+  `OUTSTANDING` filter, the expiring-soon query, `PublicTestController` — which
+  is exactly why retiring one value touched twelve files. The two JPQL `IN`
+  lists in `VoucherRepository` can't reference a constant and carry
+  change-together NOTEs instead; `ReportingService.OUTSTANDING` is
+  `EnumSet.copyOf(LIVE_STATUSES)`, derived rather than restated.
+- **`markDelivered(UUID)` is deleted.** It had no endpoint and no caller —
+  nothing ever promoted a voucher to DELIVERED after the fact, which is part of
+  why the status could only ever mean "we tried".
+- **`?status=DELIVERED` is still ACCEPTED on input**, as an alias for ISSUED —
+  `VoucherStatusConverter`, counted by `loyalty.voucher.status.legacy_alias`.
+  Seven endpoints bind a `Voucher.Status` request param, and the console ships
+  a DELIVERED filter tab today, so without the alias a backend deploy would
+  400 that tab until a separate frontend release landed. The alias returns the
+  right rows (V48 rewrote them), and the service NEVER emits the value.
+  **Registering that converter REPLACES Spring's default enum binding**, so it
+  must keep handling every live value — a gap there would 400 a request that
+  used to work; `VoucherStatusConverterTest` iterates the whole enum for that
+  reason. Delete the converter, the counter and the test once the meter
+  flatlines in production.
+- Client-visible fallout beyond the alias: the report's `byStatus` /
+  `countByStatus` maps simply stop emitting a `DELIVERED` key, so a console
+  rendering a fixed column list shows an empty column rather than erroring.
 
 ## Cryptography & key management (OWASP A02)
 

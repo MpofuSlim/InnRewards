@@ -155,6 +155,17 @@ public class Voucher {
     @Column(name = "issued_at", nullable = false)
     private Instant issuedAt = Instant.now();
 
+    /**
+     * When dispatch to the holder's phone was ATTEMPTED — not when it arrived.
+     * Stamped at issue for any voucher with a real delivery channel, before
+     * the {@code @Async} WhatsApp/SMS send runs, and never revised.
+     *
+     * <p>This is the surviving half of the retired DELIVERED status (V48): the
+     * timestamp says exactly what it means and claims nothing about receipt,
+     * where a status value called DELIVERED read as a promise the service
+     * never verified. A non-null value here alongside a failed send is normal
+     * and is what the gateway's warning logs are for.
+     */
     @Column(name = "delivered_at")
     private Instant deliveredAt;
 
@@ -195,7 +206,38 @@ public class Voucher {
     @Version
     private long version;
 
-    public enum Status { ISSUED, DELIVERED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED }
+    /**
+     * The voucher lifecycle. {@code ISSUED} is the live, wholly-unused state
+     * every voucher starts in and stays in until someone opens or spends it.
+     *
+     * <p><b>DELIVERED was merged into ISSUED in V48.</b> It was stamped at
+     * save time, before the async send it named had run, and was never
+     * corrected when that send failed — so it distinguished nothing (every
+     * voucher issued to a named person skipped ISSUED entirely) while implying
+     * something untrue (that the customer had received it). "Dispatch was
+     * attempted at T" now lives where it belongs, on {@link #deliveredAt}.
+     * Do not reintroduce a delivery state here: an outbound-message outcome is
+     * not a stage of the voucher's life, and if delivery confirmation is ever
+     * wanted it belongs in its own column fed by a gateway receipt.
+     */
+    public enum Status { ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED, REVOKED }
+
+    /**
+     * The LIVE states — a voucher that still carries unredeemed value and so
+     * still counts as an outstanding liability: it can be shown in a wallet,
+     * transferred, redeemed, warned about before expiry, and summed into the
+     * outstanding book.
+     *
+     * <p>This set was copy-pasted into six places (three lookups here, the
+     * report's outstanding filter, the expiring-soon query, the public test
+     * surface) plus two JPQL {@code IN} lists — which is precisely why
+     * retiring ONE status value in V48 had to touch twelve files. It lives
+     * here once now; the JPQL copies are unavoidable (a query string cannot
+     * reference a constant) and are flagged in place to be changed with it.
+     */
+    public static final java.util.List<Status> LIVE_STATUSES =
+            java.util.List.of(Status.ISSUED, Status.VIEWED, Status.PARTIALLY_USED);
+
     public enum DeliveryChannel { SMS, WHATSAPP, EMAIL, PUSH, POS, NONE }
 
     /**

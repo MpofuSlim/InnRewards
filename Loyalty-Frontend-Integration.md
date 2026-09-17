@@ -107,8 +107,7 @@ customer's point of view there is one wallet, not a per-tenant breakdown.
 }
 ```
 
-`totalVouchers` counts vouchers in `ISSUED` / `DELIVERED` / `VIEWED` /
-`PARTIALLY_USED`.
+`totalVouchers` counts vouchers in `ISSUED` / `VIEWED` / `PARTIALLY_USED`.
 
 **Two things worth using:**
 
@@ -233,8 +232,8 @@ whole mechanism.
 
 ### `GET /loyalty/vouchers/users/by-phone/{phoneNumber}/active`
 
-Paginated. Returns vouchers in an active state — `ISSUED`, `DELIVERED`,
-`VIEWED`, `PARTIALLY_USED` — for that phone **within the tenant on the header**.
+Paginated. Returns vouchers in an active state — `ISSUED`, `VIEWED`,
+`PARTIALLY_USED` — for that phone **within the tenant on the header**.
 
 ```json
 {
@@ -301,7 +300,7 @@ Rules:
 - Same recipient rule as points — exactly one of `toUserId` / `toPhone`. An
   unknown phone is auto-enrolled `PENDING`, so you can pass a voucher to
   someone who hasn't signed up.
-- **Only an unused, live voucher moves**: `ISSUED`, `DELIVERED`, `VIEWED`.
+- **Only an unused, live voucher moves**: `ISSUED`, `VIEWED`.
   A `PARTIALLY_USED` voucher is refused along with the terminal states.
 - The caller must be the **current holder**.
 - Returns the updated voucher — the response shows the **new** assignee.

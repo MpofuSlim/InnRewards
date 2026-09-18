@@ -60,7 +60,10 @@ public class VoucherController {
                           "Optionally name the SENDER (`senderName` + `senderPhone`, V46): the recipient's " +
                           "message then reads as a personal gift (\"Tawanda Mpofu sent you an InnBucks " +
                           "voucher\") and the sender's phone gets its own WhatsApp/SMS confirmation copy — " +
-                          "senderPhone defaults to the issuing caller's JWT phone when omitted. " +
+                          "`senderPhone` has NO default: omit it and the voucher simply has no sender and " +
+                          "no confirmation copy is sent. It is never taken from the caller's own token, so " +
+                          "at a till the cashier must type the CUSTOMER's number as the sender; the " +
+                          "cashier is recorded separately as the issuer. " +
                           "Returns the signed voucher code the customer presents at redemption. Delivery " +
                           "channel (SMS, WhatsApp, EMAIL, PUSH, POS, NONE) controls how NotificationGateway " +
                           "notifies the customer.")

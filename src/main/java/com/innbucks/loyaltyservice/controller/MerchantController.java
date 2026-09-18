@@ -120,8 +120,8 @@ public class MerchantController {
                                     @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "name: must not be blank",
-                                      "data": null
+                                      "message": "Validation failed",
+                                      "data": { "name": "must not be blank" }
                                     }
                                     """),
                                     @ExampleObject(name = "Nobody priced this merchant", value = """
@@ -402,7 +402,7 @@ public class MerchantController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Merchant not found",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)
@@ -456,7 +456,7 @@ public class MerchantController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Merchant not found",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)

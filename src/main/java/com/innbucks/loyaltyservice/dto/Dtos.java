@@ -861,7 +861,7 @@ public class Dtos {
             @NotNull TransactionType transactionType,
             @Schema(example = "50.00", nullable = true, description = "Pre-encoded amount (optional — for fixed-amount QRs).")
             BigDecimal amount,
-            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
+            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the cell's configured currency (innbucks.currency) when omitted — never to the merchant's. Must be in the cell's supported-currency allowlist or the issue is refused with UNSUPPORTED_CURRENCY.")
             String currency,
             @Schema(example = "300", nullable = true, description = "Token TTL in seconds. Defaults to 300 (5 minutes).")
             Integer ttlSeconds

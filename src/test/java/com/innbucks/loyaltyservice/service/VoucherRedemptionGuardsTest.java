@@ -123,8 +123,12 @@ class VoucherRedemptionGuardsTest {
                     || MERCHANT.equals(CallerDetails.currentMerchantId())) {
                 return new Merchant();
             }
+            // The real message, verbatim from MerchantAuthz.notOwner(). The
+            // assertions below match on `code`, so this text is not load-bearing
+            // — but a stub that throws words production never throws is one
+            // copy-paste away from becoming a Swagger example that lies.
             throw LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
-                    "you are not authorised to act on this merchant");
+                    "You can only act on merchants you administer.");
         });
         when(redemptions.save(any())).thenAnswer(inv -> {
             VoucherRedemption r = inv.getArgument(0);

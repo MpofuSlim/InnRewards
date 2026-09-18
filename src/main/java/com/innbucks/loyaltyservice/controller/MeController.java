@@ -87,11 +87,11 @@ public class MeController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "JWT has no phoneNumber claim",
+                    responseCode = "400", description = "NO_PHONE_CLAIM — the JWT carries no phoneNumber",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
-                                      "code": "400 BAD_REQUEST",
+                                      "code": "NO_PHONE_CLAIM",
                                       "message": "/me endpoints require a JWT with a phoneNumber claim",
                                       "data": null
                                     }

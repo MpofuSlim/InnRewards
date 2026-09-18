@@ -67,14 +67,73 @@ public class QrController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Bean-validation failure (field detail in `data`), INVALID_AMOUNT for a "
+                            + "negative `amount`, or UNSUPPORTED_CURRENCY when `currency` is outside the "
+                            + "cell's allowlist.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "sourceType: must not be null",
+                                      "message": "Validation failed",
+                                      "data": { "sourceType": "must not be null" }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Negative amount", value = """
+                                    {
+                                      "code": "INVALID_AMOUNT",
+                                      "message": "amount must not be negative",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Unsupported currency", value = """
+                                    {
+                                      "code": "UNSUPPORTED_CURRENCY",
+                                      "message": "Currency GBP is not supported on this cell. Supported: USD, ZAR, ZWG.",
+                                      "data": null
+                                    }
+                                    """)}
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "NOT_MERCHANT_OWNER — a MERCHANT-sourced QR whose `sourceId` names a "
+                            + "merchant the caller does not administer; or NOT_WALLET_OWNER — a USER-sourced "
+                            + "QR whose `sourceId` is not the caller's own loyalty account.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Not the merchant's admin", value = """
+                                    {
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Not the wallet owner", value = """
+                                    {
+                                      "code": "NOT_WALLET_OWNER",
+                                      "message": "you can only act on your own loyalty account",
+                                      "data": null
+                                    }
+                                    """)}
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "The merchant or user named by `sourceId` does not exist in this tenant. "
+                            + "A cross-tenant id is reported as absent rather than forbidden, so it is "
+                            + "never an existence oracle.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Unknown source", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)

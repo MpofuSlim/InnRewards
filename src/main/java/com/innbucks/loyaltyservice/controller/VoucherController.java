@@ -198,7 +198,7 @@ public class VoucherController {
                                         },
                                         {
                                           "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                                          "code": "VCH-EF56GH78",
+                                          "code": "H4NX8W2VQ7RJ",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "assignedUserId": null,
@@ -364,9 +364,11 @@ public class VoucherController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
                     description = "EXPIRED — past the voucher's expiresAt. The voucher is also moved to the "
-                            + "EXPIRED status, which happens just after the refusal is returned rather than "
-                            + "within it, so a client that re-reads the voucher immediately may still see "
-                            + "its previous status for a moment.",
+                            + "EXPIRED status, and that lands BEFORE this response is written: the flip runs "
+                            + "in a post-rollback listener inside the same server-side call, so a client that "
+                            + "re-reads the voucher on receiving this error already sees EXPIRED. The flip is "
+                            + "also idempotent — it only ever moves a still-live voucher whose deadline has "
+                            + "genuinely passed — so a concurrent redemption or revocation is never overwritten.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -775,7 +777,7 @@ public class VoucherController {
                                           },
                                           {
                                             "id": "f4eab2c3-2345-6789-3456-789012345678",
-                                            "code": "VCH-IJ90KL12",
+                                            "code": "T6YB3ZPD9KMF",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "assignedUserId": null,

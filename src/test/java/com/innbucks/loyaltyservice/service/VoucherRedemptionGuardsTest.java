@@ -51,13 +51,18 @@ import static org.mockito.Mockito.when;
  * The guards on voucher redemption, after the round of fixes that made three of
  * them actually guard something.
  *
- * <p>Each case below corresponds to a way the old path was wrong rather than to
+ * <p>Most cases below correspond to a way the old path was wrong rather than to
  * a line of code:
  * <ul>
- *   <li>the holder of a voucher issued by {@code assignedUserId} alone was
- *       DELIVERED the code and then refused it, because the ownership check
- *       compared a live phone claim against the null {@code assigneePhone}
- *       column;</li>
+ *   <li>a voucher whose {@code assignee_phone} was BLANK (or, on a legacy row,
+ *       NULL) alongside an {@code assignedUserId} was DELIVERED to that user —
+ *       delivery resolved the holder and fell back to their number — and then
+ *       refused to that same user, because the ownership check compared their
+ *       live phone claim against the raw column. Be exact about the trigger:
+ *       {@code createVoucher} backfills the phone in the {@code assignedUserId}
+ *       branch, so "issued by user id ALONE" is NOT reachable through any issue
+ *       path. The blank is what the backfill's {@code == null} test let through;
+ *       the null belongs to rows written before it existed;</li>
  *   <li>the BLOCKED / registration gates hung off an optional body
  *       {@code userId}, so a till that sent only the code performed no account
  *       checks at all — and naming any unrelated ACTIVE account satisfied
@@ -65,6 +70,11 @@ import static org.mockito.Mockito.when;
  *   <li>refusals wrote {@code voucher_redemptions} rows inside the transaction
  *       they then rolled back, so the table could only ever hold SUCCESS.</li>
  * </ul>
+ *
+ * <p>The rest pin behaviour that was already correct and had to STAY correct
+ * through those fixes — a customer redeeming their own voucher, an
+ * unauthenticated bulk-stock redemption, a different customer being refused.
+ * Two of them exist because the first draft of this change broke exactly that.
  */
 class VoucherRedemptionGuardsTest {
 
@@ -260,6 +270,34 @@ class VoucherRedemptionGuardsTest {
 
         assertThat(service.redeem(TENANT, MERCHANT, request(v, null)).status())
                 .isEqualTo(Voucher.Status.REDEEMED.name());
+    }
+
+    @Test
+    void anAssignedUserFromAnotherTenantNeverGatesTheSpend() {
+        // holderAccount tenant-filters the findById even though createVoucher
+        // already refuses a cross-tenant assignedUserId, because THIS is the
+        // gate: a legacy row, or any future write path, must never let another
+        // tenant's account decide whether this voucher may be spent. Without the
+        // filter the foreign row resolves and its BLOCKED status refuses a
+        // redemption that has nothing to do with it.
+        UUID foreignId = UUID.randomUUID();
+        Voucher v = voucherAssignedByUserIdOnly(foreignId);
+        LoyaltyUser foreign = account(foreignId, HOLDER_PHONE, LoyaltyUser.Status.BLOCKED);
+        foreign.setTenantId(UUID.randomUUID());          // a DIFFERENT tenant
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        when(users.findById(foreignId)).thenReturn(Optional.of(foreign));
+        // Stubbed so that reverting the filter fails as a clean USER_BLOCKED
+        // refusal rather than an NPE on an unstubbed mock — the test should
+        // redden for the reason it names.
+        when(userService.spendabilityOf(foreign)).thenReturn(UserService.Spendability.BLOCKED);
+
+        asCashier();
+
+        // No holder resolves at all, so the till redeems it like any other
+        // unassigned stock — and the foreign account's status is never asked for.
+        assertThat(service.redeem(TENANT, MERCHANT, request(v, null)).status())
+                .isEqualTo(Voucher.Status.REDEEMED.name());
+        verify(userService, never()).spendabilityOf(foreign);
     }
 
     @Test

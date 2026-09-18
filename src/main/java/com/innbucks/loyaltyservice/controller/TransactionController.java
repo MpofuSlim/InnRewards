@@ -338,7 +338,7 @@ public class TransactionController {
                                             "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                             "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                             "channel": "TYPED_PHONE",
-                                            "reference": "VOUCHER:VCH-AB12CD",
+                                            "reference": "VOUCHER:K7M2PQ9XR4TB",
                                             "createdAt": "2026-05-04T12:00:00Z",
                                             "invoiceId": null
                                           }
@@ -420,7 +420,7 @@ public class TransactionController {
                                             "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
                                             "postedBy": "e9d3b7a2-6f10-4c58-9b21-7d4e8a5c3f01",
                                             "channel": "TYPED_PHONE",
-                                            "reference": "VOUCHER:VCH-AB12CD",
+                                            "reference": "VOUCHER:K7M2PQ9XR4TB",
                                             "createdAt": "2026-05-04T12:00:00Z",
                                             "invoiceId": null
                                           }

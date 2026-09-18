@@ -5,8 +5,10 @@ import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.NoTransactionException;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -47,6 +49,31 @@ public class VoucherRedemptionAuditWriter {
      * would make "a failed audit write must never change what the customer was
      * told" an accident of framework behaviour rather than a decision. A refusal
      * that could not be recorded is logged at WARN and still a refusal.
+     *
+     * <p><b>Which is why the save is a {@code saveAndFlush} and the catch marks
+     * the transaction rollback-only.</b> Written the obvious way the promise
+     * above was not kept: {@code VoucherRedemption.id} is {@code @GeneratedValue}
+     * on a UUID, so Hibernate assigns it in memory and {@code save} issues no
+     * SQL at all — the INSERT is deferred to the flush, which happens when this
+     * {@code REQUIRES_NEW} transaction commits, inside the transaction
+     * interceptor and therefore OUTSIDE the try. A constraint violation (an
+     * over-long {@code outletCode}, say) could not reach the catch, so the
+     * documented WARN never fired and a stack trace escaped to the framework
+     * instead. Flushing inside the try is what puts the failure back within
+     * reach of the handler that claims to handle it. Marking the status
+     * rollback-only then lets the interceptor roll back QUIETLY: a
+     * {@code setRollbackOnly()} on this transaction's own status is a LOCAL
+     * rollback, which does not raise {@code UnexpectedRollbackException} the way
+     * a globally-marked participating transaction would.
+     *
+     * <p><b>The expiry flip shares that transaction and is therefore lost with
+     * it</b> when the audit row cannot be written. That is deliberate rather
+     * than overlooked: the flip is idempotent, safe to lose and converged by the
+     * expiry sweeper, whereas splitting it into a second transaction to save it
+     * would buy a guaranteed status update at the cost of a second failure mode
+     * on an error path that must stay simple. What is NOT acceptable is the
+     * customer's answer changing, and that never depended on either write —
+     * the refusal was returned before this listener ran.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -62,7 +89,7 @@ public class VoucherRedemptionAuditWriter {
             r.setDeviceFingerprint(e.deviceFingerprint());
             r.setResult(VoucherRedemption.Result.REJECTED);
             r.setReason(e.reason());
-            redemptions.save(r);
+            redemptions.saveAndFlush(r);
 
             if (e.markExpired()) {
                 // Guarded and idempotent: the UPDATE re-checks the deadline and
@@ -78,6 +105,26 @@ public class VoucherRedemptionAuditWriter {
         } catch (RuntimeException ex) {
             log.warn("Could not record the rejected redemption of voucher {} (reason={})",
                     e.voucherId(), e.reason(), ex);
+            rollBackQuietly();
+        }
+    }
+
+    /**
+     * Abandon the audit transaction without letting anything out. A failed
+     * flush leaves the persistence context in an undefined state, so the only
+     * safe next step is to discard it — and doing that explicitly is what stops
+     * the interceptor attempting a commit that would throw on the way out,
+     * past the catch above.
+     *
+     * <p>Tolerates having no transaction in scope so a unit test can call the
+     * listener directly, which is the only way to test it without Docker.
+     */
+    private void rollBackQuietly() {
+        try {
+            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+        } catch (NoTransactionException ignored) {
+            // Called outside a transaction (a unit test): there is nothing to
+            // roll back, and the WARN above has already been emitted.
         }
     }
 }

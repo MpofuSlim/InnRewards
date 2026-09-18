@@ -162,9 +162,9 @@ public class UserService {
     }
 
     /**
-     * Whether an account may spend right now, as a VERDICT rather than an
-     * exception — the single home for that decision, so a second spend gate
-     * cannot drift from this one.
+     * The four answers to "may this account spend right now" — a VERDICT rather
+     * than an exception, so the two spend gates can share one decision and still
+     * refuse in their own words.
      *
      * <p><b>Why a verdict and not just a throw.</b> Voucher redemption is the
      * other spend gate, and it must refuse in a cashier's words rather than a
@@ -176,10 +176,7 @@ public class UserService {
      * so an operator-deactivated holder could still redeem a voucher. One place
      * decides, each caller chooses the wording.
      *
-     * <p><b>This method has side effects, deliberately</b> — the PENDING branch
-     * heals a stale projection and may register an eligible phone. Both are the
-     * documented V40/V44 behaviour and both belong to the decision, not to the
-     * caller's phrasing; see the comments inside.
+     * @see #spendabilityOf(LoyaltyUser)
      */
     public enum Spendability {
         /** Free to spend. */
@@ -192,6 +189,23 @@ public class UserService {
         INACTIVE
     }
 
+    /**
+     * Decide whether {@code u} may spend — the single home for that question, so
+     * a second spend gate cannot drift from this one. Both callers
+     * ({@link #requireSpendable} and {@code VoucherService.doRedeem}) map the
+     * verdict to their own customer-facing wording; a third must delegate here
+     * too rather than re-deriving the rules.
+     *
+     * <p><b>This method has side effects, deliberately</b> — the PENDING branch
+     * heals a stale projection and may register an eligible phone. Both are the
+     * documented V40/V44 behaviour and both belong to the decision rather than
+     * to the caller's phrasing; see the comments inside.
+     *
+     * <p>(This doc comment used to sit above {@link Spendability}, where every
+     * claim in it was false of the element it was attached to — an enum has no
+     * PENDING branch and no side effects. Keep the method's contract on the
+     * method.)
+     */
     public Spendability spendabilityOf(LoyaltyUser u) {
         switch (u.getStatus()) {
             case ACTIVE -> { return Spendability.OK; }

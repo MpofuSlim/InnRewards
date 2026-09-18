@@ -998,10 +998,23 @@ path back.**
   `vouchers.sender_name` / `sender_phone` and surface on `VoucherResponse`.
   These are PRESENTATION facts, distinct from the `issuer_*` audit columns
   (always from the JWT, never the body) — a staff member issuing on a
-  customer's behalf makes the two differ legitimately. `senderPhone` defaults
-  to the issuing caller's own JWT phone, resolved in `issue()` — NOT in
-  `createVoucher` — so bulk stock stays sender-less (a per-voucher sender copy
-  would message one phone `quantity` times). A named sender turns the
+  customer's behalf makes the two differ legitimately. **`senderPhone` is the
+  request's or nobody's — it is NEVER taken from the caller's token.** It used
+  to fall back to the issuing caller's JWT phone, on the reasoning that a
+  customer gifting from the app should not have to restate their number. **That
+  caller cannot exist**: `/issue`, `/issue-bulk` and `/vouchers/purchase` are
+  all `MERCHANT_ADMIN`/`SHOP_ADMIN`/`SUPER_ADMIN` only, so the fallback resolved
+  to a STAFF phone every single time. The real flow is a customer at a till —
+  the cashier types the customer's number as the sender and the recipient's as
+  the assignee — and the fallback sent the sender's confirmation, **voucher code
+  included**, to the cashier's own handset for a gift between two other people.
+  On the purchase-order path it was worse than a disclosure: `payerPhone` falls
+  back to `senderPhone`, so an order created without an explicit sender aimed
+  the **EcoCash PIN prompt at the cashier**, asking a staff member to pay for a
+  customer's voucher. Bulk stock stays sender-less as before (a per-voucher
+  sender copy would message one phone `quantity` times). Pinned by
+  `VoucherSenderIdentityTest.senderPhone_isNeverTakenFromTheIssuingStaffMembersToken`
+  + `theTillFlow_*` on both paths. A named sender turns the
   recipient's message into "Tawanda Mpofu sent you an InnBucks voucher …", and
   `NotificationGateway.deliverSenderCopy` sends the sender their own
   WhatsApp-first/SMS-fallback confirmation (recipient name + number + the

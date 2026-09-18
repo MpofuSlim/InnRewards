@@ -64,9 +64,10 @@ public class VoucherController {
                           "no confirmation copy is sent. It is never taken from the caller's own token, so " +
                           "at a till the cashier must type the CUSTOMER's number as the sender; the " +
                           "cashier is recorded separately as the issuer. " +
-                          "Returns the signed voucher code the customer presents at redemption. Delivery " +
-                          "channel (SMS, WhatsApp, EMAIL, PUSH, POS, NONE) controls how NotificationGateway " +
-                          "notifies the customer.")
+                          "Returns the signed voucher code the customer presents at redemption. " +
+                          "DELIVERY IS ALWAYS WhatsApp first with an SMS fallback, to the voucher's " +
+                          "holder — `deliveryChannel` is legacy and selects nothing (it never did); omit " +
+                          "it. Send `NONE` only to suppress the send entirely.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",

@@ -1054,6 +1054,43 @@ path back.**
   Skipped when sender == recipient phone (one message, not two). Pinned by
   `VoucherSenderIdentityTest` + the sender cases in `NotificationGatewayTest`.
 
+### Delivery is WhatsApp-then-SMS, always — `deliveryChannel` never routed anything
+
+**Owner decision (2026-09-18): the channel selector goes.** `NotificationGateway.deliver`
+has always done WhatsApp first, SMS fallback, and read `deliveryChannel` ONLY to
+decide whether to send at all. Every non-`NONE` value took the identical path, so
+a voucher issued "by EMAIL" was sent a WhatsApp, "by PUSH" was sent a WhatsApp,
+and "by SMS" was sent a WhatsApp and reached SMS only if WhatsApp threw. The enum
+advertised five transports the service cannot perform, and the console rendered
+them as a choice. `NotificationGatewayTest` had shown this for as long as it has
+existed: its fallback case passes `SMS` and asserts WhatsApp was tried.
+
+- **The load-bearing change is that an ABSENT channel now DELIVERS.** It used to
+  suppress, which made "the field was not sent" mean "never contact this
+  customer" — so a client dropping an inert field would have silently stopped
+  delivering every voucher it issued: issued fine, code in the API response,
+  nothing reaching the holder. **This must deploy BEFORE any client stops
+  sending the field.** Pinned by
+  `NotificationGatewayTest.noChannelAtAll_STILL_DELIVERS` and
+  `VoucherIssuedStatusTest.issuingWithNO_CHANNEL_deliversAndStampsTheAttempt`.
+- **`NONE` still suppresses and is now the only value that does anything.** It
+  is what bulk stock and POS printing use. Note bulk does not rely on it —
+  `issueBulk` has no assignee, and the gateway returns early on a blank phone —
+  which is why `bulkStock_withNoChannelAtAll_isStillUndispatched` proves the
+  quiet comes from the missing phone rather than the channel.
+- **Every constant stays on the enum.** `delivery_channel` is
+  `@Enumerated(EnumType.STRING)` and historical rows hold all six; deleting one
+  throws per row at query execution with no compile, boot or CI signal — the
+  same rule that keeps `VoucherType.MULTI_USE` after V49. They are accepted and
+  ignored, not a menu. The request `@Schema`s now advertise `NONE` alone.
+- **`deliveredAt` got stricter in the same change, and this is a fix not a
+  side effect.** It was stamped whenever a channel was set, including for a
+  voucher with NO reachable phone — where the gateway returns early logging
+  *"still issued"* while the column asserted a dispatch. That is precisely the
+  lie V48 retired the DELIVERED *status* for, surviving one field over. It now
+  stamps only when a send is genuinely attempted: not `NONE`, and a holder phone
+  present.
+
 ## Vouchers are PAID FOR before they exist (V47)
 
 **Owner decision (2026-09-17): the console's issue flow collects payment

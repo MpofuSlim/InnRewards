@@ -16,6 +16,7 @@ import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -79,6 +80,41 @@ class NotificationGatewayTest {
     void channelNone_isNoOp() {
         gateway.deliver(voucher(Voucher.DeliveryChannel.NONE), PHONE);
         verifyNoInteractions(whatsApp, sms);
+    }
+
+    @Test
+    void noChannelAtAll_STILL_DELIVERS() {
+        // The trap this change exists to remove. An absent channel used to
+        // suppress, so a client that stopped sending the (inert) field would
+        // have silently stopped delivering every voucher it issued — issued
+        // fine, code in the API response, nothing ever reaching the customer.
+        // Only an explicit NONE suppresses now.
+        gateway.deliver(voucher(null), PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE), anyString());
+    }
+
+    @Test
+    void theChannelNeverRoutedAnything_everyValueIsWhatsAppFirst() {
+        // EMAIL and POS name transports this service cannot perform, and SMS
+        // describes the fallback rather than the first choice. All three take
+        // the WhatsApp path, which is why offering the choice was misleading.
+        for (Voucher.DeliveryChannel c : new Voucher.DeliveryChannel[]{
+                Voucher.DeliveryChannel.SMS, Voucher.DeliveryChannel.EMAIL,
+                Voucher.DeliveryChannel.PUSH, Voucher.DeliveryChannel.POS,
+                Voucher.DeliveryChannel.WHATSAPP}) {
+            gateway.deliver(voucher(c), PHONE);
+        }
+
+        verify(whatsApp, times(5)).sendCustomNotification(eq(PHONE), anyString());
+        verifyNoInteractions(sms);
+    }
+
+    @Test
+    void senderCopy_withNoChannel_isAlsoDelivered() {
+        gateway.deliverSenderCopy(giftedVoucher(null), "+263782608767");
+
+        verify(whatsApp).sendCustomNotification(eq("+263782608767"), anyString());
     }
 
     @Test

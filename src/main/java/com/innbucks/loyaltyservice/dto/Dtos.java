@@ -651,7 +651,8 @@ public class Dtos {
                                   "confirmation is sent. It is never filled in from the caller's own " +
                                   "token — the issuing staff member is recorded separately as the issuer.")
             @Size(max = 32) String senderPhone,
-            @Schema(example = "SMS", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
+            @Schema(example = "NONE", nullable = true, allowableValues = {"NONE"},
+                    description = "LEGACY — delivery is always WhatsApp first with an SMS fallback, to the voucher's holder. This value never chose a route: EMAIL/PUSH/POS name channels the service cannot send, and SMS vs WHATSAPP describes a fixed order. OMIT IT and the voucher is delivered normally. The one value that still does something is NONE, which suppresses the send entirely (bulk stock, POS printing) — everything else is accepted and ignored.")
             Voucher.DeliveryChannel deliveryChannel,
             @Schema(example = "WINTER_PROMO_2026", nullable = true, description = "Campaign tag for reporting.")
             String campaignSource
@@ -688,7 +689,8 @@ public class Dtos {
             @Min(1) int quantity,
             @Schema(example = "WINTER_PROMO_2026", nullable = true)
             String campaign,
-            @Schema(example = "NONE", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
+            @Schema(example = "NONE", nullable = true, allowableValues = {"NONE"},
+                    description = "LEGACY — delivery is always WhatsApp first with an SMS fallback, to the voucher's holder. This value never chose a route: EMAIL/PUSH/POS name channels the service cannot send, and SMS vs WHATSAPP describes a fixed order. OMIT IT and the voucher is delivered normally. The one value that still does something is NONE, which suppresses the send entirely (bulk stock, POS printing) — everything else is accepted and ignored.")
             Voucher.DeliveryChannel deliveryChannel
     ) {}
 
@@ -740,7 +742,8 @@ public class Dtos {
                                   "this or `senderPhone` to the BUYER: leaving both blank falls through " +
                                   "to the assignee and prompts the recipient to pay for their own gift.")
             @Size(max = 32) String payerPhone,
-            @Schema(example = "WHATSAPP", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
+            @Schema(example = "NONE", nullable = true, allowableValues = {"NONE"},
+                    description = "LEGACY — delivery is always WhatsApp first with an SMS fallback, to the voucher's holder. This value never chose a route: EMAIL/PUSH/POS name channels the service cannot send, and SMS vs WHATSAPP describes a fixed order. OMIT IT and the voucher is delivered normally. The one value that still does something is NONE, which suppresses the send entirely (bulk stock, POS printing) — everything else is accepted and ignored.")
             Voucher.DeliveryChannel deliveryChannel,
             @Schema(example = "WINTER_PROMO_2026", nullable = true)
             String campaignSource

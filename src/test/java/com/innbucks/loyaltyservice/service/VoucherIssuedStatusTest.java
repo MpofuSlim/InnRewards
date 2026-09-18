@@ -134,6 +134,20 @@ class VoucherIssuedStatusTest {
     }
 
     @Test
+    void issuingWithNO_CHANNEL_deliversAndStampsTheAttempt() {
+        // An absent channel used to SUPPRESS delivery, so a client that
+        // stopped sending the (inert) field would have silently stopped
+        // sending vouchers. It now behaves like any ordinary issue — the
+        // channel never selected a transport, so its absence cannot mean
+        // "never contact this customer".
+        service.issue(TENANT, request(null));
+
+        Voucher v = saved();
+        assertThat(v.getDeliveredAt()).isNotNull();
+        verify(notifications).deliver(v, "+263786546765");
+    }
+
+    @Test
     void bulkStock_isISSUED_andUndispatched() {
         // Bulk never attempted delivery even before V48, which is why the old
         // ISSUED tab only ever showed campaign stock. Now it is the ONE status
@@ -147,6 +161,26 @@ class VoucherIssuedStatusTest {
         assertThat(cap.getAllValues()).allSatisfy(v -> {
             assertThat(v.getStatus()).isEqualTo(Voucher.Status.ISSUED);
             assertThat(v.getDeliveredAt()).isNull();
+        });
+    }
+
+    @Test
+    void bulkStock_withNoChannelAtAll_isStillUndispatched() {
+        // Bulk has no assignee, so there is nobody to send to — and that, not
+        // the channel, is what stops it. Proving it with the channel OMITTED
+        // matters now that an absent channel delivers: the guard that keeps
+        // bulk quiet must be the missing phone, or dropping the field from a
+        // bulk client would start blasting messages at nobody.
+        service.issueBulk(TENANT, new Dtos.BulkIssueRequest(MERCHANT, null,
+                new BigDecimal("5.00"), "USD", null, 2, "CAMPAIGN", null));
+
+        ArgumentCaptor<Voucher> cap = ArgumentCaptor.forClass(Voucher.class);
+        verify(vouchers, times(2)).save(cap.capture());
+        assertThat(cap.getAllValues()).allSatisfy(v -> {
+            assertThat(v.getStatus()).isEqualTo(Voucher.Status.ISSUED);
+            assertThat(v.getDeliveredAt())
+                    .as("no holder phone means no dispatch was attempted, so nothing to stamp")
+                    .isNull();
         });
     }
 

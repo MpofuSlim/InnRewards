@@ -39,13 +39,28 @@ public class NotificationGateway {
     }
 
     /**
-     * Deliver the voucher to {@code recipientPhone}. Channel {@code NONE} (or a
-     * missing phone) is a no-op. WhatsApp first, SMS fallback; never throws.
+     * Deliver the voucher to {@code recipientPhone}: <b>WhatsApp first, SMS
+     * fallback</b>. Never throws — a voucher that could not be sent is still
+     * issued.
+     *
+     * <p><b>The channel is not a routing choice and never was.</b> Every value
+     * other than {@code NONE} takes exactly this path, so a voucher issued
+     * "by EMAIL" or "by PUSH" was always sent a WhatsApp, and one issued "by
+     * SMS" was sent a WhatsApp too and reached SMS only if WhatsApp threw. The
+     * enum offered five routes the service cannot perform; the operator picking
+     * one was choosing nothing. `NotificationGatewayTest` has always shown this
+     * — its fallback case passes {@code SMS} and asserts WhatsApp was tried.
+     *
+     * <p><b>An ABSENT channel now DELIVERS.</b> It used to suppress, which made
+     * "the field was not sent" mean "never contact the customer" — the opposite
+     * of what any caller omitting an inert field intends, and a silent one: the
+     * voucher issues, the response carries the code, and nothing reaches the
+     * person holding it. Only an explicit {@code NONE} suppresses now, which is
+     * the single value in the enum that ever described something real.
      */
     @Async("notificationExecutor")
     public void deliver(Voucher voucher, String recipientPhone) {
-        Voucher.DeliveryChannel channel = voucher.getDeliveryChannel();
-        if (channel == null || channel == Voucher.DeliveryChannel.NONE) {
+        if (voucher.getDeliveryChannel() == Voucher.DeliveryChannel.NONE) {
             return;
         }
         if (recipientPhone == null || recipientPhone.isBlank()) {
@@ -112,8 +127,9 @@ public class NotificationGateway {
     /**
      * The sender's own confirmation copy of an issued voucher (V46) — the
      * "both get the WhatsApp messages" half. Same channel order (WhatsApp
-     * first, SMS fallback), same {@code NONE}/blank-phone no-op and same
-     * best-effort contract as {@link #deliver}. Includes the code: at issue
+     * first, SMS fallback), same explicit-{@code NONE}/blank-phone no-op and
+     * same best-effort contract as {@link #deliver} — including that an ABSENT
+     * channel delivers rather than suppressing. Includes the code: at issue
      * time the sender is the party who minted it and already holds it in the
      * API response, so nothing new is disclosed. <b>Issue-path only</b> — the
      * transfer path rotates the code away from the sender by design, and a
@@ -121,8 +137,7 @@ public class NotificationGateway {
      */
     @Async("notificationExecutor")
     public void deliverSenderCopy(Voucher voucher, String senderPhone) {
-        Voucher.DeliveryChannel channel = voucher.getDeliveryChannel();
-        if (channel == null || channel == Voucher.DeliveryChannel.NONE) {
+        if (voucher.getDeliveryChannel() == Voucher.DeliveryChannel.NONE) {
             return;
         }
         if (senderPhone == null || senderPhone.isBlank()) {

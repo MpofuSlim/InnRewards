@@ -1213,16 +1213,32 @@ could never succeed.
 V45–V48 changed only issue-side concerns and left it untouched, which is how
 three of its guards came to guard nothing. The rules below are what they now do.
 
-- **The holder is resolved from the voucher, by ONE method.** `holderPhone` is
-  the assignee phone, else the assigned user's phone. It used to be called
-  `resolveDeliveryPhone` and be consulted only when choosing where to send the
-  code, while both ownership checks compared the caller against the raw
-  `assigneePhone` column. That column is nullable and `createVoucher` never
-  backfills it from `assignedUserId`, so **a voucher issued by user id alone was
-  DELIVERED to its holder and then refused to that same holder** — a 403
-  `NOT_VOUCHER_OWNER` against a null. Resolve the holder the same way everywhere
-  or the person who receives a voucher is not the person allowed to spend it.
-  Pinned by `VoucherRedemptionGuardsTest.theHolderOfAVoucherAssignedByUserIdAloneCanRedeemIt`.
+- **The holder is resolved from the voucher, by ONE method, with ONE
+  precedence.** `holderPhone` is the assignee phone, else the assigned user's
+  phone. It used to be called `resolveDeliveryPhone` and be consulted only when
+  choosing where to send the code, while both ownership checks compared the
+  caller against the raw `assigneePhone` column — **and the two disagree about
+  what counts as "no phone"**: `holderPhone` treats a BLANK phone as absent and
+  falls back to the assigned user's number, a bare column comparison does not.
+  So a voucher issued with an explicitly blank `assigneePhone` alongside an
+  `assignedUserId` was DELIVERED to that user and then refused to that same
+  user, the check comparing their live phone claim against `""`.
+  `createVoucher`'s backfill tested `== null` only, which is how a blank
+  survived; it now normalises blank too, and resolving through `holderPhone`
+  covers the rows already written that way.
+  **Be exact about the trigger** — an earlier draft of this section claimed
+  `createVoucher` "never backfills" the phone and that a voucher issued by user
+  id ALONE was refused. It does backfill (`VoucherService`, in the
+  `assignedUserId != null` branch), so that shape is unreachable through any
+  issue path and only a legacy row can hold it. The blank is the reachable one.
+- **`holderAccount` must share `holderPhone`'s precedence**, and its first draft
+  did not: it preferred `assignedUserId` while `holderPhone` prefers the
+  assignee phone. On a voucher carrying BOTH — which the issue API allows
+  without cross-validating that they name the same person — the ownership check
+  then admitted the phone's owner while the account gate inspected the id's
+  owner, so a blocked holder walked through the gate that exists to stop them.
+  Whatever order is chosen, one order. Pinned by
+  `VoucherRedemptionGuardsTest.theOwnershipCheckAndTheAccountGateAreAboutTheSAMEPerson`.
 - **A voucher with NO holder is not redeemable by a customer bearer.** Resolving
   the holder must not turn "nobody owns this" into "everybody owns this": bulk
   stock has nothing to match, so a customer is refused and only a till redeems

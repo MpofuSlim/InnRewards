@@ -132,7 +132,29 @@ class VoucherRedemptionGuardsTest {
     // fixtures
     // ------------------------------------------------------------------
 
-    /** A voucher whose holder is named ONLY by assignedUserId — no phone column. */
+    /**
+     * A voucher whose holder is named by assignedUserId with a BLANK phone
+     * column — the shape that actually reproduces the defect, and one the issue
+     * API really could write: {@code createVoucher}'s backfill tested
+     * {@code == null}, so an explicitly blank {@code assigneePhone} survived it.
+     * {@code holderPhone} treats blank as absent and falls back to the assigned
+     * user's number (so the code was delivered to them), while the old ownership
+     * check compared their live phone claim against {@code ""} and refused.
+     *
+     * <p>The blank is the point. An earlier version of this test used a NULL
+     * phone, which the backfill makes unreachable through any issue path — so it
+     * pinned a shape only a legacy row could have, and the claim built on it was
+     * wrong. {@code createVoucher} now normalises blank too; this still guards
+     * the rows already written that way.
+     */
+    private Voucher voucherAssignedByUserIdWithBlankPhone(UUID holderId) {
+        Voucher v = baseVoucher();
+        v.setAssignedUserId(holderId);
+        v.setAssigneePhone("");
+        return v;
+    }
+
+    /** The legacy shape: an assigned user and a genuinely null phone column. */
     private Voucher voucherAssignedByUserIdOnly(UUID holderId) {
         Voucher v = baseVoucher();
         v.setAssignedUserId(holderId);
@@ -204,9 +226,9 @@ class VoucherRedemptionGuardsTest {
     // ------------------------------------------------------------------
 
     @Test
-    void theHolderOfAVoucherAssignedByUserIdAloneCanRedeemIt() {
+    void theHolderOfAVoucherWithABlankPhoneColumnCanRedeemIt() {
         UUID holderId = UUID.randomUUID();
-        Voucher v = voucherAssignedByUserIdOnly(holderId);
+        Voucher v = voucherAssignedByUserIdWithBlankPhone(holderId);
         LoyaltyUser holder = account(holderId, HOLDER_PHONE, LoyaltyUser.Status.ACTIVE);
         when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
         when(users.findById(holderId)).thenReturn(Optional.of(holder));
@@ -218,16 +240,58 @@ class VoucherRedemptionGuardsTest {
         Dtos.RedemptionResponse resp = service.redeem(TENANT, MERCHANT, request(v, null));
 
         // Before the fix this was a 403 NOT_VOUCHER_OWNER: the check compared the
-        // caller's phone against the null assigneePhone column, while delivery
-        // had resolved the same holder's phone and sent them the code.
+        // caller's live phone claim against the blank column, while delivery had
+        // resolved the same holder's phone and sent them the code.
         assertThat(resp.status()).isEqualTo(Voucher.Status.REDEEMED.name());
         assertThat(v.getUsesRemaining()).isZero();
     }
 
     @Test
-    void aDifferentCustomerStillCannotRedeemThatVoucher() {
+    void theHolderOfALegacyVoucherWithANullPhoneColumnCanRedeemItToo() {
+        // No issue path can write this row any more, but cells hold history.
         UUID holderId = UUID.randomUUID();
         Voucher v = voucherAssignedByUserIdOnly(holderId);
+        LoyaltyUser holder = account(holderId, HOLDER_PHONE, LoyaltyUser.Status.ACTIVE);
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        when(users.findById(holderId)).thenReturn(Optional.of(holder));
+        when(userService.spendabilityOf(holder)).thenReturn(UserService.Spendability.OK);
+
+        asCustomer(HOLDER_PHONE);
+
+        assertThat(service.redeem(TENANT, MERCHANT, request(v, null)).status())
+                .isEqualTo(Voucher.Status.REDEEMED.name());
+    }
+
+    @Test
+    void theOwnershipCheckAndTheAccountGateAreAboutTheSAMEPerson() {
+        // The two resolvers must share a precedence. When holderAccount preferred
+        // assignedUserId while holderPhone preferred the assignee phone, a
+        // voucher carrying both — which the issue API allows without
+        // cross-validating them — admitted the phone's owner on the ownership
+        // check and then inspected the OTHER account's status, so a blocked
+        // holder walked straight through the gate this class exists to close.
+        Voucher v = baseVoucher();
+        v.setAssigneePhone(HOLDER_PHONE);
+        v.setAssignedUserId(UUID.randomUUID());          // a DIFFERENT person
+        LoyaltyUser phoneHolder = account(UUID.randomUUID(), HOLDER_PHONE, LoyaltyUser.Status.BLOCKED);
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        when(users.findByTenantIdAndPhoneNumber(TENANT, HOLDER_PHONE))
+                .thenReturn(Optional.of(phoneHolder));
+        when(userService.spendabilityOf(phoneHolder)).thenReturn(UserService.Spendability.BLOCKED);
+
+        asCustomer(HOLDER_PHONE);
+
+        // Admitted as the holder by phone, so gated as that same holder.
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(e -> assertThat(((LoyaltyException) e).getCode()).isEqualTo("USER_BLOCKED"));
+        verify(users, never()).findById(v.getAssignedUserId());
+    }
+
+    @Test
+    void aDifferentCustomerStillCannotRedeemThatVoucher() {
+        UUID holderId = UUID.randomUUID();
+        Voucher v = voucherAssignedByUserIdWithBlankPhone(holderId);
         when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
         when(users.findById(holderId))
                 .thenReturn(Optional.of(account(holderId, HOLDER_PHONE, LoyaltyUser.Status.ACTIVE)));

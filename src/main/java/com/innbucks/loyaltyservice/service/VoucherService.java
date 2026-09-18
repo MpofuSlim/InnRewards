@@ -243,13 +243,19 @@ public class VoucherService {
      * is why it is no longer named for delivery. It used to be consulted only
      * when choosing where to send the code, while the two ownership checks
      * ({@code doRedeem}'s assignee branch and {@link #requireCallerMayViewVoucher})
-     * compared the caller against the raw {@code assigneePhone} column. Since
-     * {@code assigneePhone} is nullable and {@code createVoucher} never backfills
-     * it from {@code assignedUserId} — the documented "assignedUserId takes
-     * priority" issue shape — a voucher issued by user id alone was DELIVERED to
-     * its holder and then refused to that same holder on redeem, because the
-     * comparison was against a null. Resolve the holder the same way everywhere
-     * or the person who receives a voucher is not the person allowed to spend it.
+     * compared the caller against the raw {@code assigneePhone} column — and the
+     * two disagree about what counts as "no phone". This method treats a BLANK
+     * phone as absent and falls back to the assigned user's number; a bare column
+     * comparison does not. So a voucher issued with an explicitly blank
+     * {@code assigneePhone} alongside an {@code assignedUserId} was DELIVERED to
+     * that user and then refused to that same user, the check comparing their
+     * live phone claim against {@code ""}.
+     *
+     * <p>{@code createVoucher} now normalises blank to absent, so no new row can
+     * take that shape; this resolution is what covers rows already written that
+     * way, and any legacy row with a genuinely null phone. Resolve the holder the
+     * same way everywhere, or the person who receives a voucher is not the person
+     * allowed to spend it.
      */
     private String holderPhone(Voucher v) {
         if (v.getAssigneePhone() != null && !v.getAssigneePhone().isBlank()) {
@@ -282,17 +288,26 @@ public class VoucherService {
      * inventing a refusal from a missing row would strand it.
      */
     private java.util.Optional<LoyaltyUser> holderAccount(Voucher v) {
+        // PRECEDENCE MUST MATCH holderPhone's, exactly. The first draft of this
+        // method preferred assignedUserId while holderPhone prefers the assignee
+        // phone, and on a voucher carrying BOTH — which the issue API allows,
+        // without cross-validating that they name the same person — the
+        // ownership check then admitted the phone's owner while this gate
+        // inspected the id's owner. That re-opens, for that shape, the very gate
+        // this exists to close: the admitted holder's own account is never
+        // consulted. Whatever order is chosen, one order.
+        if (v.getAssigneePhone() != null && !v.getAssigneePhone().isBlank()) {
+            return users.findByTenantIdAndPhoneNumber(v.getTenantId(), v.getAssigneePhone());
+        }
         if (v.getAssignedUserId() != null) {
             // Tenant-checked: a voucher must never reach across tenants for the
-            // account whose status decides whether it may be spent.
+            // account whose status decides whether it may be spent. Belt and
+            // braces — createVoucher already refuses a cross-tenant
+            // assignedUserId — but this is the gate, so it re-checks.
             return users.findById(v.getAssignedUserId())
                     .filter(u -> u.getTenantId().equals(v.getTenantId()));
         }
-        String phone = holderPhone(v);
-        if (phone == null) {
-            return java.util.Optional.empty();
-        }
-        return users.findByTenantIdAndPhoneNumber(v.getTenantId(), phone);
+        return java.util.Optional.empty();
     }
 
     private Voucher createVoucher(UUID tenantId, Merchant merchant, UUID batchId,
@@ -319,7 +334,16 @@ public class VoucherService {
             if (!u.getTenantId().equals(tenantId)) {
                 throw LoyaltyException.forbidden("CROSS_TENANT", "user belongs to a different tenant");
             }
-            if (assigneePhone == null) assigneePhone = u.getPhoneNumber();
+            // BLANK counts as absent, not as a phone. This tested `== null`
+            // only, so an explicitly blank assigneePhone ("" or " ") survived
+            // into the row — and then every consumer disagreed about it:
+            // holderPhone treats blank as absent and falls back to this user's
+            // number (so the code was DELIVERED to them), while the ownership
+            // check compared a live phone claim against the blank string and
+            // refused the voucher to that same person. Normalising here is the
+            // fix at the source; resolving the holder through holderPhone is the
+            // fix for rows already written this way.
+            if (assigneePhone == null || assigneePhone.isBlank()) assigneePhone = u.getPhoneNumber();
             // assigneeName is supplied by caller — loyalty-service does not
             // duplicate identity from user-service.
         } else if (assigneePhone != null && !assigneePhone.isBlank()) {
@@ -451,7 +475,10 @@ public class VoucherService {
         // locked its own holder out of viewing and transferring it.
         String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
         String holder = holderPhone(v);
-        if (callerPhone == null || holder == null || !callerPhone.equals(holder)) {
+        // Same two properties as the redeem-side check: a null caller phone and a
+        // holder-less voucher both refuse, the latter through equals(null). Not
+        // Objects.equals, which would pass two nulls.
+        if (callerPhone == null || !callerPhone.equals(holder)) {
             throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
                     "you can only act on your own vouchers");
         }
@@ -549,7 +576,12 @@ public class VoucherService {
         if (CallerDetails.hasAnyRole("ROLE_CUSTOMER") && !staffCaller) {
             String callerPhone = CallerDetails.currentPhoneNumber();
             String holder = holderPhone(v);
-            if (callerPhone == null || holder == null || !callerPhone.equals(holder)) {
+            // A voucher with NO holder (bulk stock) refuses a customer bearer too,
+            // via equals(null) being false — resolving the holder must not turn
+            // "nobody owns this" into "everybody owns this". Do NOT rewrite this
+            // as Objects.equals(callerPhone, holder): that is TRUE for two nulls
+            // and would hand unassigned stock to any caller with no phone claim.
+            if (callerPhone == null || !callerPhone.equals(holder)) {
                 rejectRedemption(v, merchantId, req, "not voucher assignee");
                 fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                         FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher",

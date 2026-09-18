@@ -155,7 +155,7 @@ public class VoucherPurchaseController {
                                         "paidAt": "2026-09-17T19:52:10Z",
                                         "voucher": {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "VCH-AB12CD34",
+                                          "code": "K7M2PQ9XR4TB",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
@@ -218,7 +218,7 @@ public class VoucherPurchaseController {
                                         "paidAt": "2026-09-17T19:55:00Z",
                                         "voucher": {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "VCH-AB12CD34",
+                                          "code": "K7M2PQ9XR4TB",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",

@@ -803,9 +803,16 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Merchant performing the redemption. Required for MERCHANT_ADMIN.")
             UUID merchantId,
-            @Schema(example = "VCH-AB12CD34", description = "Voucher redemption code from the customer.")
+            @Schema(example = "K7M2PQ9XR4TB",
+                    description = "Voucher redemption code from the customer. 12 characters, uppercase, "
+                            + "with no prefix and no I/O/0/1 — do NOT validate for a `VCH-` prefix, which "
+                            + "is the format of a voucher PURCHASE ORDER reference, a different identifier.")
             @NotBlank String code,
-            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true)
+            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
+                    description = "Optional, and recorded as a CLAIM only. The account whose status is "
+                            + "checked (blocked / registration) is resolved from the voucher's own holder, "
+                            + "never from this field — sending it cannot relax a refusal and omitting it "
+                            + "cannot skip one.")
             UUID userId,
             @Schema(example = "WESTGATE", nullable = true, description = "Outlet code within the merchant.")
             String outletCode,
@@ -931,7 +938,10 @@ public class Dtos {
             Map<String, Long> byStatus,
             @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued, in USD (the platform base currency). Excludes vouchers with no money face value — PERCENT, FREE_ITEM and COMBO — which are still counted in `byStatus`.")
             BigDecimal valueIssuedAllTime,
-            @Schema(example = "7150.0000", description = "Summed face value of vouchers that have been (fully or partially) redeemed, in USD (the platform base currency).")
+            @Schema(example = "7150.0000", description = "Summed face value of FULLY redeemed vouchers, in USD "
+                    + "(the platform base currency). A MULTI_USE voucher with uses still left contributes "
+                    + "nothing until its last one is spent, because the sum keys on `redeemedAt`, which is "
+                    + "stamped only at exhaustion.")
             BigDecimal valueRedeemedAllTime,
             @Schema(example = "38") long issuedLast30Days,
             @Schema(example = "22") long redeemedLast30Days) {}

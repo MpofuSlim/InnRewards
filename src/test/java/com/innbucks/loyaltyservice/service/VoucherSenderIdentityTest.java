@@ -81,7 +81,8 @@ class VoucherSenderIdentityTest {
                 mock(FraudService.class), new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
                 props, new ExchangeRateService(mock(ExchangeRateRepository.class),
-                        CURRENCIES, new BigDecimal("25")));
+                        CURRENCIES, new BigDecimal("25")),
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         when(vouchers.findByCode(anyString())).thenReturn(Optional.empty());
         when(rules.findApplicable(eq(TENANT), eq(MERCHANT), eq(TransactionType.PURCHASE)))
                 .thenReturn(List.of());

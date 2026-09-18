@@ -1206,6 +1206,96 @@ could never succeed.
   `GlobalExceptionHandlerDispatchTest`, not to the unit test, because the defect
   is never in the handler's body.
 
+## Voucher redemption binds to the VOUCHER's holder, never to the request
+
+**Voucher redemption is not new** — `POST /loyalty/vouchers/redeem` →
+`VoucherService.doRedeem`, and `voucher_redemptions` dates to `V1__init.sql`.
+V45–V48 changed only issue-side concerns and left it untouched, which is how
+three of its guards came to guard nothing. The rules below are what they now do.
+
+- **The holder is resolved from the voucher, by ONE method.** `holderPhone` is
+  the assignee phone, else the assigned user's phone. It used to be called
+  `resolveDeliveryPhone` and be consulted only when choosing where to send the
+  code, while both ownership checks compared the caller against the raw
+  `assigneePhone` column. That column is nullable and `createVoucher` never
+  backfills it from `assignedUserId`, so **a voucher issued by user id alone was
+  DELIVERED to its holder and then refused to that same holder** — a 403
+  `NOT_VOUCHER_OWNER` against a null. Resolve the holder the same way everywhere
+  or the person who receives a voucher is not the person allowed to spend it.
+  Pinned by `VoucherRedemptionGuardsTest.theHolderOfAVoucherAssignedByUserIdAloneCanRedeemIt`.
+- **A voucher with NO holder is not redeemable by a customer bearer.** Resolving
+  the holder must not turn "nobody owns this" into "everybody owns this": bulk
+  stock has nothing to match, so a customer is refused and only a till redeems
+  it.
+- **The account gates read the voucher's holder, not `req.userId()`.** Both
+  BLOCKED and registration checks used to sit inside `if (req.userId() != null)`
+  — a nullable, unvalidated body field never compared to the voucher's own
+  holder. That made them **opt-in for the caller**: a till posting only the code
+  performed no account checks at all, and naming any unrelated ACTIVE account
+  satisfied them. `userId` is still recorded, as a CLAIM, exactly like
+  `fraud_attempts.user_id`.
+- **`UserService.spendabilityOf` is the ONE spend decision; only the wording is
+  local.** The voucher gate had hand-rolled its own branch and drifted three ways
+  from `requireSpendable` — no PENDING heal, no V44 on-demand eligibility check,
+  and **no INACTIVE refusal at all**, so an operator-deactivated holder could
+  still redeem. It now delegates. The copy stays separate deliberately: the
+  points wording says points "keep accruing", which is meaningless read aloud to
+  someone holding a gift voucher, and `VoucherController`'s 403 docs promise
+  `message` is customer-safe. Add a third spend gate and it delegates too.
+- **Redeem runs object-level merchant authz** (`requireCallerAdministersMerchant`),
+  mirroring issue. `requireMerchant` only proved the merchant existed in the
+  tenant, so a caller with no `merchantId` claim to pin it — a multi-merchant
+  MERCHANT_ADMIN, deliberately given none — could name a merchant it does not
+  administer and burn that merchant's voucher. Side effect: a cross-tenant
+  merchant id is now `404` rather than `403 CROSS_TENANT`, which is the
+  no-existence-oracle behaviour the rest of the service already had.
+- **REVOKED is checked before exhaustion.** Clients branch on `code`, and the old
+  order made a voucher an operator had cancelled after its last use report
+  itself as merely spent.
+
+### A REJECTED redemption row cannot be written where it is decided
+
+**`voucher_redemptions` could only ever hold SUCCESS rows.** Six refusal
+branches carefully wrote `Result.REJECTED` and then threw, from inside a
+class-level `@Transactional` service — so every one rolled back with the refusal
+it was documenting. So did the `EXPIRED` status flip the controller's Swagger
+promises.
+
+- **It cannot be fixed by copying `FraudService.record`'s `REQUIRES_NEW`**, which
+  solves the identical problem one line away, and the reason is a schema detail:
+  `fraud_attempts` has **no foreign key**, while
+  `voucher_redemptions.voucher_id REFERENCES vouchers(id)` does. The refusing
+  transaction holds a `PESSIMISTIC_WRITE` lock on that voucher row
+  (`lockByCode`), and Postgres takes a `FOR KEY SHARE` lock on the parent to
+  validate the FK — which conflicts. A second transaction would block on a lock
+  only the first can release while the first waits for it to return, and Postgres
+  cannot break it as a deadlock because from its side the outer session is merely
+  idle in transaction. **It would hang the redeem, not fail it.** Same reasoning
+  forbids a `REQUIRES_NEW` update for the EXPIRED flip.
+- **So refusals publish** `VoucherRedemptionRejectedEvent` and
+  `VoucherRedemptionAuditWriter` writes the row on
+  `@TransactionalEventListener(AFTER_ROLLBACK)` + `REQUIRES_NEW` — after the lock
+  is released and while the parent row still exists. Mirrors this repo's existing
+  `InvoiceGeneratedEvent` / AFTER_COMMIT pattern. Nothing in the listener may
+  escape: a refusal that could not be recorded is a WARN and still a refusal.
+- **The SUCCESS row stays inside the transaction**, and must: if the redemption
+  rolls back, the row saying it happened has to roll back with it. The two halves
+  are mirror images, not an inconsistency.
+- **The EXPIRED flip rides the same event**, applied through
+  `VoucherRepository.markExpiredIfDue`, whose predicate re-checks the deadline
+  and the live-status list so it can only ever write a fact that is already true
+  and can never clobber a REDEEMED/REVOKED transition that landed in between.
+  Idempotent and safe to lose — the expiry sweeper converges anything missed.
+
+**Known and NOT fixed here, deliberately:** a MULTI_USE voucher returns its FULL
+face value on every use (`value` is the face amount, `usesRemaining` a counter,
+and there is no remaining-value column or request amount anywhere) — so "a $5
+voucher, 3 uses" is an undefined product rule, not a bug with a right answer;
+and `redeemedAt` is stamped only at exhaustion, so a partially used voucher is
+never billed a redeem-side fee and never counted as redeemed. Both need a
+platform-owner decision. The false javadoc that claimed otherwise
+(`sumRedeemedValueByMerchantId`, `Dtos.VoucherSummary`) is corrected.
+
 ## Cryptography & key management (OWASP A02)
 
 At-rest sensitive fields are keyed/hashed, never plaintext: loyalty voucher/QR

@@ -249,16 +249,26 @@ public class Voucher {
      * so a "$5, three uses" voucher handed the till $5 three times.
      * {@code VoucherService.resolveUsageLimit} refuses to issue one.
      *
-     * <p><b>MULTI_USE stays on this enum, deliberately, and must not be
-     * deleted.</b> Vouchers issued before the retirement still hold the string,
-     * and {@code voucher_type} is {@code @Enumerated(EnumType.STRING)}: removing
-     * the constant would make Hibernate throw per row at query execution on
-     * every read path that touches those vouchers, with no compile, boot or CI
-     * signal (see the migration rule in CLAUDE.md). Those vouchers are also
-     * deliberately still HONOURED — their holders were promised those uses, and
-     * taking them back is a decision about live customer value, not a cleanup.
-     * The constant may go once none remain, together with a migration and a
-     * narrowing of {@code chk_vouchers_voucher_type}.
+     * <p><b>V49 collapsed the outstanding stock</b> (owner decision, the cell
+     * being in test phase): every live MULTI_USE voucher keeps exactly one use,
+     * every row was retyped SINGLE_USE, and {@code chk_vouchers_voucher_type}
+     * now refuses the value outright. Refusing to MINT one was only half the
+     * retirement — the half that does not hold the money, since a live
+     * MULTI_USE row went on paying its full face value per use regardless of
+     * what the issue endpoint would accept.
+     *
+     * <p><b>MULTI_USE stays on this enum even so, and must not be deleted.</b>
+     * The reason is no longer live stock — there is none — but hydration
+     * safety: {@code voucher_type} is {@code @Enumerated(EnumType.STRING)}, so
+     * a row holding a string this enum lacks makes Hibernate throw PER ROW at
+     * query execution, with no compile, boot or CI signal (every
+     * {@code @SpringBootTest} applies Flyway first, so the suite stays green
+     * and the breakage appears only against a cell with real history). A
+     * restore from a pre-V49 backup, a replica that has not caught up, or any
+     * row that predates the migration would take out every read path touching
+     * it. The constant costs nothing and is the difference between a stale row
+     * being merely odd and being a 500. Deleting it buys tidiness and risks an
+     * outage — do not trade that way.
      */
     public enum VoucherType { SINGLE_USE, MULTI_USE }
 }

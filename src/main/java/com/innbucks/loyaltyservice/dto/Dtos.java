@@ -612,8 +612,11 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
             UUID merchantId,
-            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE", "MULTI_USE"},
-                    description = "Defaults to SINGLE_USE. MULTI_USE requires usageLimit >= 2.")
+            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE"},
+                    description = "Defaults to SINGLE_USE, which is now the only issuable type. "
+                            + "`MULTI_USE` is RETIRED and refused with `MULTI_USE_RETIRED`: a voucher "
+                            + "is worth its face value and is redeemed once. Issue several vouchers "
+                            + "instead. Vouchers already issued as MULTI_USE keep their remaining uses.")
             Voucher.VoucherType voucherType,
             @Schema(example = "5.0000",
                     description = "The voucher's money face value — always an AMOUNT in `currency`. " +
@@ -626,7 +629,7 @@ public class Dtos {
             String currency,
             @Schema(example = "3", nullable = true,
                     description = "How many times the voucher can be redeemed. SINGLE_USE: omit or 1. " +
-                                  "MULTI_USE: required, >= 2.")
+                                  "RETIRED: omit it. Any other value is refused.")
             Integer usageLimit,
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
@@ -665,7 +668,7 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
             UUID merchantId,
-            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE", "MULTI_USE"},
+            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE"},
                     description = "Applied to every voucher in the batch. Defaults to SINGLE_USE.")
             Voucher.VoucherType voucherType,
             @Schema(example = "5.0000",
@@ -676,7 +679,7 @@ public class Dtos {
                                   "allowlist-validated, fail closed.")
             String currency,
             @Schema(example = "3", nullable = true,
-                    description = "Per-voucher usage limit. SINGLE_USE: omit or 1. MULTI_USE: required, >= 2.")
+                    description = "RETIRED — a voucher has exactly one use. Omit it, or send 1.")
             Integer usageLimit,
             @Schema(example = "100", description = "Number of vouchers to generate.")
             @Min(1) int quantity,
@@ -697,7 +700,7 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
             UUID merchantId,
-            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE", "MULTI_USE"})
+            @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE"})
             Voucher.VoucherType voucherType,
             @Schema(example = "5.0000", description = "The voucher's money face value — also the amount the payer is charged.")
             @NotNull @Positive BigDecimal value,
@@ -707,7 +710,7 @@ public class Dtos {
                                   "only collects USD/ZWG.")
             String currency,
             @Schema(example = "3", nullable = true,
-                    description = "SINGLE_USE: omit or 1. MULTI_USE: required, >= 2.")
+                    description = "RETIRED — a voucher has exactly one use. Omit it, or send 1.")
             Integer usageLimit,
             @Schema(example = "+263786546765", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,

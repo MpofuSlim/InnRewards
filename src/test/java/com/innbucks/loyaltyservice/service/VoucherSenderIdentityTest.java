@@ -44,11 +44,19 @@ import static org.mockito.Mockito.*;
  * boundaries that matter:
  *
  * <ul>
- *   <li>senderPhone defaults to the issuing caller's own JWT phone;</li>
+ *   <li><b>senderPhone is NEVER taken from the caller's own token</b>;</li>
  *   <li>no copy when sender and recipient are the same phone;</li>
  *   <li>bulk stock never carries a sender (and never messages one);</li>
  *   <li>the sender name is HTML-stripped like the assignee's.</li>
  * </ul>
+ *
+ * <p>The first of those was the opposite until this change, and the reversal is
+ * the point of {@link #senderPhone_isNeverTakenFromTheIssuingStaffMembersToken}:
+ * the fallback was written for "a customer gifting from the app", a caller this
+ * endpoint cannot have (it is MERCHANT_ADMIN / SHOP_ADMIN / SUPER_ADMIN only).
+ * So it resolved to a STAFF phone every time, and the real flow — a customer at
+ * a till asking the cashier to send a voucher to someone — quietly delivered the
+ * sender's confirmation, CODE INCLUDED, to the cashier's own handset.
  */
 class VoucherSenderIdentityTest {
 
@@ -145,14 +153,46 @@ class VoucherSenderIdentityTest {
     }
 
     @Test
-    void senderPhone_defaultsToTheCallersJwtPhone() {
-        authenticateWithPhone(SENDER_PHONE);
+    void senderPhone_isNeverTakenFromTheIssuingStaffMembersToken() {
+        // The cashier is authenticated; the request names no sender. The old
+        // fallback made the CASHIER the sender and sent them the confirmation
+        // copy — which carries the voucher code — for a gift between two other
+        // people.
+        String cashierPhone = "+263771111111";
+        authenticateWithPhone(cashierPhone);
 
         service.issue(TENANT, request("Tawanda Mpofu", null, RECIPIENT_PHONE));
 
         Voucher v = saved();
+        assertThat(v.getSenderPhone())
+                .as("no sender was named, so the voucher has no sender — not the cashier")
+                .isNull();
+        verify(notifications, never()).deliverSenderCopy(any(), anyString());
+        verify(notifications, never()).deliver(any(), eq(cashierPhone));
+    }
+
+    @Test
+    void theTillFlow_customerAsSender_recipientAsAssignee() {
+        // Tawanda walks up to a till and asks for a voucher for Sedrick. The
+        // cashier is the authenticated caller, but types the CUSTOMER's number
+        // as the sender: Tawanda gets the confirmation, Sedrick gets the
+        // voucher, and the cashier gets neither.
+        String cashierPhone = "+263771111111";
+        authenticateWithPhone(cashierPhone);
+
+        Dtos.VoucherResponse resp = service.issue(TENANT,
+                request("Tawanda Mpofu", SENDER_PHONE, RECIPIENT_PHONE));
+
+        Voucher v = saved();
         assertThat(v.getSenderPhone()).isEqualTo(SENDER_PHONE);
+        assertThat(resp.senderPhone()).isEqualTo(SENDER_PHONE);
+        verify(notifications).deliver(v, RECIPIENT_PHONE);
         verify(notifications).deliverSenderCopy(v, SENDER_PHONE);
+        verify(notifications, never()).deliverSenderCopy(any(), eq(cashierPhone));
+
+        // The cashier is still recorded — as the ISSUER, which is the audit
+        // fact, distinct from the presentation fact above.
+        assertThat(v.getIssuerPhone()).isEqualTo(cashierPhone);
     }
 
     @Test
@@ -164,8 +204,10 @@ class VoucherSenderIdentityTest {
     }
 
     @Test
-    void noSenderPhoneAnywhere_noSenderCopy() {
-        // No JWT phone (unauthenticated context) and none in the body.
+    void noSenderPhoneInTheBody_noSenderCopy() {
+        // A named sender with no number is legitimate: the recipient's message
+        // still reads "Tawanda Mpofu sent you…", there is simply nowhere to
+        // send a confirmation.
         service.issue(TENANT, request("Tawanda Mpofu", null, RECIPIENT_PHONE));
 
         Voucher v = saved();

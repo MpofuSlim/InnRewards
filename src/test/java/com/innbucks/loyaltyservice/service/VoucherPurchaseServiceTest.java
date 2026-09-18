@@ -158,10 +158,16 @@ class VoucherPurchaseServiceTest {
     }
 
     @Test
-    void create_issuerIdentityAndSenderDefault_comeFromTheJwt() {
+    void create_issuerIdentityComesFromTheJwt_butTheSenderNeverDoes() {
+        // The cashier's own phone. It must reach issuer_phone (audit) and NOT
+        // sender_phone (presentation) — and above all not payer_phone, which is
+        // where the EcoCash PIN prompt is sent. The old fallback put it in all
+        // three, so an order created without an explicit sender asked the
+        // CASHIER to pay for a customer's voucher.
+        String cashierPhone = "+263771111111";
         var auth = new UsernamePasswordAuthenticationToken("admin@example.com", "n/a",
                 List.of(new SimpleGrantedAuthority("ROLE_MERCHANT_ADMIN")));
-        auth.setDetails(new CallerDetails(null, null, "+263782608767", null));
+        auth.setDetails(new CallerDetails(null, null, cashierPhone, null));
         SecurityContextHolder.getContext().setAuthentication(auth);
 
         service.create(TENANT, new Dtos.PurchaseVoucherRequest(MERCHANT, null,
@@ -169,10 +175,35 @@ class VoucherPurchaseServiceTest {
                 "+263786546765", null, null, "Tawanda Mpofu", null, null, null, null));
 
         VoucherPurchaseOrder o = savedOrder();
+        assertThat(o.getSenderPhone()).isNull();
+        assertThat(o.getPayerPhone())
+                .as("falls through to the assignee, never to the cashier")
+                .isEqualTo("+263786546765");
+        assertThat(o.getIssuerEmail()).isEqualTo("admin@example.com");
+        assertThat(o.getIssuerPhone()).isEqualTo(cashierPhone);
+    }
+
+    @Test
+    void create_theTillFlow_customerPaysAndIsTheSender() {
+        // Tawanda at the till buying a voucher for Sedrick: the cashier types
+        // Tawanda's number as the sender, so Tawanda is prompted to pay and
+        // Tawanda gets the confirmation once it issues.
+        String cashierPhone = "+263771111111";
+        var auth = new UsernamePasswordAuthenticationToken("cashier@example.com", "n/a",
+                List.of(new SimpleGrantedAuthority("ROLE_SHOP_ADMIN")));
+        auth.setDetails(new CallerDetails(MERCHANT, null, cashierPhone, null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+
+        service.create(TENANT, new Dtos.PurchaseVoucherRequest(MERCHANT, null,
+                new BigDecimal("5.00"), "USD", null,
+                "+263786546765", "Sedrick Nyanyiwa", null,
+                "Tawanda Mpofu", "+263782608767", null, null, null));
+
+        VoucherPurchaseOrder o = savedOrder();
         assertThat(o.getSenderPhone()).isEqualTo("+263782608767");
         assertThat(o.getPayerPhone()).isEqualTo("+263782608767");
-        assertThat(o.getIssuerEmail()).isEqualTo("admin@example.com");
-        assertThat(o.getIssuerPhone()).isEqualTo("+263782608767");
+        assertThat(o.getAssigneePhone()).isEqualTo("+263786546765");
+        assertThat(o.getIssuerPhone()).isEqualTo(cashierPhone);
     }
 
     @Test

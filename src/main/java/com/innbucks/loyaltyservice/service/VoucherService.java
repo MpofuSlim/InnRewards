@@ -108,15 +108,28 @@ public class VoucherService {
         Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
                 tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
         int usageLimit = resolveUsageLimit(req.voucherType(), req.usageLimit());
-        // The sender phone defaults to the issuing caller's own JWT phone —
-        // a customer gifting from the app gets their confirmation copy without
-        // restating their number. Single-issue only: bulk stock deliberately
-        // has no sender, so the default must not apply there.
-        String senderPhone = req.senderPhone() != null && !req.senderPhone().isBlank()
-                ? req.senderPhone() : CallerDetails.currentPhoneNumber();
+        // The sender is whoever the request NAMES, or nobody. There is
+        // deliberately no fallback to the caller's own JWT phone.
+        //
+        // It used to fall back, on the reasoning that "a customer gifting from
+        // the app gets their confirmation copy without restating their number".
+        // A CUSTOMER cannot reach this endpoint — it is
+        // MERCHANT_ADMIN/SHOP_ADMIN/SUPER_ADMIN only, as is the purchase-order
+        // path — so that case was unreachable and the fallback resolved to a
+        // STAFF phone every single time. The real flow is a customer at a till:
+        // the cashier types the customer's number as the sender and the
+        // recipient's as the assignee. Defaulting sent the sender copy — which
+        // CONTAINS THE VOUCHER CODE — to the cashier's own handset, for a gift
+        // between two other people.
+        //
+        // The caller's identity is already recorded, in the right place:
+        // createVoucher stamps issuer_phone/issuer_user_id/issuer_email from the
+        // JWT. Sender is PRESENTATION ("Tawanda sent you a voucher"), issuer is
+        // AUDIT ("this cashier issued it"). Collapsing the two is exactly the
+        // confusion V46 introduced the separate columns to avoid.
         Voucher v = createVoucher(tenantId, merchant, null,
                 req.assignedUserId(), req.assigneePhone(), req.assigneeName(),
-                req.senderName(), senderPhone,
+                req.senderName(), req.senderPhone(),
                 req.deliveryChannel(), req.campaignSource(), req.value(), req.currency(),
                 voucherTypeOrDefault(req.voucherType()), usageLimit);
         return finishIssue(v);

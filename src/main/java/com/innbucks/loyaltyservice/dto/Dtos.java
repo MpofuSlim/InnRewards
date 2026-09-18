@@ -644,9 +644,12 @@ public class Dtos {
                                   "voucher. Presentation only — never an identity claim.")
             @Size(max = 200) String senderName,
             @Schema(example = "+263782608767", nullable = true,
-                    description = "Sender's phone (V46). Receives a WhatsApp/SMS confirmation of the " +
-                                  "voucher, including the code. Defaults to the issuing caller's own " +
-                                  "JWT phone when omitted.")
+                    description = "Sender's phone (V46) — the number of the person the voucher is FROM, " +
+                                  "e.g. the customer standing at the till. Receives a WhatsApp/SMS " +
+                                  "confirmation of the voucher, **including the code**. " +
+                                  "NO DEFAULT: omit it and the voucher simply has no sender and no " +
+                                  "confirmation is sent. It is never filled in from the caller's own " +
+                                  "token — the issuing staff member is recorded separately as the issuer.")
             @Size(max = 32) String senderPhone,
             @Schema(example = "SMS", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
             Voucher.DeliveryChannel deliveryChannel,
@@ -723,13 +726,19 @@ public class Dtos {
                     description = "Display name of the person the voucher is FROM (V46).")
             @Size(max = 200) String senderName,
             @Schema(example = "+263782608767", nullable = true,
-                    description = "Sender's phone (V46). Gets the WhatsApp/SMS confirmation copy at issue. " +
-                                  "Defaults to the creating caller's own JWT phone when omitted.")
+                    description = "Sender's phone (V46) — the number of the person the voucher is FROM, " +
+                                  "typically the customer paying at the till. Gets the WhatsApp/SMS " +
+                                  "confirmation copy once the voucher is issued, and is the first " +
+                                  "fallback for `payerPhone`. NO DEFAULT: it is never filled in from the " +
+                                  "caller's own token, so an order created without it has no sender and " +
+                                  "falls back to `assigneePhone` for the payment prompt.")
             @Size(max = 32) String senderPhone,
             @Schema(example = "+263782608767", nullable = true,
                     description = "The phone the payment instrument targets — the EcoCash PIN prompt goes " +
-                                  "HERE. Defaults to the sender's phone, else the assignee's; required when " +
-                                  "neither is present.")
+                                  "HERE. Falls back to `senderPhone`, then `assigneePhone`; refused " +
+                                  "(`PAYER_PHONE_REQUIRED`) when all three are absent. On a gift, set " +
+                                  "this or `senderPhone` to the BUYER: leaving both blank falls through " +
+                                  "to the assignee and prompts the recipient to pay for their own gift.")
             @Size(max = 32) String payerPhone,
             @Schema(example = "WHATSAPP", nullable = true, allowableValues = {"SMS", "WHATSAPP", "EMAIL", "PUSH", "POS", "NONE"})
             Voucher.DeliveryChannel deliveryChannel,

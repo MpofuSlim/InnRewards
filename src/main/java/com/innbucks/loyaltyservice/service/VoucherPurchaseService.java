@@ -110,12 +110,19 @@ public class VoucherPurchaseService {
                 req.currency() != null && !req.currency().isBlank() ? req.currency() : merchant.getCurrency());
         fx.toBaseWithRate(tenantId, req.value(), currency);
 
+        // The sender is whoever the request NAMES, or nobody — no fallback to
+        // the caller's JWT phone. This path is staff-only
+        // (MERCHANT_ADMIN/SHOP_ADMIN/SUPER_ADMIN), so that fallback resolved to
+        // the CASHIER every time, and it fed the payer chain below: an order
+        // created without an explicit sender pushed the EcoCash PIN prompt to
+        // the cashier's own handset, asking a staff member to pay for a
+        // customer's gift. The cashier's identity is recorded separately, as
+        // issuer_* and cash_confirmed_by.
+        String senderPhone = firstNonBlank(req.senderPhone());
         // The payer: explicit, else the sender (the person gifting is usually
-        // the person paying — and senderPhone itself defaults to the caller's
-        // JWT phone, same as issue), else the recipient. EcoCash pushes its
-        // PIN prompt to THIS number, so an order with no phone at all is not
-        // payable electronically and is refused rather than minted broken.
-        String senderPhone = firstNonBlank(req.senderPhone(), CallerDetails.currentPhoneNumber());
+        // the person paying), else the recipient. EcoCash pushes its PIN prompt
+        // to THIS number, so an order with no phone at all is not payable
+        // electronically and is refused rather than minted broken.
         String payerPhone = firstNonBlank(req.payerPhone(), senderPhone, req.assigneePhone());
         if (payerPhone == null) {
             throw LoyaltyException.badRequest("PAYER_PHONE_REQUIRED",

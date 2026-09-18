@@ -87,7 +87,9 @@ public class TransactionController {
                                         "channel": "TYPED_PHONE",
                                         "reference": "POS-20260504-0001",
                                         "createdAt": "2026-05-04T11:00:00Z",
-                                        "invoiceId": null
+                                        "invoiceId": null,
+                                        "currency": "USD",
+                                        "baseAmount": 100.00
                                       }
                                     }
                                     """)
@@ -104,8 +106,8 @@ public class TransactionController {
                             examples = @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "userId: must not be null",
-                                      "data": null
+                                      "message": "Validation failed",
+                                      "data": { "userId": "must not be null" }
                                     }
                                     """)
                     )
@@ -124,7 +126,7 @@ public class TransactionController {
                             examples = @ExampleObject(name = "Duplicate reference", value = """
                                     {
                                       "code": "DUPLICATE_REFERENCE",
-                                      "message": "A transaction with that reference already exists.",
+                                      "message": "transaction with this merchant reference already exists",
                                       "data": null
                                     }
                                     """)
@@ -169,7 +171,9 @@ public class TransactionController {
                                         "channel": null,
                                         "reference": "REV-POS-20260504-0001",
                                         "createdAt": "2026-05-04T12:30:00Z",
-                                        "invoiceId": null
+                                        "invoiceId": null,
+                                        "currency": "USD",
+                                        "baseAmount": null
                                       }
                                     }
                                     """)
@@ -184,7 +188,7 @@ public class TransactionController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Transaction not found",
+                                      "message": "transaction not found",
                                       "data": null
                                     }
                                     """)
@@ -245,7 +249,9 @@ public class TransactionController {
                                         "channel": null,
                                         "reference": "Goodwill credit",
                                         "createdAt": "2026-05-04T13:15:00Z",
-                                        "invoiceId": null
+                                        "invoiceId": null,
+                                        "currency": "USD",
+                                        "baseAmount": null
                                       }
                                     }
                                     """)
@@ -253,14 +259,17 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Malformed body (bad UUID / non-numeric points)",
+                    description = "Malformed body (bad UUID / non-numeric points). The Jackson cause is "
+                            + "logged, never echoed, so the message is always the fixed one below. A body "
+                            + "that parses but fails bean validation is a different 400: "
+                            + "`\"message\": \"Validation failed\"` with the offending field in `data`.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Bad request", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "Invalid UUID string: foo",
+                                      "message": "Malformed or unreadable request body.",
                                       "data": null
                                     }
                                     """)
@@ -275,7 +284,7 @@ public class TransactionController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "User not found",
+                                      "message": "user not found",
                                       "data": null
                                     }
                                     """)
@@ -325,12 +334,14 @@ public class TransactionController {
                                             "channel": "TYPED_PHONE",
                                             "reference": "POS-20260504-0001",
                                             "createdAt": "2026-05-04T11:00:00Z",
-                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53"
+                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53",
+                                            "currency": "USD",
+                                            "baseAmount": 100.00
                                           },
                                           {
                                             "id": "22222222-3333-4444-5555-666666666666",
                                             "type": "REDEMPTION",
-                                            "amount": null,
+                                            "amount": 5.00,
                                             "pointsDelta": -500.0000,
                                             "balanceAfter": 4600.0000,
                                             "ruleId": null,
@@ -340,7 +351,9 @@ public class TransactionController {
                                             "channel": "TYPED_PHONE",
                                             "reference": "VOUCHER:K7M2PQ9XR4TB",
                                             "createdAt": "2026-05-04T12:00:00Z",
-                                            "invoiceId": null
+                                            "invoiceId": null,
+                                            "currency": "USD",
+                                            "baseAmount": 5.00
                                           }
                                         ],
                                         "page": 0,
@@ -407,12 +420,14 @@ public class TransactionController {
                                             "channel": "TYPED_PHONE",
                                             "reference": "POS-20260504-0001",
                                             "createdAt": "2026-05-04T11:00:00Z",
-                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53"
+                                            "invoiceId": "9c1f0b8e-3a25-4d76-8f19-6b0c2e4a7d53",
+                                            "currency": "USD",
+                                            "baseAmount": 100.00
                                           },
                                           {
                                             "id": "22222222-3333-4444-5555-666666666666",
                                             "type": "REDEMPTION",
-                                            "amount": null,
+                                            "amount": 5.00,
                                             "pointsDelta": -500.0000,
                                             "balanceAfter": null,
                                             "ruleId": null,
@@ -422,7 +437,9 @@ public class TransactionController {
                                             "channel": "TYPED_PHONE",
                                             "reference": "VOUCHER:K7M2PQ9XR4TB",
                                             "createdAt": "2026-05-04T12:00:00Z",
-                                            "invoiceId": null
+                                            "invoiceId": null,
+                                            "currency": "USD",
+                                            "baseAmount": 5.00
                                           }
                                         ],
                                         "page": 0,
@@ -508,34 +525,31 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Bean validation on the body, or one of INSUFFICIENT_FUNDS (the sender's "
+                            + "wallet cannot cover it), BAD_AMOUNT, SELF_TRANSFER, RECIPIENT_REQUIRED or "
+                            + "NO_MERCHANT_CONTEXT. A cross-tenant sender or recipient returns 403. "
+                            + "Branch on `code`: bean validation is the status-format \"400 BAD_REQUEST\" "
+                            + "with the offending field in `data`, while the rest keep their domain code "
+                            + "and a `data` of null.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "points: must be positive",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "INSUFFICIENT_FUNDS (the sender's wallet cannot cover it), BAD_AMOUNT, "
-                            + "SELF_TRANSFER, RECIPIENT_REQUIRED or NO_MERCHANT_CONTEXT. A cross-tenant "
-                            + "sender or recipient returns 403.",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Insufficient funds", value = """
-                                    {
-                                      "code": "INSUFFICIENT_FUNDS",
-                                      "message": "You don't have enough loyalty points for this.",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "points": "must be greater than 0" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Insufficient funds", value = """
+                                            {
+                                              "code": "INSUFFICIENT_FUNDS",
+                                              "message": "You don't have enough loyalty points for this.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             )
     })
@@ -582,6 +596,28 @@ public class TransactionController {
                                     {
                                       "code": "INSUFFICIENT_FUNDS",
                                       "message": "You don't have enough loyalty points for this.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "The account can't spend right now: USER_PENDING (the phone hasn't been "
+                            + "proved yet — the account keeps EARNING, it just can't spend), USER_BLOCKED "
+                            + "(fraud hold; cleared only by POST /loyalty/users/{userId}/unblock) or "
+                            + "USER_INACTIVE. Also NOT_WALLET_OWNER when a CUSTOMER names an account that "
+                            + "isn't theirs, and CROSS_TENANT when the user belongs to another tenant. "
+                            + "`message` on all of these is customer-safe — render it verbatim. "
+                            + "USER_PENDING is the one a customer app meets most: branch on it rather than "
+                            + "on the 403 alone.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Account not spendable yet", value = """
+                                    {
+                                      "code": "USER_PENDING",
+                                      "message": "Your rewards account is still being set up, so these points can't be spent yet. You'll keep earning in the meantime.",
                                       "data": null
                                     }
                                     """)

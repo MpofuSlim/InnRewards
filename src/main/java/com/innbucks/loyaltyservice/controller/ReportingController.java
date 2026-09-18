@@ -303,7 +303,7 @@ public class ReportingController {
                             examples = @ExampleObject(name = "Not a member", value = """
                                     {
                                       "code": "403 FORBIDDEN",
-                                      "message": "You are not a member of this tenant",
+                                      "message": "You don't have permission to do that.",
                                       "data": null
                                     }
                                     """)))
@@ -348,14 +348,16 @@ public class ReportingController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
-                    description = "Merchant not found",
+                    // Also the answer for a merchant in ANOTHER tenant: the authz
+                    // lookup is tenant-scoped, so its existence is never confirmed.
+                    description = "No such merchant in this tenant",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Merchant not found",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)
@@ -363,14 +365,14 @@ public class ReportingController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "Merchant belongs to a different tenant than the X-Tenant-Id header",
+                    description = "Caller does not administer this merchant",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Cross-tenant", value = """
+                            examples = @ExampleObject(name = "Not the owner", value = """
                                     {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "merchant belongs to a different tenant",
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
                                       "data": null
                                     }
                                     """)
@@ -431,12 +433,17 @@ public class ReportingController {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
                                             "code": "K7M2PQ9XR4TB",
                                             "status": "ISSUED",
-                                            "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                            "voucherType": "SINGLE_USE",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                             "assigneePhone": "+254700000000",
+                                            "senderName": "Tawanda Mpofu",
+                                            "senderPhone": "+254711222333",
                                             "usesRemaining": 1,
+                                            "value": 5.00,
+                                            "currency": "USD",
                                             "issuedAt": "2026-05-04T10:30:00Z",
-                                            "expiresAt": "2026-06-03T10:30:00Z"
+                                            "expiresAt": "2026-06-03T10:30:00Z",
+                                            "baseValue": 5.00
                                           }
                                         ],
                                         "recentTransactions": [
@@ -467,7 +474,7 @@ public class ReportingController {
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "User not found",
+                                      "message": "user not found",
                                       "data": null
                                     }
                                     """)
@@ -481,7 +488,7 @@ public class ReportingController {
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Cross-tenant", value = """
                                     {
-                                      "code": "403 FORBIDDEN",
+                                      "code": "CROSS_TENANT",
                                       "message": "user belongs to a different tenant",
                                       "data": null
                                     }
@@ -620,13 +627,22 @@ public class ReportingController {
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Bad date", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "from: failed to convert value of type 'java.lang.String'",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Unparseable date", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Invalid value for 'from'.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing date", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Required parameter 'from' is missing.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             )
     })
@@ -688,14 +704,31 @@ public class ReportingController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "Merchant belongs to a different tenant than the X-Tenant-Id header",
+                    description = "Caller does not administer this merchant",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Cross-tenant", value = """
+                            examples = @ExampleObject(name = "Not the owner", value = """
                                     {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "merchant belongs to a different tenant",
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    // Also the answer for a merchant in ANOTHER tenant: the authz
+                    // lookup is tenant-scoped, so its existence is never confirmed.
+                    description = "No such merchant in this tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)
@@ -745,6 +778,21 @@ public class ReportingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Missing/invalid/inverted date range",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Range inverted", value = """
+                                    {
+                                      "code": "RANGE_INVERTED",
+                                      "message": "from must not be after to",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
                     description = "User belongs to a different tenant than the X-Tenant-Id header",
                     content = @Content(
@@ -752,8 +800,23 @@ public class ReportingController {
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Cross-tenant", value = """
                                     {
-                                      "code": "403 FORBIDDEN",
+                                      "code": "CROSS_TENANT",
                                       "message": "user belongs to a different tenant",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "No LoyaltyUser with that id",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "user not found",
                                       "data": null
                                     }
                                     """)
@@ -1198,8 +1261,17 @@ public class ReportingController {
             }
             """;
 
-    private static final String CROSS_TENANT_EXAMPLE = """
-            { "code": "403 FORBIDDEN", "message": "merchant belongs to a different tenant", "data": null }
+    // Object-level authz (MerchantAuthz) runs BEFORE any row is read, and it
+    // tenant-scopes the lookup: a merchant/shop in another tenant is 404 (never
+    // confirmed), and the only reachable 403 is the ownership refusal — a
+    // LoyaltyException, so the envelope carries its DOMAIN code, not
+    // "403 FORBIDDEN".
+    private static final String NOT_MERCHANT_OWNER_EXAMPLE = """
+            { "code": "NOT_MERCHANT_OWNER", "message": "You can only act on merchants you administer.", "data": null }
+            """;
+
+    private static final String MERCHANT_NOT_FOUND_EXAMPLE = """
+            { "code": "404 NOT_FOUND", "message": "merchant not found", "data": null }
             """;
 
     @GetMapping("/vouchers/operator")
@@ -1239,15 +1311,21 @@ public class ReportingController {
 
     @GetMapping("/vouchers/merchant/{merchantId}")
     @Operation(summary = "Voucher report — one merchant",
-            description = "Vouchers issued under {merchantId}. A merchant in another tenant returns 403 CROSS_TENANT " +
-                          "before any row is read.")
+            description = "Vouchers issued under {merchantId}. Authorisation runs before any row is read: a merchant " +
+                          "outside your tenant is 404 (its existence is never confirmed), and a merchant you do not " +
+                          "administer is 403 NOT_MERCHANT_OWNER.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report retrieved",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Merchant voucher report", value = VOUCHER_REPORT_EXAMPLE))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Merchant in another tenant",
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller does not administer this merchant",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Cross-tenant", value = CROSS_TENANT_EXAMPLE)))
+                            examples = @ExampleObject(name = "Not the owner", value = NOT_MERCHANT_OWNER_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No such merchant in this tenant",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = MERCHANT_NOT_FOUND_EXAMPLE)))
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<VoucherReport>> vouchersMerchant(
@@ -1263,16 +1341,28 @@ public class ReportingController {
 
     @GetMapping("/vouchers/shop/{shopId}")
     @Operation(summary = "Voucher report — one shop/outlet",
-            description = "Vouchers issued from {shopId}. A shop in another tenant returns 403 CROSS_TENANT. Only " +
+            description = "Vouchers issued from {shopId}. A shop outside your tenant is 404 (its existence is never " +
+                          "confirmed); a shop you are not assigned to is 403 NOT_SHOP_MEMBER, and a MERCHANT_ADMIN " +
+                          "who does not administer the shop's owning merchant gets 403 NOT_MERCHANT_OWNER. Only " +
                           "vouchers issued after shop attribution landed carry a shop_id; older ones won't appear here.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report retrieved",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Shop voucher report", value = VOUCHER_REPORT_EXAMPLE))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Shop in another tenant",
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller may not access this shop",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Cross-tenant",
-                                    value = "{ \"code\": \"403 FORBIDDEN\", \"message\": \"shop belongs to a different tenant\", \"data\": null }")))
+                            examples = {
+                                    @ExampleObject(name = "Not assigned to the shop",
+                                            value = "{ \"code\": \"NOT_SHOP_MEMBER\", \"message\": \"You can only access shops you are assigned to.\", \"data\": null }"),
+                                    @ExampleObject(name = "Not the owning merchant's admin",
+                                            value = NOT_MERCHANT_OWNER_EXAMPLE)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No such shop in this tenant",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found",
+                                    value = "{ \"code\": \"404 NOT_FOUND\", \"message\": \"shop not found\", \"data\": null }")))
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<VoucherReport>> vouchersShop(
@@ -1356,7 +1446,7 @@ public class ReportingController {
                     + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
                     + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
                     + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"
-                    + "AMOUNT,5.0000,USD,0,WHATSAPP,spring-2026,2026-06-01T08:00:00Z,2026-06-01T08:00:05Z,2026-06-02T18:20:00Z,"
+                    + "SINGLE_USE,5.0000,USD,0,WHATSAPP,spring-2026,2026-06-01T08:00:00Z,2026-06-01T08:00:05Z,2026-06-02T18:20:00Z,"
                     + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1\\n"))))
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<String> vouchersExport(

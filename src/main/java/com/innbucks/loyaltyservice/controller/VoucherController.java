@@ -110,13 +110,13 @@ public class VoucherController {
                                     @ExampleObject(name = "Missing value", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "value: must not be null",
-                                              "data": null
+                                              "message": "Validation failed",
+                                              "data": { "value": "must not be null" }
                                             }
                                             """),
                                     @ExampleObject(name = "Unsupported currency", value = """
                                             {
-                                              "code": "400 BAD_REQUEST",
+                                              "code": "UNSUPPORTED_CURRENCY",
                                               "message": "Currency GBP is not supported on this cell. Supported: USD, ZAR, ZWG.",
                                               "data": null
                                             }
@@ -132,14 +132,17 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "Caller does not administer the issuing merchant",
+                    description = "Caller does not administer the issuing merchant "
+                            + "(`NOT_MERCHANT_OWNER`), or the named `assignedUserId` belongs to "
+                            + "another tenant (`CROSS_TENANT`). Branch on `code` — a "
+                            + "LoyaltyException keeps its domain code in the envelope.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not merchant owner", value = """
                                     {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "You are not authorised to act on this merchant",
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
                                       "data": null
                                     }
                                     """)
@@ -226,22 +229,22 @@ public class VoucherController {
                             examples = @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "quantity: must be at least 1",
-                                      "data": null
+                                      "message": "Validation failed",
+                                      "data": { "quantity": "must be greater than or equal to 1" }
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
-                    description = "Template not found",
+                    description = "Merchant not found in this tenant",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not found", value = """
                                     {
                                       "code": "404 NOT_FOUND",
-                                      "message": "Voucher template not found",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)
@@ -290,17 +293,33 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Validation error, or EXPIRED — past the voucher's expiresAt. Bean "
+                            + "validation always answers `Validation failed` with the offending fields "
+                            + "in `data`; the field name is never in `message`. On EXPIRED the voucher "
+                            + "is also moved to the EXPIRED status, and that lands BEFORE this response "
+                            + "is written: the flip runs in a post-rollback listener inside the same "
+                            + "server-side call, so a client that re-reads the voucher on receiving this "
+                            + "error already sees EXPIRED. The flip is also idempotent — it only ever "
+                            + "moves a still-live voucher whose deadline has genuinely passed — so a "
+                            + "concurrent redemption or revocation is never overwritten.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "code: must not be blank",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "code": "must not be blank" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Expired", value = """
+                                            {
+                                              "code": "EXPIRED",
+                                              "message": "This voucher has expired.",
+                                              "data": null
+                                            }
+                                            """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -350,8 +369,8 @@ public class VoucherController {
                     responseCode = "409",
                     description = "REVOKED (cancelled by an operator — checked FIRST, so a voucher revoked "
                             + "after its last use reports REVOKED rather than ALREADY_REDEEMED) or "
-                            + "ALREADY_REDEEMED (fully used, which is also the answer when a multi-use "
-                            + "voucher is exhausted).",
+                            + "ALREADY_REDEEMED (the voucher's single use is spent — a voucher is worth "
+                            + "its face value once).",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -359,26 +378,6 @@ public class VoucherController {
                                     {
                                       "code": "ALREADY_REDEEMED",
                                       "message": "This voucher has already been fully redeemed.",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "EXPIRED — past the voucher's expiresAt. The voucher is also moved to the "
-                            + "EXPIRED status, and that lands BEFORE this response is written: the flip runs "
-                            + "in a post-rollback listener inside the same server-side call, so a client that "
-                            + "re-reads the voucher on receiving this error already sees EXPIRED. The flip is "
-                            + "also idempotent — it only ever moves a still-live voucher whose deadline has "
-                            + "genuinely passed — so a concurrent redemption or revocation is never overwritten.",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Expired", value = """
-                                    {
-                                      "code": "EXPIRED",
-                                      "message": "This voucher has expired.",
                                       "data": null
                                     }
                                     """)
@@ -421,7 +420,11 @@ public class VoucherController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Voucher transferred — the response shows the NEW assignee",
+                    description = "Voucher transferred — the response shows the NEW assignee. `code` is "
+                            + "ALWAYS null: the transfer rotates the voucher's code and deliberately "
+                            + "withholds it from the caller (the sender), or the rotation would be "
+                            + "pointless. The recipient reads the new code in-app as the voucher's new "
+                            + "assignee, and receives it by WhatsApp/SMS.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -431,7 +434,7 @@ public class VoucherController {
                                       "message": "Voucher transferred successfully",
                                       "data": {
                                         "id": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
-                                        "code": "K7M2PQ9XR4TB",
+                                        "code": null,
                                         "status": "VIEWED",
                                         "voucherType": "SINGLE_USE",
                                         "assignedUserId": "66666666-7777-8888-9999-000000000000",
@@ -523,8 +526,9 @@ public class VoucherController {
     @PostMapping("/{id}/revoke")
     @Operation(summary = "Revoke an issued voucher",
             description = "Marks the voucher REVOKED so it can no longer be redeemed. Use for fraud, " +
-                          "support refunds, or when a customer reports their code stolen. Already-redeemed " +
-                          "vouchers cannot be revoked.")
+                          "support refunds, or when a customer reports their code stolen. Revoke does NOT " +
+                          "inspect the current status — an already-redeemed voucher is simply set to " +
+                          "REVOKED.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -585,7 +589,8 @@ public class VoucherController {
     @Operation(summary = "Mark a voucher as viewed by the customer",
             description = "Read receipt — call this when the customer's app displays the voucher. " +
                           "Used by analytics to measure delivery-to-view conversion. No tenant header required " +
-                          "since the code itself identifies the tenant.")
+                          "since the code itself identifies the tenant. An unrecognised code is a no-op 200, " +
+                          "not a 404.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -603,15 +608,18 @@ public class VoucherController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404",
-                    description = "Voucher code not found",
+                    responseCode = "403",
+                    description = "The caller is neither the voucher's holder nor merchant/issuing staff. "
+                            + "There is deliberately NO 404: an unknown code is a silent 200, because this "
+                            + "is a best-effort read receipt (VoucherService.markViewed uses "
+                            + "findByCode().ifPresent).",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not found", value = """
+                            examples = @ExampleObject(name = "Not the holder", value = """
                                     {
-                                      "code": "404 NOT_FOUND",
-                                      "message": "voucher not found",
+                                      "code": "NOT_VOUCHER_OWNER",
+                                      "message": "you can only act on your own vouchers",
                                       "data": null
                                     }
                                     """)

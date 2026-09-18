@@ -91,8 +91,37 @@ Use the `wiremock-standalone` (shaded) classifier.
 Every endpoint MUST have meaningful `@ApiResponses` with `@ExampleObject`
 bodies using the project's `ApiResult` envelope (`{ "code", "message", "data" }`)
 — never the springdoc placeholder. Document success + realistic failure shapes
-(400/401/403/404) with real messages thrown by the service code. `MerchantController`
-and `ShopController` are the canonical shape.
+(400/401/403/404) with the real **`code` AND `message`** thrown by the service
+code. `MerchantController` and `ShopController` are the canonical shape.
+
+**Both halves, and `code` is the one that matters** — clients are told
+throughout to branch on it, so an example with the right message and the wrong
+code is the more expensive mistake, and the one a message-literal grep misses.
+An audit of every annotation in this service found ~30 wrong, almost all of one
+shape: a `LoyaltyException` keeps its **domain** code verbatim
+(`NOT_MERCHANT_OWNER`, `ORDER_ALREADY_PAID`, `UNSUPPORTED_CURRENCY`), and the
+example said `"403 FORBIDDEN"` / `"409 CONFLICT"` / `"400 BAD_REQUEST"` instead.
+The status-format code comes only from the GENERIC handlers — and from
+`LoyaltyException.notFound`, which is the deliberate exception at
+`"404 NOT_FOUND"` / `"<thing> not found"`.
+
+**Bean validation has ONE shape, and it is not the obvious one.** `@Valid` on a
+body always renders `{"code":"400 BAD_REQUEST","message":"Validation failed",
+"data":{"<field>":"<message>"}}` — the field detail is in `data`, never in
+`message`. Nine examples across six controllers wrote `"message": "value: must
+not be null"`, which is neither.
+
+**Never declare the same `responseCode` twice on one handler.** OpenAPI keys
+responses by status, so the second block is silently dropped from the published
+spec — it compiles, it boots, and half the documentation simply never renders.
+Use one `@ApiResponse` per status with several named `@ExampleObject`s.
+`SwaggerResponseCodeUniquenessTest` walks every `@RestController` in the build
+and fails on a duplicate; it found two live ones (`VoucherController.redeem`,
+`TransactionController.transfer`) the moment it was written.
+
+**A Swagger example is code that nothing executes**, which is why these rot
+silently and why the checks above are worth the words. When you change a thrown
+code or message, grep the controllers for the old literal in the same commit.
 
 ## A plain CUSTOMER is exempt from tenant membership — so ownership checks are now load-bearing
 

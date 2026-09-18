@@ -37,7 +37,9 @@ import org.springframework.web.bind.annotation.RestController;
  *       {@code confirm-cash} once the cashier holds the money.</li>
  *   <li>Poll {@code GET .../{orderRef}} until {@code status=PAID} — the
  *       response then carries the issued voucher (code included), and the
- *       recipient + sender WhatsApp messages have been dispatched.</li>
+ *       recipient's WhatsApp/SMS has been dispatched. The sender's own
+ *       confirmation copy goes out only when the order named an explicit
+ *       {@code senderPhone}; it is never taken from a staff caller's token.</li>
  * </ol>
  */
 @RestController
@@ -90,20 +92,24 @@ public class VoucherPurchaseController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
                     description = "Validation error — missing/non-positive/sub-cent value, unsupported currency, "
-                            + "no in-force exchange rate, type/usageLimit conflict, or no payer phone",
+                            + "no in-force exchange rate, type/usageLimit conflict, no payer phone, or no "
+                            + "merchantId when the caller's JWT carries no merchant scope (MERCHANT_REQUIRED). "
+                            + "Each of these carries its own domain `code`; a bean-validation failure on the "
+                            + "body is instead the generic `400 BAD_REQUEST` / `Validation failed` shape, whose "
+                            + "offending fields are in `data`.",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "No payer phone", value = """
                                             {
-                                              "code": "400 BAD_REQUEST",
+                                              "code": "PAYER_PHONE_REQUIRED",
                                               "message": "Provide payerPhone (or a senderPhone/assigneePhone to default from) — the payment prompt has to reach a real phone.",
                                               "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Unsupported currency", value = """
                                             {
-                                              "code": "400 BAD_REQUEST",
+                                              "code": "UNSUPPORTED_CURRENCY",
                                               "message": "Currency GBP is not supported on this cell. Supported: USD, ZAR, ZWG.",
                                               "data": null
                                             }
@@ -114,8 +120,21 @@ public class VoucherPurchaseController {
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not merchant owner", value = """
                                     {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "You are not authorised to act on this merchant",
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "No such merchant in this tenant — a merchant belonging to another tenant "
+                            + "reads as absent rather than as a 403, so nothing here confirms its existence",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Unknown merchant", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "merchant not found",
                                       "data": null
                                     }
                                     """)))
@@ -195,7 +214,9 @@ public class VoucherPurchaseController {
     @Operation(summary = "Confirm a CASH payment and issue the voucher",
             description = "The cashier has the money in hand — their confirmation IS the payment proof, so "
                     + "this is gated on the same staff roles as issuing and records WHO confirmed. Issues "
-                    + "the voucher immediately (recipient + sender WhatsApp messages included). Idempotent "
+                    + "the voucher immediately — the recipient's WhatsApp/SMS goes out, and the sender gets "
+                    + "their own confirmation copy only when the ORDER named an explicit `senderPhone` (it is "
+                    + "never filled in from the confirming cashier's token). Idempotent "
                     + "for a double-click; refused when the order was already paid electronically or has "
                     + "expired (create a new order and take payment again).")
     @ApiResponses({
@@ -243,18 +264,36 @@ public class VoucherPurchaseController {
                             examples = {
                                     @ExampleObject(name = "Already paid electronically", value = """
                                             {
-                                              "code": "409 CONFLICT",
+                                              "code": "ORDER_ALREADY_PAID",
                                               "message": "This order was already paid electronically — do not take cash for it.",
                                               "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Expired", value = """
                                             {
-                                              "code": "409 CONFLICT",
+                                              "code": "ORDER_EXPIRED",
                                               "message": "This purchase order has expired — create a new one and take payment again.",
                                               "data": null
                                             }
-                                            """)}))
+                                            """),
+                                    @ExampleObject(name = "Cancelled", value = """
+                                            {
+                                              "code": "ORDER_NOT_CONFIRMABLE",
+                                              "message": "This order was cancelled and can no longer be paid.",
+                                              "data": null
+                                            }
+                                            """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "Unknown order in this tenant",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "purchase order not found",
+                                      "data": null
+                                    }
+                                    """)))
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> confirmCash(

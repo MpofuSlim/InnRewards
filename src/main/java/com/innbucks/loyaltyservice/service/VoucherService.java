@@ -172,10 +172,24 @@ public class VoucherService {
         // someone opens or spends it (V48 — see Voucher.Status). The send runs
         // off the request thread so a slow gateway never blocks issuance, which
         // is exactly why a status flip here could never have meant "received".
-        if (v.getDeliveryChannel() != null && v.getDeliveryChannel() != Voucher.DeliveryChannel.NONE) {
+        String recipientPhone = holderPhone(v);
+        // Stamp only when a send is genuinely about to be attempted — the same
+        // two conditions NotificationGateway.deliver applies. Two changes here:
+        //
+        //  * an ABSENT channel now stamps, because it now delivers (the enum
+        //    never routed anything, so omitting it can no longer mean "do not
+        //    contact the customer" — see NotificationGateway.deliver); and
+        //  * a voucher with NO reachable phone no longer stamps. It never
+        //    should have: the gateway returns early on a blank phone, logging
+        //    "still issued", while this column asserted a dispatch. That is the
+        //    exact lie V48 retired the DELIVERED status for, surviving one
+        //    field over. `deliveredAt` means "dispatch was ATTEMPTED at T" and
+        //    now only says so when one was.
+        boolean willAttemptSend = v.getDeliveryChannel() != Voucher.DeliveryChannel.NONE
+                && recipientPhone != null && !recipientPhone.isBlank();
+        if (willAttemptSend) {
             v.setDeliveredAt(Instant.now());
         }
-        String recipientPhone = holderPhone(v);
         notifications.deliver(v, recipientPhone);
         // Sender's confirmation copy (V46): "we should both get the WhatsApp
         // messages". Issue-path ONLY — the transfer path rotates the code and

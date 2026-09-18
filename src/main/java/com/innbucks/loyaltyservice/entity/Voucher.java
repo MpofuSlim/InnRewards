@@ -238,6 +238,26 @@ public class Voucher {
     public static final java.util.List<Status> LIVE_STATUSES =
             java.util.List.of(Status.ISSUED, Status.VIEWED, Status.PARTIALLY_USED);
 
+    /**
+     * <b>Only {@code NONE} still means anything.</b> Delivery is WhatsApp
+     * first with an SMS fallback, always, to whoever holds the voucher —
+     * {@code NotificationGateway.deliver} has never branched on this value
+     * except to decide whether to send at all. So {@code EMAIL}, {@code PUSH}
+     * and {@code POS} named routes the service cannot perform (a voucher
+     * "issued by EMAIL" was sent a WhatsApp), and {@code SMS} vs
+     * {@code WHATSAPP} described an order that is fixed. Offering the choice
+     * let an operator believe they had made one.
+     *
+     * <p>Every constant STAYS. {@code delivery_channel} is
+     * {@code @Enumerated(EnumType.STRING)} and historical rows hold all six, so
+     * deleting one makes Hibernate throw per row at query execution with no
+     * compile, boot or CI signal — the rule in CLAUDE.md, and the same reason
+     * {@code VoucherType.MULTI_USE} survives V49. They are legacy values the
+     * API accepts and ignores, not a menu.
+     *
+     * <p>{@code NONE} is the one honest value: <b>do not send</b>. It is also
+     * the only one that must be sent explicitly — an ABSENT channel delivers.
+     */
     public enum DeliveryChannel { SMS, WHATSAPP, EMAIL, PUSH, POS, NONE }
 
     /**

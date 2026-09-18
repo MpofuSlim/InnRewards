@@ -1,5 +1,8 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.Tenant;
+import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.testsupport.ControllerSecurityTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,6 +23,9 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
 
     @Value("${innbucks.internal-api-token}") String internalToken;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    MerchantRepository merchantRepository;
+
     @Test
     void by_admin_without_internal_token_returns_401() throws Exception {
         mockMvc.perform(get("/loyalty/internal/merchants/by-admin")
@@ -33,6 +39,66 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .header("X-Internal-Token", "definitely-not-the-real-token")
                         .param("email", "anyone@test.local"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void admin_email_without_internal_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/internal/merchants/{id}/admin-email", UUID.randomUUID()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void admin_email_with_wrong_internal_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/internal/merchants/{id}/admin-email", UUID.randomUUID())
+                        .header("X-Internal-Token", "not-the-real-token"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void admin_email_with_correct_token_and_unknown_merchant_returns_404() throws Exception {
+        // A merchantId naming nothing is a genuinely different fact from a
+        // merchant with nobody on file, and the caller should see it in its logs.
+        mockMvc.perform(get("/loyalty/internal/merchants/{id}/admin-email", UUID.randomUUID())
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void admin_email_returns_the_merchants_admin() throws Exception {
+        UUID merchantId = seedMerchant("Chipo Electronics", "chipo@merchant.test");
+
+        mockMvc.perform(get("/loyalty/internal/merchants/{id}/admin-email", merchantId)
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchantId").value(merchantId.toString()))
+                .andExpect(jsonPath("$.adminEmail").value("chipo@merchant.test"));
+    }
+
+    @Test
+    void admin_email_is_null_not_404_when_the_merchant_has_nobody_on_file() throws Exception {
+        // The merchant exists; it just has no admin recorded. The consumer's
+        // next step is the same either way (nobody to notify), so this is an
+        // ordinary 200 — reserving the 404 for an id that names nothing.
+        UUID merchantId = seedMerchant("Unclaimed Traders", null);
+
+        mockMvc.perform(get("/loyalty/internal/merchants/{id}/admin-email", merchantId)
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchantId").value(merchantId.toString()))
+                .andExpect(jsonPath("$.adminEmail").doesNotExist());
+    }
+
+    private UUID seedMerchant(String name, String adminEmail) {
+        Tenant tenant = new Tenant();
+        tenant.setName("Tenant " + UUID.randomUUID());
+        tenant.setCode("T" + UUID.randomUUID().toString().substring(0, 8));
+        tenant = tenantRepository.save(tenant);
+
+        Merchant merchant = new Merchant();
+        merchant.setTenantId(tenant.getId());
+        merchant.setName(name);
+        merchant.setAdminEmail(adminEmail);
+        return merchantRepository.save(merchant).getId();
     }
 
     @Test

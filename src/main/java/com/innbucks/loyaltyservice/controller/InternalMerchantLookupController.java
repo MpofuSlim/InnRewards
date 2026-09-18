@@ -111,6 +111,56 @@ public class InternalMerchantLookupController {
         return ResponseEntity.ok(Map.of("merchantIds", merchantIds));
     }
 
+    /**
+     * The INVERSE of {@link #idsByAdminEmail}: merchant → the email of the
+     * person who runs it.
+     *
+     * <p>Every other consumer of this binding has arrived holding an email and
+     * wanted the merchant. The marketplace arrives holding a merchant — a paid
+     * order names a {@code merchantId} on every line — and needs to reach a
+     * person. Nothing downstream could answer that: user-service stamps
+     * {@code loyalty_merchant_id} on SHOP staff rows only, so a MERCHANT_ADMIN's
+     * own user row does not name their merchant, and this column is the only
+     * place the link is recorded.
+     *
+     * <p>Singular because the column is: one merchant has exactly one
+     * {@code admin_email}. (One PERSON may run several merchants, which is why
+     * the lookup in the other direction returns a list.)
+     *
+     * <p>A merchant with no admin email on file is a **200 with a null
+     * {@code adminEmail}**, not a 404 — the merchant exists, and the consumer's
+     * next step is identical either way (nobody to notify). The 404 is reserved
+     * for a merchantId that names nothing, which is a genuinely different fact
+     * and one the caller should see in its logs.
+     */
+    @GetMapping("/merchants/{id}/admin-email")
+    @Operation(summary = "(S2S) The admin email of one merchant",
+            description = "Returns {merchantId, adminEmail} for the given merchant — the inverse of "
+                          + "ids-by-admin. Used by user-service to resolve a merchant's admin USER "
+                          + "on behalf of marketplace-service, which knows a merchantId and needs to "
+                          + "tell a person they have a paid order. adminEmail is null when the "
+                          + "merchant has none on file; an unknown merchant is a 404.")
+    public ResponseEntity<?> adminEmailForMerchant(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID id) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        Optional<Merchant> hit = merchants.findById(id);
+        if (hit.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        String adminEmail = hit.get().getAdminEmail();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("merchantId", id);
+        // LinkedHashMap, not Map.of — that one rejects a null value, and a
+        // merchant with no admin on file is an ordinary answer here.
+        body.put("adminEmail", adminEmail);
+        log.debug("Internal lookup resolved merchantId={} -> adminEmail present={}",
+                id, adminEmail != null && !adminEmail.isBlank());
+        return ResponseEntity.ok(body);
+    }
+
     @GetMapping("/shops/{id}")
     @Operation(summary = "(S2S) Resolve a shop by id",
             description = "Returns the shop's tenantId + merchantId + status. Used by user-service " +

@@ -73,7 +73,8 @@ class VoucherServiceTest {
             rules, users, userService,
             notifications, fraud, metrics,
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
-            new LoyaltyProperties(null, null, null, null, null, null, null), usdOnlyFx());
+            new LoyaltyProperties(null, null, null, null, null, null, null), usdOnlyFx(),
+            org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();

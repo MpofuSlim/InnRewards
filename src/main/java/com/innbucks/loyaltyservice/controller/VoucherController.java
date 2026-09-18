@@ -77,7 +77,7 @@ public class VoucherController {
                                       "message": "Voucher issued successfully",
                                       "data": {
                                         "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                        "code": "VCH-AB12CD34",
+                                        "code": "K7M2PQ9XR4TB",
                                         "status": "ISSUED",
                                         "voucherType": "SINGLE_USE",
                                         "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
@@ -184,7 +184,7 @@ public class VoucherController {
                                       "data": [
                                         {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "VCH-AB12CD34",
+                                          "code": "K7M2PQ9XR4TB",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "assignedUserId": null,
@@ -316,9 +316,20 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "Rejected: BAD_SIGNATURE (tampered code), WRONG_MERCHANT (not valid at this "
-                            + "merchant), USER_BLOCKED (account suspended) or USER_PENDING (recipient has not "
-                            + "registered yet). Branch on `code`; `message` is customer-safe prose.",
+                    description = """
+                            Rejected. Branch on `code`; `message` is customer-safe prose a cashier can \
+                            read aloud.
+                            * `BAD_SIGNATURE` — tampered code.
+                            * `WRONG_MERCHANT` — not valid at this merchant.
+                            * `NOT_VOUCHER_OWNER` — a customer bearer redeeming a voucher that is not \
+                            theirs. The most likely 403 an app sees, and never returned to a staff \
+                            caller, who presents the code on the holder's behalf.
+                            * `NOT_MERCHANT_OWNER` — the caller does not administer the merchant it \
+                            named. Only reachable for a caller whose token carries no `merchantId` \
+                            claim; a claim-pinned caller cannot name another merchant at all.
+                            * `USER_BLOCKED` / `USER_PENDING` / `USER_INACTIVE` — the state of the \
+                            voucher HOLDER's account, resolved from the voucher. Sending `userId` \
+                            cannot relax these and omitting it cannot skip them.""",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -333,8 +344,10 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "ALREADY_REDEEMED (fully used — also the answer when a multi-use voucher is "
-                            + "exhausted) or REVOKED.",
+                    description = "REVOKED (cancelled by an operator — checked FIRST, so a voucher revoked "
+                            + "after its last use reports REVOKED rather than ALREADY_REDEEMED) or "
+                            + "ALREADY_REDEEMED (fully used, which is also the answer when a multi-use "
+                            + "voucher is exhausted).",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -349,8 +362,10 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "EXPIRED — past the voucher's expiresAt. The voucher is marked EXPIRED as a "
-                            + "side effect of the attempt.",
+                    description = "EXPIRED — past the voucher's expiresAt. The voucher is also moved to the "
+                            + "EXPIRED status, which happens just after the refusal is returned rather than "
+                            + "within it, so a client that re-reads the voucher immediately may still see "
+                            + "its previous status for a moment.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -410,7 +425,7 @@ public class VoucherController {
                                       "message": "Voucher transferred successfully",
                                       "data": {
                                         "id": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
-                                        "code": "VCH-AB12CD34",
+                                        "code": "K7M2PQ9XR4TB",
                                         "status": "VIEWED",
                                         "voucherType": "SINGLE_USE",
                                         "assignedUserId": "66666666-7777-8888-9999-000000000000",
@@ -628,7 +643,7 @@ public class VoucherController {
                                         "content": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "VCH-AB12CD34",
+                                            "code": "K7M2PQ9XR4TB",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
@@ -746,7 +761,7 @@ public class VoucherController {
                                         "content": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "VCH-AB12CD34",
+                                            "code": "K7M2PQ9XR4TB",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",

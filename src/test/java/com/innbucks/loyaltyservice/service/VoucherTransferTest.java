@@ -81,7 +81,8 @@ class VoucherTransferTest {
                 mock(FraudService.class),
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 memberNotifier,
-                props, usdOnlyFx());
+                props, usdOnlyFx(),
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
         authenticateAs(HOLDER_PHONE, "ROLE_CUSTOMER");
     }

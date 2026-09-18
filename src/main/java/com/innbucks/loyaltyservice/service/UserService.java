@@ -162,19 +162,39 @@ public class UserService {
     }
 
     /**
-     * Throws if the user can't perform a *spending* action right now. Use this
-     * on every redemption / outgoing-transfer path so PENDING (not yet
-     * registered) and BLOCKED (fraud) accounts can accrue but not spend.
+     * Whether an account may spend right now, as a VERDICT rather than an
+     * exception — the single home for that decision, so a second spend gate
+     * cannot drift from this one.
      *
-     * <p>Every message here reaches a CUSTOMER — a cashier reads it off the till
-     * or the app renders it verbatim — so all four branches stay in the same
-     * plain second-person register. PENDING additionally says that points keep
-     * accruing, because "you can't spend yet" without "you're still earning"
-     * reads as though the balance were lost.
+     * <p><b>Why a verdict and not just a throw.</b> Voucher redemption is the
+     * other spend gate, and it must refuse in a cashier's words rather than a
+     * points app's: {@link #requireSpendable}'s PENDING copy says points "keep
+     * accruing", which is true of a balance and meaningless read aloud to
+     * someone holding a gift voucher. Before this split the voucher path had its
+     * own hand-rolled branch and had already diverged three ways — no PENDING
+     * heal, no V44 on-demand eligibility check, and no INACTIVE refusal at all,
+     * so an operator-deactivated holder could still redeem a voucher. One place
+     * decides, each caller chooses the wording.
+     *
+     * <p><b>This method has side effects, deliberately</b> — the PENDING branch
+     * heals a stale projection and may register an eligible phone. Both are the
+     * documented V40/V44 behaviour and both belong to the decision, not to the
+     * caller's phrasing; see the comments inside.
      */
-    public void requireSpendable(LoyaltyUser u) {
+    public enum Spendability {
+        /** Free to spend. */
+        OK,
+        /** The phone behind this account has never proven ownership (V40). */
+        PENDING_REGISTRATION,
+        /** Fraud hold — only {@code POST /loyalty/users/{id}/unblock} clears it. */
+        BLOCKED,
+        /** Deliberately deactivated by an operator. */
+        INACTIVE
+    }
+
+    public Spendability spendabilityOf(LoyaltyUser u) {
         switch (u.getStatus()) {
-            case ACTIVE -> { /* ok */ }
+            case ACTIVE -> { return Spendability.OK; }
             // V40: PENDING is now a CACHE of a phone-level fact, so this branch
             // consults the fact before refusing. When the phone is registered
             // the row is stale — heal it here and let the spend through.
@@ -194,7 +214,7 @@ public class UserService {
                 if (isPhoneRegistered(u.getPhoneNumber())) {
                     u.setStatus(LoyaltyUser.Status.ACTIVE);
                     metrics.incPendingPromoted(1);
-                    return;
+                    return Spendability.OK;
                 }
                 // Nothing has told us this phone is registered. Before refusing,
                 // ASK — the eligibility rule (V44) is answerable from here, and
@@ -231,15 +251,43 @@ public class UserService {
                             u.setStatus(LoyaltyUser.Status.ACTIVE);
                             metrics.incPendingPromoted(1);
                         }
-                        return;
+                        return Spendability.OK;
                     }
                 }
-                throw LoyaltyException.forbidden("USER_PENDING",
-                        "Your rewards account is still being set up, so these points can't be spent "
-                                + "yet. You'll keep earning in the meantime.");
+                return Spendability.PENDING_REGISTRATION;
             }
-            case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
-            case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "Your account is inactive. Please contact support to reactivate it.");
+            case BLOCKED -> { return Spendability.BLOCKED; }
+            case INACTIVE -> { return Spendability.INACTIVE; }
+        }
+        // Unreachable while Status has exactly the four values above; a value
+        // added later must be classified deliberately rather than defaulting to
+        // spendable, so fail closed.
+        return Spendability.INACTIVE;
+    }
+
+    /**
+     * Throws if the user can't perform a *spending* action right now. Use this
+     * on every POINTS redemption / outgoing-transfer path so PENDING (not yet
+     * registered) and BLOCKED (fraud) accounts can accrue but not spend.
+     *
+     * <p>Every message here reaches a CUSTOMER — a cashier reads it off the till
+     * or the app renders it verbatim — so all branches stay in the same plain
+     * second-person register. PENDING additionally says that points keep
+     * accruing, because "you can't spend yet" without "you're still earning"
+     * reads as though the balance were lost. The voucher path has its own
+     * wording for the same verdicts, which is why the decision lives in
+     * {@link #spendabilityOf} and only the copy lives here.
+     */
+    public void requireSpendable(LoyaltyUser u) {
+        switch (spendabilityOf(u)) {
+            case OK -> { /* ok */ }
+            case PENDING_REGISTRATION -> throw LoyaltyException.forbidden("USER_PENDING",
+                    "Your rewards account is still being set up, so these points can't be spent "
+                            + "yet. You'll keep earning in the meantime.");
+            case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED",
+                    "Your account is currently suspended. Please contact support.");
+            case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE",
+                    "Your account is inactive. Please contact support to reactivate it.");
         }
     }
 

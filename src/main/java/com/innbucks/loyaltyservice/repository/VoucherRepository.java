@@ -32,6 +32,38 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
     Optional<Voucher> lockByCode(@Param("code") String code);
 
     /**
+     * Moves one voucher to EXPIRED, but only if it is genuinely past its
+     * deadline and still live. Called by
+     * {@code VoucherRedemptionAuditWriter} after a redemption was refused as
+     * expired — the controller's Swagger promises that flip, and the refusing
+     * transaction cannot make it itself (it holds the row's write lock; see
+     * {@code VoucherRedemptionRejectedEvent}).
+     *
+     * <p>Both halves of the predicate are guards, not filters. {@code expiresAt}
+     * re-checks the deadline in the database so this can never write a status
+     * that was not already true, and the live-status list means a REDEEMED or
+     * REVOKED transition that landed in between is never clobbered. That makes
+     * the call idempotent and safe to lose.
+     *
+     * <p>NOTE: the status list is {@code Voucher.LIVE_STATUSES} spelled out — a
+     * query string cannot reference the constant, so the two change together.
+     * Pinned by {@code VoucherLiveStatusJpqlTest}.
+     *
+     * @return rows updated: 1 when it moved, 0 when another writer got there
+     *         first or the deadline has not actually passed.
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("""
+        UPDATE Voucher v SET v.status = com.innbucks.loyaltyservice.entity.Voucher.Status.EXPIRED
+        WHERE v.id = :id
+          AND v.expiresAt IS NOT NULL AND v.expiresAt <= CURRENT_TIMESTAMP
+          AND v.status IN (com.innbucks.loyaltyservice.entity.Voucher.Status.ISSUED,
+                           com.innbucks.loyaltyservice.entity.Voucher.Status.VIEWED,
+                           com.innbucks.loyaltyservice.entity.Voucher.Status.PARTIALLY_USED)
+        """)
+    int markExpiredIfDue(@Param("id") UUID id);
+
+    /**
      * Pessimistic-write lock on one voucher by id. Used by
      * {@code VoucherService.transfer} so two concurrent transfers of the same
      * voucher serialize: the first holds the lock, stamps {@code transferredAt}
@@ -134,10 +166,21 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
                                          @Param("to") Instant to);
 
     /**
-     * Total USD value the merchant's customers have actually redeemed (fully or
-     * partially — {@code redeemedAt} is stamped on both). Powers the merchant-360
-     * report's voucher block; the issued-side value comes from
+     * Total USD value of the merchant's FULLY redeemed vouchers. Powers the
+     * merchant-360 report's voucher block; the issued-side value comes from
      * {@link #reportSummaryByStatus} so it isn't duplicated here.
+     *
+     * <p><b>Fully, not partially</b> — this javadoc used to claim "(fully or
+     * partially — {@code redeemedAt} is stamped on both)" and that was never
+     * true: {@code VoucherService.doRedeem} stamps {@code redeemedAt} only in the
+     * exhaustion branch, so a MULTI_USE voucher with four of five uses spent
+     * contributes zero here. The same premise reaches
+     * {@code InvoicingService.generate} through
+     * {@link #findByMerchantIdAndRedeemedAtBetween}, which is why a partially
+     * used voucher is also never billed a redeem-side fee. Whether that is the
+     * wanted commercial rule is an open question for the platform owner; what is
+     * fixed here is the description, so nobody reads a number as something it is
+     * not.
      *
      * <p>Sums {@code baseValue}, not {@code value}, for the same reason as
      * {@link #reportSummaryByStatus}: one unit per sum, and no percentages

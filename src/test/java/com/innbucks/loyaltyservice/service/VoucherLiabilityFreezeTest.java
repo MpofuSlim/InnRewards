@@ -81,7 +81,8 @@ class VoucherLiabilityFreezeTest {
                 mock(UserService.class), mock(NotificationGateway.class),
                 mock(FraudService.class), new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
-                props, fx);
+                props, fx,
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
         when(vouchers.findByCode(anyString())).thenReturn(Optional.empty());
         when(rules.findApplicable(eq(TENANT), eq(MERCHANT), eq(TransactionType.PURCHASE)))
                 .thenReturn(List.of());

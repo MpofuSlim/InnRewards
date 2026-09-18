@@ -429,7 +429,7 @@ public class ReportingController {
                                         "activeVouchers": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "VCH-AB12CD34",
+                                            "code": "K7M2PQ9XR4TB",
                                             "status": "ISSUED",
                                             "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
@@ -918,7 +918,7 @@ public class ReportingController {
                                               "currency": "USD",
                                               "pointsAwarded": -500.0000,
                                               "direction": "REDEEM",
-                                              "reference": "VCH-AB12CD34",
+                                              "reference": "K7M2PQ9XR4TB",
                                               "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                               "ruleId": null,
                                               "campaignId": null
@@ -1042,7 +1042,7 @@ public class ReportingController {
                                         "content": [
                                           {
                                             "id": "fa1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
-                                            "voucherCode": "VCH-AB12CD34",
+                                            "voucherCode": "K7M2PQ9XR4TB",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "reason": "WRONG_MERCHANT",
                                             "detail": "voucher scoped to merchant c5d1e3f4 but presented at b4c0d2e3",
@@ -1160,7 +1160,7 @@ public class ReportingController {
                   "content": [
                     {
                       "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                      "code": "VCH-AB12CD34",
+                      "code": "K7M2PQ9XR4TB",
                       "status": "REDEEMED",
                       "tenantId": "11111111-1111-1111-1111-111111111111",
                       "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -1298,7 +1298,7 @@ public class ReportingController {
                                       "message": "Voucher detail retrieved successfully",
                                       "data": {
                                         "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                                        "code": "VCH-AB12CD34",
+                                        "code": "K7M2PQ9XR4TB",
                                         "status": "REDEEMED",
                                         "merchantName": "Innbucks Westgate",
                                         "shopName": "Westgate Branch",
@@ -1352,7 +1352,7 @@ public class ReportingController {
                     + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,voucherType,"
                     + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
                     + "redeemedAt,expiresAt,expired,redemptionCount\\n"
-                    + "d2c8f0a1-0123-4567-1234-567890123456,VCH-AB12CD34,REDEEMED,11111111-1111-1111-1111-111111111111,"
+                    + "d2c8f0a1-0123-4567-1234-567890123456,K7M2PQ9XR4TB,REDEEMED,11111111-1111-1111-1111-111111111111,"
                     + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
                     + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
                     + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"

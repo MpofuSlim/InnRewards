@@ -56,6 +56,13 @@ public class VoucherService {
     /** Platform fallback for voucher expiry when no rule sets one (V45). */
     private final int defaultValidityDays;
 
+    /**
+     * Carries REFUSED redemptions out to be recorded after this service's
+     * transaction rolls back — see {@code VoucherRedemptionRejectedEvent} for why
+     * an in-transaction insert (or a REQUIRES_NEW one) cannot do it.
+     */
+    private final org.springframework.context.ApplicationEventPublisher events;
+
     public VoucherService(VoucherRepository vouchers,
                           VoucherBatchRepository batches,
                           VoucherRedemptionRepository redemptions,
@@ -70,7 +77,9 @@ public class VoucherService {
                           com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
                           com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                           LoyaltyProperties props,
-                          ExchangeRateService fx) {
+                          ExchangeRateService fx,
+                          org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
         this.vouchers = vouchers;
         this.batches = batches;
         this.redemptions = redemptions;
@@ -153,7 +162,7 @@ public class VoucherService {
         if (v.getDeliveryChannel() != null && v.getDeliveryChannel() != Voucher.DeliveryChannel.NONE) {
             v.setDeliveredAt(Instant.now());
         }
-        String recipientPhone = resolveDeliveryPhone(v);
+        String recipientPhone = holderPhone(v);
         notifications.deliver(v, recipientPhone);
         // Sender's confirmation copy (V46): "we should both get the WhatsApp
         // messages". Issue-path ONLY — the transfer path rotates the code and
@@ -225,12 +234,30 @@ public class VoucherService {
     }
 
     /**
-     * The phone we can actually reach the recipient on: the explicit assignee
-     * phone, else the assigned LoyaltyUser's phone. Null when the voucher has no
-     * reachable phone (e.g. a bulk / unassigned voucher) — the gateway then just
-     * logs and skips. Best-effort resolution; never throws.
+     * WHOSE voucher this is, as a phone number: the explicit assignee phone,
+     * else the assigned LoyaltyUser's phone. Null when the voucher has no holder
+     * at all (bulk / unassigned stock) — the delivery gateway then just logs and
+     * skips. Best-effort resolution; never throws.
+     *
+     * <p><b>This is the ONE definition of the holder, and it has to be</b>, which
+     * is why it is no longer named for delivery. It used to be consulted only
+     * when choosing where to send the code, while the two ownership checks
+     * ({@code doRedeem}'s assignee branch and {@link #requireCallerMayViewVoucher})
+     * compared the caller against the raw {@code assigneePhone} column — and the
+     * two disagree about what counts as "no phone". This method treats a BLANK
+     * phone as absent and falls back to the assigned user's number; a bare column
+     * comparison does not. So a voucher issued with an explicitly blank
+     * {@code assigneePhone} alongside an {@code assignedUserId} was DELIVERED to
+     * that user and then refused to that same user, the check comparing their
+     * live phone claim against {@code ""}.
+     *
+     * <p>{@code createVoucher} now normalises blank to absent, so no new row can
+     * take that shape; this resolution is what covers rows already written that
+     * way, and any legacy row with a genuinely null phone. Resolve the holder the
+     * same way everywhere, or the person who receives a voucher is not the person
+     * allowed to spend it.
      */
-    private String resolveDeliveryPhone(Voucher v) {
+    private String holderPhone(Voucher v) {
         if (v.getAssigneePhone() != null && !v.getAssigneePhone().isBlank()) {
             return v.getAssigneePhone();
         }
@@ -240,6 +267,47 @@ public class VoucherService {
                     .orElse(null);
         }
         return null;
+    }
+
+    /**
+     * The loyalty account that HOLDS this voucher, resolved from the voucher
+     * itself — never from a request field.
+     *
+     * <p><b>Why this exists.</b> The BLOCKED / registration gates on redeem used
+     * to run against {@code RedeemVoucherRequest.userId}: a nullable, unvalidated
+     * body field that was never compared to the voucher's own holder. That made
+     * both gates opt-in for the caller — a till posting only the code performed
+     * no account checks at all, so a blocked holder's voucher and an unregistered
+     * holder's voucher both redeemed cleanly — and satisfiable by naming any
+     * unrelated ACTIVE account. The voucher already knows whose it is.
+     *
+     * <p>Empty when the voucher has no holder (bulk stock), which is a real
+     * answer: there is no account to check, and campaign stock redeemed at a till
+     * is exactly the case that must keep working. Empty too when the holder's
+     * phone has no projection in this tenant — the voucher is still valid, and
+     * inventing a refusal from a missing row would strand it.
+     */
+    private java.util.Optional<LoyaltyUser> holderAccount(Voucher v) {
+        // PRECEDENCE MUST MATCH holderPhone's, exactly. The first draft of this
+        // method preferred assignedUserId while holderPhone prefers the assignee
+        // phone, and on a voucher carrying BOTH — which the issue API allows,
+        // without cross-validating that they name the same person — the
+        // ownership check then admitted the phone's owner while this gate
+        // inspected the id's owner. That re-opens, for that shape, the very gate
+        // this exists to close: the admitted holder's own account is never
+        // consulted. Whatever order is chosen, one order.
+        if (v.getAssigneePhone() != null && !v.getAssigneePhone().isBlank()) {
+            return users.findByTenantIdAndPhoneNumber(v.getTenantId(), v.getAssigneePhone());
+        }
+        if (v.getAssignedUserId() != null) {
+            // Tenant-checked: a voucher must never reach across tenants for the
+            // account whose status decides whether it may be spent. Belt and
+            // braces — createVoucher already refuses a cross-tenant
+            // assignedUserId — but this is the gate, so it re-checks.
+            return users.findById(v.getAssignedUserId())
+                    .filter(u -> u.getTenantId().equals(v.getTenantId()));
+        }
+        return java.util.Optional.empty();
     }
 
     private Voucher createVoucher(UUID tenantId, Merchant merchant, UUID batchId,
@@ -266,7 +334,16 @@ public class VoucherService {
             if (!u.getTenantId().equals(tenantId)) {
                 throw LoyaltyException.forbidden("CROSS_TENANT", "user belongs to a different tenant");
             }
-            if (assigneePhone == null) assigneePhone = u.getPhoneNumber();
+            // BLANK counts as absent, not as a phone. This tested `== null`
+            // only, so an explicitly blank assigneePhone ("" or " ") survived
+            // into the row — and then every consumer disagreed about it:
+            // holderPhone treats blank as absent and falls back to this user's
+            // number (so the code was DELIVERED to them), while the ownership
+            // check compared a live phone claim against the blank string and
+            // refused the voucher to that same person. Normalising here is the
+            // fix at the source; resolving the holder through holderPhone is the
+            // fix for rows already written this way.
+            if (assigneePhone == null || assigneePhone.isBlank()) assigneePhone = u.getPhoneNumber();
             // assigneeName is supplied by caller — loyalty-service does not
             // duplicate identity from user-service.
         } else if (assigneePhone != null && !assigneePhone.isBlank()) {
@@ -391,9 +468,17 @@ public class VoucherService {
                 "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN", "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER")) {
             return;
         }
-        // Otherwise the caller must be the voucher's own assignee.
+        // Otherwise the caller must be the voucher's own holder — resolved via
+        // holderPhone, not read off the raw assigneePhone column, for the same
+        // reason as the redeem-side check: a voucher issued by assignedUserId
+        // alone has a null column, and comparing a live phone claim against null
+        // locked its own holder out of viewing and transferring it.
         String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
-        if (callerPhone == null || !callerPhone.equals(v.getAssigneePhone())) {
+        String holder = holderPhone(v);
+        // Same two properties as the redeem-side check: a null caller phone and a
+        // holder-less voucher both refuse, the latter through equals(null). Not
+        // Objects.equals, which would pass two nulls.
+        if (callerPhone == null || !callerPhone.equals(holder)) {
             throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
                     "you can only act on your own vouchers");
         }
@@ -430,24 +515,40 @@ public class VoucherService {
         }
 
         if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
-            v.setStatus(Voucher.Status.EXPIRED);
-            VoucherRedemption rj = recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "expired");
+            // The EXPIRED status flip used to be set on the managed entity right
+            // here, and was then discarded by the throw below along with the
+            // audit row — see rejectRedemption. It is now applied by the
+            // after-rollback listener, which is also the only place it CAN be
+            // applied: this transaction holds a PESSIMISTIC_WRITE lock on the
+            // row, so a second transaction trying to update it would block on us
+            // while we waited on it.
+            rejectRedemption(v, merchantId, req, "expired", true);
             fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.EXPIRED, "redemption after expiry",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.badRequest("EXPIRED", "This voucher has expired.");
         }
 
+        // REVOKED is checked BEFORE exhaustion, deliberately. Both are terminal,
+        // but revocation is an operator decision and clients are documented to
+        // branch on `code`: with the old order, a voucher revoked after its last
+        // use answered ALREADY_REDEEMED, so a console showed "already redeemed"
+        // for a voucher someone had deliberately cancelled. The more specific
+        // fact wins. (revoke() only sets the status and never zeroes the uses, so
+        // a revoked voucher with uses left answered REVOKED under either order.)
+        if (v.getStatus() == Voucher.Status.REVOKED) {
+            rejectRedemption(v, merchantId, req, "revoked");
+            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
+                    FraudAttempt.Reason.ALREADY_REDEEMED, "redemption of a revoked voucher",
+                    req.deviceFingerprint(), req.ipAddress());
+            throw LoyaltyException.conflict("REVOKED", "This voucher is no longer valid.");
+        }
         if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0) {
-            recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "already redeemed");
+            rejectRedemption(v, merchantId, req, "already redeemed");
             fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.ALREADY_REDEEMED, "duplicate redemption attempt",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.conflict("ALREADY_REDEEMED", "This voucher has already been fully redeemed.");
-        }
-        if (v.getStatus() == Voucher.Status.REVOKED) {
-            recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "revoked");
-            throw LoyaltyException.conflict("REVOKED", "This voucher is no longer valid.");
         }
 
         if (v.getMerchantId() != null && !v.getMerchantId().equals(merchantId)) {
@@ -464,15 +565,24 @@ public class VoucherService {
         // straight from their own app, the redeem-side twin of the transfer
         // rotation above. The check is scoped to real customers: staff / cashier
         // roles (SHOP_USER, SHOP_ADMIN, MERCHANT_ADMIN, SUPER_ADMIN) present the
-        // code at the counter on the holder's behalf and carry no phone claim, and
-        // the S2S / no-context redemption paths (shop-checkout, QR consume) run
-        // without an authenticated CUSTOMER — all of those keep the bearer flow.
-        if (CallerDetails.hasAnyRole("ROLE_CUSTOMER")
-                && !CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
-                        "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER")) {
+        // code at the counter on the holder's behalf and carry no phone claim.
+        //
+        // Compared against the RESOLVED holder (holderPhone), not the raw
+        // assigneePhone column: a voucher issued by assignedUserId alone has a
+        // null column, and comparing a live phone claim against null refused the
+        // voucher to the very customer it had just been delivered to.
+        boolean staffCaller = CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
+                "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER");
+        if (CallerDetails.hasAnyRole("ROLE_CUSTOMER") && !staffCaller) {
             String callerPhone = CallerDetails.currentPhoneNumber();
-            if (callerPhone == null || !callerPhone.equals(v.getAssigneePhone())) {
-                recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "not voucher assignee");
+            String holder = holderPhone(v);
+            // A voucher with NO holder (bulk stock) refuses a customer bearer too,
+            // via equals(null) being false — resolving the holder must not turn
+            // "nobody owns this" into "everybody owns this". Do NOT rewrite this
+            // as Objects.equals(callerPhone, holder): that is TRUE for two nulls
+            // and would hand unassigned stock to any caller with no phone claim.
+            if (callerPhone == null || !callerPhone.equals(holder)) {
+                rejectRedemption(v, merchantId, req, "not voucher assignee");
                 fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                         FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher",
                         req.deviceFingerprint(), req.ipAddress());
@@ -481,41 +591,75 @@ public class VoucherService {
             }
         }
 
-        if (req.userId() != null) {
-            LoyaltyUser u = users.findById(req.userId()).orElse(null);
-            if (u != null && u.getStatus() == LoyaltyUser.Status.BLOCKED) {
-                recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "user blocked");
-                fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                        FraudAttempt.Reason.BLOCKED_USER, "blocked user attempted redemption",
-                        req.deviceFingerprint(), req.ipAddress());
-                throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
-            }
-            // The recipient hasn't proven they own the number — they can hold
-            // the voucher but not redeem it.
-            //
-            // Asks userService.isRegistrationPending rather than reading the
-            // status directly: since V40 a PENDING row is only a cache of the
-            // phone-level registration fact, so a registered customer can hold a
-            // PENDING projection (minted under a new merchant, or predating
-            // their proof) and must not be refused at the till for it.
-            if (u != null && userService.isRegistrationPending(u)) {
-                recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "user pending registration");
-                // Customer-safe prose: VoucherController's 403 documentation
-                // promises callers that `message` can be shown as-is, and a
-                // cashier reads this one off the till to the person holding the
-                // voucher.
-                // Same reason as UserService.requireSpendable's PENDING branch:
-                // "needs to finish signing up" named ticketing's OTP flow, which
-                // the customer app no longer uses. A cashier reads this to the
-                // person at the till, so it must not instruct them to complete a
-                // signup they have no route to.
-                throw LoyaltyException.forbidden("USER_PENDING",
-                        "This voucher's rewards account is still being set up, so it can't be "
-                                + "redeemed yet.");
+        // The HOLDER's account state, resolved from the voucher — see
+        // holderAccount for why this must not come from req.userId(), which is
+        // recorded as a claim and nothing more. Empty for bulk stock, which has
+        // no holder to check.
+        //
+        // The verdict comes from UserService.spendabilityOf, the same decision
+        // the points spend gate uses, so this gate cannot drift from that one
+        // again: it had lost the PENDING heal, the V44 on-demand eligibility
+        // check and the INACTIVE refusal entirely. Only the WORDING is local —
+        // VoucherController's 403 documentation promises callers that `message`
+        // can be shown as-is, and a cashier reads these aloud to the person at
+        // the counter, so they must describe a voucher rather than a points
+        // balance and must not name a signup step the holder has no route to.
+        java.util.Optional<LoyaltyUser> holder = holderAccount(v);
+        if (holder.isPresent()) {
+            switch (userService.spendabilityOf(holder.get())) {
+                case OK -> { /* spendable */ }
+                case BLOCKED -> {
+                    rejectRedemption(v, merchantId, req, "holder account blocked");
+                    fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
+                            FraudAttempt.Reason.BLOCKED_USER, "blocked holder attempted redemption",
+                            req.deviceFingerprint(), req.ipAddress());
+                    throw LoyaltyException.forbidden("USER_BLOCKED",
+                            "This voucher's account is currently suspended. Please contact support.");
+                }
+                case PENDING_REGISTRATION -> {
+                    rejectRedemption(v, merchantId, req, "holder pending registration");
+                    throw LoyaltyException.forbidden("USER_PENDING",
+                            "This voucher's rewards account is still being set up, so it can't be "
+                                    + "redeemed yet.");
+                }
+                case INACTIVE -> {
+                    rejectRedemption(v, merchantId, req, "holder account inactive");
+                    throw LoyaltyException.forbidden("USER_INACTIVE",
+                            "This voucher's account is inactive. Please contact support to "
+                                    + "reactivate it.");
+                }
             }
         }
 
-        merchants.requireMerchant(tenantId, merchantId);
+        // Object-level authorization on the REDEEMING merchant — for STAFF only,
+        // and the distinction is load-bearing rather than a shortcut.
+        //
+        // requireMerchant alone only proves the merchant exists in this tenant,
+        // so a STAFF caller whose token carries no merchantId claim — a
+        // multi-merchant MERCHANT_ADMIN, deliberately given none — could name a
+        // merchant it does not administer and burn that merchant's voucher. A
+        // claim-pinned caller (SHOP_ADMIN / SHOP_USER, and a single-merchant
+        // MERCHANT_ADMIN) was never exposed, because the claim overrides the body
+        // in CallerDetails.resolveMerchantId; this closes the caller who has no
+        // claim to override it.
+        //
+        // A NON-staff caller must never be asked to administer the shop, because
+        // it never can, and the condition is "is staff" rather than "is not a
+        // customer" for a reason: two distinct non-staff shapes reach here.
+        //   * A CUSTOMER redeeming their own voucher. Their authorization is the
+        //     assignee check above plus WRONG_MERCHANT, which together already
+        //     pin the redemption to this voucher's own merchant.
+        //   * A caller with NO authentication at all — which is what
+        //     PublicTestController.asCustomer leaves in place for UNASSIGNED
+        //     bulk stock (it only installs a principal when the voucher has a
+        //     holder).
+        // Requiring administration of either refuses it `NOT_MERCHANT_OWNER`,
+        // and the first draft of this change did exactly that to both.
+        if (staffCaller) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        } else {
+            merchants.requireMerchant(tenantId, merchantId);
+        }
 
         v.setUsesRemaining(v.getUsesRemaining() - 1);
         if (v.getUsesRemaining() <= 0) {
@@ -533,6 +677,14 @@ public class VoucherService {
                 v.getUsesRemaining(), v.getValue(), r.getRedeemedAt());
     }
 
+    /**
+     * Records a SUCCESSFUL redemption, inside the redeeming transaction — which
+     * is exactly where it belongs: if the redemption rolls back, the row saying
+     * it happened must roll back with it.
+     *
+     * <p>Refusals are the mirror image and go through
+     * {@link #rejectRedemption} instead.
+     */
     private VoucherRedemption recordRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
                                                VoucherRedemption.Result result, String reason) {
         VoucherRedemption r = new VoucherRedemption();
@@ -546,6 +698,33 @@ public class VoucherService {
         r.setResult(result);
         r.setReason(reason);
         return redemptions.save(r);
+    }
+
+    private void rejectRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
+                                  String reason) {
+        rejectRedemption(v, merchantId, req, reason, false);
+    }
+
+    /**
+     * Records a REFUSED redemption. Every caller throws immediately afterwards,
+     * so the row cannot be written here: it would roll back with the refusal it
+     * exists to document, which is precisely what used to happen — six branches
+     * wrote REJECTED rows and {@code voucher_redemptions} could only ever hold
+     * SUCCESS.
+     *
+     * <p>Publishing instead defers the write to after this transaction has rolled
+     * back and released the voucher's write lock. {@code
+     * VoucherRedemptionRejectedEvent} explains why the lock rules out the
+     * {@code REQUIRES_NEW} trick {@code FraudService.record} uses one line away.
+     *
+     * @param markExpired also flip the voucher to EXPIRED once the lock is gone —
+     *                    the expiry branch only, honouring the Swagger's promise.
+     */
+    private void rejectRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
+                                  String reason, boolean markExpired) {
+        events.publishEvent(new com.innbucks.loyaltyservice.integration.VoucherRedemptionRejectedEvent(
+                v.getTenantId(), v.getId(), req.userId(), merchantId, req.outletCode(),
+                req.ipAddress(), req.deviceFingerprint(), reason, markExpired));
     }
 
     public void revoke(UUID tenantId, UUID voucherId) {

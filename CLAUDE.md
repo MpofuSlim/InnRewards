@@ -1303,6 +1303,26 @@ promises.
   is released and while the parent row still exists. Mirrors this repo's existing
   `InvoiceGeneratedEvent` / AFTER_COMMIT pattern. Nothing in the listener may
   escape: a refusal that could not be recorded is a WARN and still a refusal.
+- **That last promise needed `saveAndFlush` to be true, and the catch has to
+  abandon the transaction.** `VoucherRedemption.id` is `@GeneratedValue` on a
+  UUID, so Hibernate assigns it in memory and a plain `save` issues **no SQL** —
+  the INSERT defers to the flush at commit, which happens in the transaction
+  interceptor and therefore OUTSIDE the try. A constraint violation could not
+  reach the handler written to handle it, so the documented WARN never fired and
+  a stack trace escaped to the framework instead. Flushing in-method puts the
+  failure back in reach; the catch then calls `setRollbackOnly()` on this
+  transaction's OWN status, which is a **local** rollback and so rolls back
+  quietly, where a globally-marked participating transaction would raise
+  `UnexpectedRollbackException` on the way out and re-open the same hole.
+  `VoucherRedemptionAuditWriterTest` pins the flush, both failure paths, the
+  listener phase and the propagation — the class shipped with **no test at all**,
+  which is how a promise that was never kept read as kept for a whole PR.
+- **The listener must stay synchronous.** `VoucherController`'s Swagger says the
+  EXPIRED flip lands BEFORE the refusal is returned, which is true only while
+  this runs inside the redeem call — Spring invokes an AFTER_ROLLBACK listener
+  from the rollback processing, still inside the service proxy. (That Swagger
+  line previously said the opposite, promising clients a window in which a
+  re-read might still show the old status. There is no such window.)
 - **The SUCCESS row stays inside the transaction**, and must: if the redemption
   rolls back, the row saying it happened has to roll back with it. The two halves
   are mirror images, not an inconsistency.
@@ -1311,6 +1331,28 @@ promises.
   and the live-status list so it can only ever write a fact that is already true
   and can never clobber a REDEEMED/REVOKED transition that landed in between.
   Idempotent and safe to lose — the expiry sweeper converges anything missed.
+  It shares the audit row's transaction, so a failed audit write loses the flip
+  too; that is the accepted trade, since splitting it into a second transaction
+  buys a guaranteed status update at the price of a second failure mode on an
+  error path that must stay simple.
+
+### The redeem request's free-text fields are bounded, and were not
+
+`outletCode`, `deviceFingerprint` and `ipAddress` on `RedeemVoucherRequest` are
+written verbatim into `VARCHAR(80)` / `(128)` / `(64)` and carried **no
+`@Size`**. An over-long value was caught nowhere until the INSERT, so a
+**legitimate** redemption became a `500` with the burn rolled back — the client
+told the server had broken when its own request was at fault, and invited to
+retry something that could never succeed. It is now a `400` naming the field.
+
+- **This is the same family as the `GlobalExceptionHandler` catch-all above**: a
+  client error surfacing as a service fault. Different mechanism — a column
+  width rather than a shadowed handler — same misdiagnosis for whoever is
+  paged.
+- **Keep each `@Size` in lock-step with its column.** They are a pair; widening
+  one without the other restores the 500.
+- The public surface was never exposed: `PublicTestController` passes `null` for
+  all three.
 
 **Still open, and needing a platform-owner decision rather than a patch:**
 `redeemedAt` is stamped only at exhaustion, so a partially used voucher is never

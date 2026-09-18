@@ -817,11 +817,25 @@ public class Dtos {
                             + "never from this field — sending it cannot relax a refusal and omitting it "
                             + "cannot skip one.")
             UUID userId,
-            @Schema(example = "WESTGATE", nullable = true, description = "Outlet code within the merchant.")
+            // The three fields below are written verbatim into fixed-width
+            // columns (voucher_redemptions.outlet_code VARCHAR(80),
+            // device_fingerprint VARCHAR(128), ip_address VARCHAR(64); the
+            // fraud_attempts twins match). Without these bounds an over-long
+            // value is caught nowhere until the INSERT, which surfaces as a 500
+            // on a redemption that was otherwise perfectly legitimate — and
+            // rolls the burn back with it, so the customer is told the server
+            // broke rather than that their client sent too much. Keep each
+            // @Size in lock-step with its column.
+            @Schema(example = "WESTGATE", nullable = true, maxLength = 80,
+                    description = "Outlet code within the merchant. At most 80 characters.")
+            @Size(max = 80, message = "outletCode must be at most 80 characters")
             String outletCode,
-            @Schema(example = "abc123def456", nullable = true, description = "Device fingerprint for fraud detection.")
+            @Schema(example = "abc123def456", nullable = true, maxLength = 128,
+                    description = "Device fingerprint for fraud detection. At most 128 characters.")
+            @Size(max = 128, message = "deviceFingerprint must be at most 128 characters")
             String deviceFingerprint,
-            @Schema(example = "192.168.1.100", nullable = true)
+            @Schema(example = "192.168.1.100", nullable = true, maxLength = 64)
+            @Size(max = 64, message = "ipAddress must be at most 64 characters")
             String ipAddress
     ) {}
 

@@ -1051,7 +1051,7 @@ public class ReportingController {
                                           },
                                           {
                                             "id": "fa2c3d4e-5f60-7182-93a4-b5c6d7e8f900",
-                                            "voucherCode": "VCH-EF56GH78",
+                                            "voucherCode": "H4NX8W2VQ7RJ",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "reason": "VELOCITY_BLOCKED",
                                             "detail": "5 redemptions from device fp-cafebabe-0009 in 60s",
@@ -1101,7 +1101,7 @@ public class ReportingController {
                             examples = @ExampleObject(name = "CSV", value = """
                                     id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber
                                     11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001,INV-1746355200000-4821
-                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:VCH-AB12CD,INV-1746355200000-4821
+                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:K7M2PQ9XR4TB,INV-1746355200000-4821
                                     33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit,
                                     """)
                     )

@@ -480,9 +480,12 @@ public class VoucherService {
         }
         // Otherwise the caller must be the voucher's own holder — resolved via
         // holderPhone, not read off the raw assigneePhone column, for the same
-        // reason as the redeem-side check: a voucher issued by assignedUserId
-        // alone has a null column, and comparing a live phone claim against null
-        // locked its own holder out of viewing and transferring it.
+        // reason as the redeem-side check: a voucher assigned to a user with a
+        // BLANK phone column (or a legacy row with a null one) has a holder that
+        // only holderPhone can see, and comparing a live phone claim against ""
+        // locked that holder out of viewing and transferring their own voucher.
+        // Pinned by VoucherHolderResolutionTest — reverting this line to the raw
+        // column reddens it.
         String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
         String holder = holderPhone(v);
         // Same two properties as the redeem-side check: a null caller phone and a

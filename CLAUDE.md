@@ -1256,13 +1256,24 @@ three of its guards came to guard nothing. The rules below are what they now do.
   points wording says points "keep accruing", which is meaningless read aloud to
   someone holding a gift voucher, and `VoucherController`'s 403 docs promise
   `message` is customer-safe. Add a third spend gate and it delegates too.
-- **Redeem runs object-level merchant authz** (`requireCallerAdministersMerchant`),
-  mirroring issue. `requireMerchant` only proved the merchant existed in the
-  tenant, so a caller with no `merchantId` claim to pin it — a multi-merchant
-  MERCHANT_ADMIN, deliberately given none — could name a merchant it does not
-  administer and burn that merchant's voucher. Side effect: a cross-tenant
-  merchant id is now `404` rather than `403 CROSS_TENANT`, which is the
-  no-existence-oracle behaviour the rest of the service already had.
+- **Redeem runs object-level merchant authz for STAFF callers**
+  (`requireCallerAdministersMerchant`), mirroring issue. `requireMerchant` only
+  proved the merchant existed in the tenant, so a caller with no `merchantId`
+  claim to pin it — a multi-merchant MERCHANT_ADMIN, deliberately given none —
+  could name a merchant it does not administer and burn that merchant's
+  voucher. **A non-staff caller keeps `requireMerchant`, and that branch is
+  load-bearing**: a CUSTOMER redeeming their own voucher administers no
+  merchant, and `PublicTestController.asCustomer` installs no authentication at
+  all for unassigned bulk stock — so requiring administration of either would
+  have refused every self-redeem and the whole `/loyalty/public/**` surface
+  `NOT_MERCHANT_OWNER`. The first draft of the change did exactly that. Those
+  callers are already pinned by the holder check plus `WRONG_MERCHANT`.
+  Side effect, **staff-only**: for a staff caller a cross-tenant merchant id is
+  now `404` rather than `403 CROSS_TENANT`, which is the no-existence-oracle
+  behaviour the rest of the service already had; the non-staff branch still
+  throws `403 CROSS_TENANT` from `MerchantService.requireMerchant`. All three
+  shapes — staff refused, customer self-redeem, unauthenticated bulk stock —
+  are pinned by `VoucherRedemptionGuardsTest`.
 - **REVOKED is checked before exhaustion.** Clients branch on `code`, and the old
   order made a voucher an operator had cancelled after its last use report
   itself as merely spent.

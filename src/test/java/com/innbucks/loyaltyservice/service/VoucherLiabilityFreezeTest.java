@@ -220,23 +220,28 @@ class VoucherLiabilityFreezeTest {
 
     @Test
     void multiUseWithoutALimit_isRefused() {
+        // Was USAGE_LIMIT_REQUIRED. MULTI_USE is retired (owner decision,
+        // 2026-09-18), so the TYPE is now the refusal and the limit never
+        // matters — a caller cannot reach an issue by leaving it off.
         assertThatThrownBy(() -> service.issue(TENANT, new Dtos.IssueVoucherRequest(
                 MERCHANT, Voucher.VoucherType.MULTI_USE, new BigDecimal("5.00"), "USD", null,
                 null, null, null, null, null)))
                 .isInstanceOfSatisfying(LoyaltyException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo("USAGE_LIMIT_REQUIRED"));
+                        ex -> assertThat(ex.getCode()).isEqualTo("MULTI_USE_RETIRED"));
     }
 
     @Test
-    void multiUse_stampsTheTypeAndTheLimit() {
-        service.issue(TENANT, new Dtos.IssueVoucherRequest(
+    void multiUseWithALimit_isRefusedToo_andNothingIsIssued() {
+        // This used to assert that a MULTI_USE voucher was stamped with its type
+        // and a usesRemaining of 3. That is exactly the shape the retirement
+        // removes: value is a face amount with no remaining balance behind it,
+        // so three uses meant the till was handed $5 three times.
+        assertThatThrownBy(() -> service.issue(TENANT, new Dtos.IssueVoucherRequest(
                 MERCHANT, Voucher.VoucherType.MULTI_USE, new BigDecimal("5.00"), "USD", 3,
-                null, null, null, null, null));
-        ArgumentCaptor<Voucher> cap = ArgumentCaptor.forClass(Voucher.class);
-        verify(vouchers).save(cap.capture());
-
-        assertThat(cap.getValue().getVoucherType()).isEqualTo(Voucher.VoucherType.MULTI_USE);
-        assertThat(cap.getValue().getUsesRemaining()).isEqualTo(3);
+                null, null, null, null, null)))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("MULTI_USE_RETIRED"));
+        verify(vouchers, never()).save(any());
     }
 
     // ------------------------------------------------------------------

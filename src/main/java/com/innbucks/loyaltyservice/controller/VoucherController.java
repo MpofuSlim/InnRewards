@@ -29,7 +29,7 @@ import java.util.UUID;
 @Slf4j
 @RequestMapping("/loyalty/vouchers")
 @Tag(name = "Vouchers",
-     description = "Voucher lifecycle — issued directly with a type (SINGLE_USE / MULTI_USE), a money value " +
+     description = "Voucher lifecycle — issued directly with a money value " +
                    "and a currency; templates are retired (V45). Expiry comes from the tenant/merchant " +
                    "loyalty rules (voucherValidityDays). Each voucher carries an HMAC-SHA256 " +
                    "signature over its code (signed with `loyalty.voucher.secret`) so redemption can be " +
@@ -49,7 +49,7 @@ public class VoucherController {
     @PostMapping("/issue")
     @Operation(summary = "Issue a single voucher",
             description = "Mints one voucher directly — templates are retired (V45). The body carries the " +
-                          "type (SINGLE_USE default / MULTI_USE with usageLimit >= 2), the money face value " +
+                          "type (SINGLE_USE — the only issuable one), the money face value " +
                           "and an optional currency (defaults to the merchant's; allowlist-validated, fail " +
                           "closed, and a non-USD currency needs an in-force exchange rate). Expiry is NOT a " +
                           "request field: it resolves from the loyalty rules — the merchant's own rule's " +
@@ -98,7 +98,8 @@ public class VoucherController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
                     description = "Validation error — missing/non-positive value, an unsupported currency, "
-                            + "a currency with no in-force exchange rate, or a type/usageLimit conflict",
+                            + "a currency with no in-force exchange rate, a `usageLimit` other than 1, or "
+                            + "`voucherType: MULTI_USE`, which is retired (`MULTI_USE_RETIRED`)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -117,10 +118,10 @@ public class VoucherController {
                                               "data": null
                                             }
                                             """),
-                                    @ExampleObject(name = "MULTI_USE without a limit", value = """
+                                    @ExampleObject(name = "MULTI_USE is retired", value = """
                                             {
-                                              "code": "400 BAD_REQUEST",
-                                              "message": "A MULTI_USE voucher needs usageLimit of 2 or more.",
+                                              "code": "MULTI_USE_RETIRED",
+                                              "message": "Multi-use vouchers are no longer issued — a voucher is worth its face value and is redeemed once. Issue it as SINGLE_USE, or issue several vouchers.",
                                               "data": null
                                             }
                                             """)}

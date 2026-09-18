@@ -210,27 +210,37 @@ public class VoucherService {
     }
 
     /**
-     * SINGLE_USE is exactly one use; MULTI_USE takes an explicit limit of two
-     * or more. A conflicting pair (SINGLE_USE with a limit above 1, MULTI_USE
-     * with 1 or without a limit) is refused rather than silently corrected —
-     * the caller plainly meant something this request does not say.
-     * Package-visible: VoucherPurchaseService runs the same contract at order
-     * creation so a purchase never snapshots a request issue would refuse.
+     * A voucher is worth its face value and is spent ONCE. Every issue path
+     * resolves through here, so this is where that rule is enforced.
+     *
+     * <p><b>MULTI_USE is retired (owner decision, 2026-09-18) and issuing one is
+     * refused.</b> It never had money semantics that worked: {@code value} is a
+     * face amount and {@code usesRemaining} a bare counter, with no remaining
+     * balance anywhere, so the redeem response handed the till the FULL face
+     * value on every use — a "$5, three uses" voucher was worth $5 three times
+     * over. Asked which way to resolve it, the owner's answer was that a $5
+     * voucher hands over $5 once, and that the type should go rather than
+     * acquire a drawdown balance.
+     *
+     * <p>Refused, not silently downgraded to one use: a caller asking for three
+     * uses has priced something, and quietly giving them one is the kind of
+     * change that surfaces at a till. {@code MULTI_USE_RETIRED} names it.
+     *
+     * <p>Package-visible: VoucherPurchaseService runs the same contract at order
+     * creation, so a purchase never snapshots a request issue would refuse.
      */
     static int resolveUsageLimit(Voucher.VoucherType type, Integer usageLimit) {
-        if (voucherTypeOrDefault(type) == Voucher.VoucherType.SINGLE_USE) {
-            if (usageLimit != null && usageLimit != 1) {
-                throw LoyaltyException.badRequest("USAGE_LIMIT_CONFLICT",
-                        "A SINGLE_USE voucher has exactly one use — omit usageLimit or send 1, "
-                                + "or issue it as MULTI_USE.");
-            }
-            return 1;
+        if (voucherTypeOrDefault(type) == Voucher.VoucherType.MULTI_USE) {
+            throw LoyaltyException.badRequest("MULTI_USE_RETIRED",
+                    "Multi-use vouchers are no longer issued — a voucher is worth its face "
+                            + "value and is redeemed once. Issue it as SINGLE_USE, or issue "
+                            + "several vouchers.");
         }
-        if (usageLimit == null || usageLimit < 2) {
-            throw LoyaltyException.badRequest("USAGE_LIMIT_REQUIRED",
-                    "A MULTI_USE voucher needs usageLimit of 2 or more.");
+        if (usageLimit != null && usageLimit != 1) {
+            throw LoyaltyException.badRequest("USAGE_LIMIT_CONFLICT",
+                    "A voucher has exactly one use — omit usageLimit or send 1.");
         }
-        return usageLimit;
+        return 1;
     }
 
     /**

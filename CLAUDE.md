@@ -955,12 +955,10 @@ path back.**
   per-voucher fee arithmetic sound — `EffectiveFees.faceValue` multiplies
   money now, never a percentage masquerading as one. `vouchers.value_type`
   stays as an unmapped legacy column.
-- **Two voucher types only: `SINGLE_USE` and `MULTI_USE`** (`Voucher.VoucherType`,
-  stamped on the voucher at issue — V45 backfilled legacy rows from their
-  template's usage limit). SINGLE_USE is exactly one use (a conflicting
-  `usageLimit` is refused, `USAGE_LIMIT_CONFLICT`); MULTI_USE requires an
-  explicit `usageLimit >= 2` (`USAGE_LIMIT_REQUIRED`). CAMPAIGN / REFERRAL /
-  CORPORATE were distribution labels, not redemption semantics, and are gone.
+- **One voucher type is issuable: `SINGLE_USE`.** CAMPAIGN / REFERRAL /
+  CORPORATE went in V45 — distribution labels, not redemption semantics — and
+  **`MULTI_USE` was retired after it** (owner decision, 2026-09-18). See the
+  section below; `usageLimit` is retired with it and anything but 1 is refused.
 - **Expiry is commercial config on `loyalty_rules.voucher_validity_days`**,
   with the same two-tier inheritance as the floor and the fees: merchant rule
   → tenant's global rule → the platform default
@@ -1314,14 +1312,44 @@ promises.
   and can never clobber a REDEEMED/REVOKED transition that landed in between.
   Idempotent and safe to lose — the expiry sweeper converges anything missed.
 
-**Known and NOT fixed here, deliberately:** a MULTI_USE voucher returns its FULL
-face value on every use (`value` is the face amount, `usesRemaining` a counter,
-and there is no remaining-value column or request amount anywhere) — so "a $5
-voucher, 3 uses" is an undefined product rule, not a bug with a right answer;
-and `redeemedAt` is stamped only at exhaustion, so a partially used voucher is
-never billed a redeem-side fee and never counted as redeemed. Both need a
-platform-owner decision. The false javadoc that claimed otherwise
-(`sumRedeemedValueByMerchantId`, `Dtos.VoucherSummary`) is corrected.
+**Still open, and needing a platform-owner decision rather than a patch:**
+`redeemedAt` is stamped only at exhaustion, so a partially used voucher is never
+billed a redeem-side fee and never counted as redeemed. The false javadoc that
+claimed otherwise (`sumRedeemedValueByMerchantId`, `Dtos.VoucherSummary`) is
+corrected. The other half of that pair — the full face value returned on every
+use — was decided and is below.
+
+## A voucher is worth its face value, ONCE — MULTI_USE is retired
+
+**Owner decision (2026-09-18).** Asked whether a $5 voucher with 3 uses hands
+the till $5 three times or $5 once, the answer was once — and that the type
+should go rather than grow a drawdown balance.
+
+- **Why it could not stay as it was.** `vouchers.value` is a face AMOUNT and
+  `uses_remaining` a bare counter; there is no remaining-value column, and
+  `RedeemVoucherRequest` carries no amount. `doRedeem` decremented the counter
+  and returned `v.getValue()` unchanged, so a MULTI_USE voucher told the till
+  its full face value on **every** use. The liability frozen at issue
+  (`base_value`) is ONE face value, and the redeem-side fee is charged once, so
+  the money model only ever described a single-use voucher.
+- **Issuing one is REFUSED, not silently downgraded** (`MULTI_USE_RETIRED`). A
+  caller asking for three uses has priced something; quietly giving them one is
+  the kind of change that surfaces at a till. `usageLimit` is retired with the
+  type — anything but 1 is `USAGE_LIMIT_CONFLICT`.
+- **One gate, all three issue paths.** `VoucherService.resolveUsageLimit` is
+  where the rule lives, and `VoucherPurchaseService.create` runs it at order
+  creation, so a customer is never asked to pay for a voucher issue would refuse.
+- **`Voucher.VoucherType.MULTI_USE` STAYS on the enum and must not be deleted.**
+  Vouchers already issued still hold the string and `voucher_type` is
+  `@Enumerated(EnumType.STRING)` — removing the constant makes Hibernate throw
+  per row at query execution on every read path touching them, with no compile,
+  boot or CI signal (the rule above). `chk_vouchers_voucher_type` keeps both
+  values for the same reason.
+- **Outstanding MULTI_USE vouchers are HONOURED**, deliberately: their holders
+  were promised those uses, and taking them back is a decision about live
+  customer value, not a cleanup. They run out or expire on their own. If you do
+  want them converted, that is a separate migration plus a decision about what a
+  holder loses — say so rather than assuming this PR did it.
 
 ## Cryptography & key management (OWASP A02)
 

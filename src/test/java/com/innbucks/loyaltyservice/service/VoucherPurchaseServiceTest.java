@@ -188,12 +188,13 @@ class VoucherPurchaseServiceTest {
         when(fxRates.currentRate(nullable(UUID.class), anyString(), any(Instant.class)))
                 .thenReturn(Optional.empty());
         assertRefused(request(new BigDecimal("267.00"), "ZWG", "+263782608767", null, null), "NO_FX_RATE");
-        // MULTI_USE needs a limit
+        // MULTI_USE is retired, and the order refuses it at CREATE so a customer
+        // is never asked to pay for a voucher issue would then refuse.
         assertThatThrownBy(() -> service.create(TENANT, new Dtos.PurchaseVoucherRequest(
                 MERCHANT, Voucher.VoucherType.MULTI_USE, new BigDecimal("5.00"), "USD", null,
                 null, null, null, null, "+263782608767", null, null, null)))
                 .isInstanceOfSatisfying(LoyaltyException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo("USAGE_LIMIT_REQUIRED"));
+                        ex -> assertThat(ex.getCode()).isEqualTo("MULTI_USE_RETIRED"));
         // No phone anywhere: the prompt has to reach someone
         assertRefused(request(new BigDecimal("5.00"), "USD", null, null, null), "PAYER_PHONE_REQUIRED");
 

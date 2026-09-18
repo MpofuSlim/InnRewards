@@ -241,11 +241,24 @@ public class Voucher {
     public enum DeliveryChannel { SMS, WHATSAPP, EMAIL, PUSH, POS, NONE }
 
     /**
-     * The only two voucher shapes since V45. The old CAMPAIGN / REFERRAL /
-     * CORPORATE values were distribution labels, not redemption semantics —
-     * how a voucher behaves at the till was always {@code usesRemaining}.
-     * SINGLE_USE fixes the usage limit at 1; MULTI_USE takes an explicit
-     * limit of 2 or more at issue.
+     * SINGLE_USE is the only shape issued. The old CAMPAIGN / REFERRAL /
+     * CORPORATE values were distribution labels, not redemption semantics (V45);
+     * MULTI_USE was retired after that (owner decision, 2026-09-18) because it
+     * never had money semantics that worked — {@code value} is a face amount and
+     * {@code usesRemaining} a bare counter, with no remaining balance anywhere,
+     * so a "$5, three uses" voucher handed the till $5 three times.
+     * {@code VoucherService.resolveUsageLimit} refuses to issue one.
+     *
+     * <p><b>MULTI_USE stays on this enum, deliberately, and must not be
+     * deleted.</b> Vouchers issued before the retirement still hold the string,
+     * and {@code voucher_type} is {@code @Enumerated(EnumType.STRING)}: removing
+     * the constant would make Hibernate throw per row at query execution on
+     * every read path that touches those vouchers, with no compile, boot or CI
+     * signal (see the migration rule in CLAUDE.md). Those vouchers are also
+     * deliberately still HONOURED — their holders were promised those uses, and
+     * taking them back is a decision about live customer value, not a cleanup.
+     * The constant may go once none remain, together with a migration and a
+     * narrowing of {@code chk_vouchers_voucher_type}.
      */
     public enum VoucherType { SINGLE_USE, MULTI_USE }
 }

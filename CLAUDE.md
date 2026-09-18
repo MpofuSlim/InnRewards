@@ -173,7 +173,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V48**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V49**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1381,17 +1381,42 @@ should go rather than grow a drawdown balance.
 - **One gate, all three issue paths.** `VoucherService.resolveUsageLimit` is
   where the rule lives, and `VoucherPurchaseService.create` runs it at order
   creation, so a customer is never asked to pay for a voucher issue would refuse.
-- **`Voucher.VoucherType.MULTI_USE` STAYS on the enum and must not be deleted.**
-  Vouchers already issued still hold the string and `voucher_type` is
-  `@Enumerated(EnumType.STRING)` — removing the constant makes Hibernate throw
-  per row at query execution on every read path touching them, with no compile,
-  boot or CI signal (the rule above). `chk_vouchers_voucher_type` keeps both
-  values for the same reason.
-- **Outstanding MULTI_USE vouchers are HONOURED**, deliberately: their holders
-  were promised those uses, and taking them back is a decision about live
-  customer value, not a cleanup. They run out or expire on their own. If you do
-  want them converted, that is a separate migration plus a decision about what a
-  holder loses — say so rather than assuming this PR did it.
+- **The outstanding stock was COLLAPSED in V49** — operator's call, the cell
+  being in test phase. Refusing to MINT one was only half the retirement, and
+  the half that does not hold the money: a live MULTI_USE row went on paying its
+  full face value per use whatever the issue endpoint accepted, so a "$5, three
+  uses" voucher stayed a $15 liability. V49 gives every **live** MULTI_USE
+  voucher exactly one use, retypes every row SINGLE_USE, and narrows
+  `chk_vouchers_voucher_type` to the one value.
+  - **A part-used voucher keeps its one remaining use** rather than being
+    treated as already finished. The kinder of the two readings, and the cost is
+    stated rather than hidden: such a voucher will have paid its face value
+    twice across the two regimes.
+  - **Nobody is compensated for lost uses.** Collapsing the uses INTO the value
+    (3 × $5 → one $10) was considered and rejected: it mints face values nobody
+    issued, moves the outstanding liability, and would have to re-freeze
+    `base_value`/`fx_rate_id` at today's rate — where V38's whole point is that
+    a voucher's USD worth is fixed when the promise was made.
+  - **Terminal rows (REDEEMED / EXPIRED / REVOKED) keep their counters**; only
+    the type is rewritten. The counter is history, and the type describes
+    semantics that no longer exist.
+  - **The UPDATE runs BEFORE the CHECK narrows** — the EnumType.STRING rule
+    above, in its other direction: narrowing first fails the ALTER on every
+    surviving row and the migration cannot apply at all.
+  - `VoucherLiveStatusMigrationTest` ties V49's status list to
+    `Voucher.LIVE_STATUSES`, the third hand-spelled copy after the two JPQL
+    ones. The stakes are higher here: a migration applies ONCE, so a status
+    missing from that list is not a bug a later edit can fix — it is a set of
+    live vouchers silently skipped on every cell, permanently. Adding a live
+    status needs a NEW migration; never edit V49.
+- **`Voucher.VoucherType.MULTI_USE` STAYS on the enum and must not be deleted**,
+  even though V49 leaves no row holding it. The reason is hydration safety, not
+  live stock: `voucher_type` is `@Enumerated(EnumType.STRING)`, so a row holding
+  a string the enum lacks makes Hibernate throw per row at query execution, with
+  no compile, boot or CI signal (the rule above). A restore from a pre-V49
+  backup, a lagging replica, or any row written before the migration would take
+  out every read path touching it. The constant costs nothing; deleting it buys
+  tidiness and risks an outage.
 
 ## Cryptography & key management (OWASP A02)
 

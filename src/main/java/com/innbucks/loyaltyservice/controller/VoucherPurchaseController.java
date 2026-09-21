@@ -177,16 +177,30 @@ public class VoucherPurchaseController {
                                           "code": "K7M2PQ9XR4TB",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
+                                          "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "shopId": null,
+                                          "batchId": null,
+                                          "campaignSource": null,
                                           "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                           "assigneePhone": "+263786546765",
+                                          "assigneeName": "Sedrick Nyanyiwa",
                                           "senderName": "Tawanda Mpofu",
                                           "senderPhone": "+263782608767",
+                                          "issuerUserId": "77777777-7777-7777-7777-777777777777",
+                                          "issuerPhone": "+263772000111",
+                                          "issuerEmail": "shopadmin@westgate.co.zw",
                                           "usesRemaining": 1,
                                           "value": 5.0000,
                                           "currency": "USD",
+                                          "baseValue": 5.0000,
                                           "issuedAt": "2026-09-17T19:52:10Z",
+                                          "deliveredAt": "2026-09-17T19:52:15Z",
+                                          "viewedAt": null,
+                                          "redeemedAt": null,
+                                          "transferredAt": null,
                                           "expiresAt": "2027-09-17T19:52:10Z",
-                                          "baseValue": 5.0000
+                                          "transferredFromUserId": null,
+                                          "transferredFromPhone": null
                                         }
                                       }
                                     }
@@ -242,16 +256,30 @@ public class VoucherPurchaseController {
                                           "code": "K7M2PQ9XR4TB",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
+                                          "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "shopId": null,
+                                          "batchId": null,
+                                          "campaignSource": null,
                                           "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                           "assigneePhone": "+263786546765",
+                                          "assigneeName": "Sedrick Nyanyiwa",
                                           "senderName": "Tawanda Mpofu",
                                           "senderPhone": "+263782608767",
+                                          "issuerUserId": "77777777-7777-7777-7777-777777777777",
+                                          "issuerPhone": "+263772000111",
+                                          "issuerEmail": "shopadmin@westgate.co.zw",
                                           "usesRemaining": 1,
                                           "value": 5.0000,
                                           "currency": "USD",
+                                          "baseValue": 5.0000,
                                           "issuedAt": "2026-09-17T19:55:00Z",
+                                          "deliveredAt": "2026-09-17T19:55:05Z",
+                                          "viewedAt": null,
+                                          "redeemedAt": null,
+                                          "transferredAt": null,
                                           "expiresAt": "2027-09-17T19:55:00Z",
-                                          "baseValue": 5.0000
+                                          "transferredFromUserId": null,
+                                          "transferredFromPhone": null
                                         }
                                       }
                                     }

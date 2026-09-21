@@ -89,6 +89,19 @@ public final class VoucherReportDtos {
             @Schema(example = "2026-12-31T23:59:59Z", nullable = true) Instant expiresAt,
             @Schema(example = "false", description = "True when past expiry and not yet redeemed/revoked.") boolean expired,
 
+            // Sender — who the voucher is a gift FROM (V46 presentation fact, from the
+            // issue request body). Distinct from the issuer above: a cashier keying in a
+            // gift between two customers is the issuer, never the sender.
+            @Schema(example = "Tawanda Mpofu", nullable = true,
+                    description = "Who the voucher is from, as shown to the recipient. NOT the issuing staff member.") String senderName,
+            @Schema(example = "+263782608767", nullable = true) String senderPhone,
+
+            // Single-hop transfer provenance (V34) — null until the voucher changes hands.
+            @Schema(example = "2026-06-10T12:00:00Z", nullable = true) Instant transferredAt,
+            @Schema(example = "44444444-4444-4444-4444-444444444444", nullable = true,
+                    description = "The assignee the voucher moved AWAY from.") UUID transferredFromUserId,
+            @Schema(example = "+263771234567", nullable = true) String transferredFromPhone,
+
             @Schema(example = "1", description = "Number of redemption attempts logged against this voucher.") long redemptionCount,
             @Schema(nullable = true, description = "Full redemption log — populated only on the single-voucher "
                     + "detail endpoint; null in list/report rows.") List<RedemptionDetail> redemptions

@@ -832,7 +832,10 @@ public class ReportingService {
                 v.getDeliveryChannel() == null ? null : v.getDeliveryChannel().name(),
                 v.getCampaignSource(),
                 v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(), v.getRedeemedAt(), v.getExpiresAt(),
-                expired, redemptionCount, redemptions);
+                expired,
+                v.getSenderName(), v.getSenderPhone(),
+                v.getTransferredAt(), v.getTransferredFromUserId(), v.getTransferredFromPhone(),
+                redemptionCount, redemptions);
     }
 
     private static RedemptionDetail toRedemption(VoucherRedemption r) {
@@ -880,7 +883,9 @@ public class ReportingService {
                 "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
                         + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
                         + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
-                        + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount\n");
+                        + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount,"
+                        // New columns APPEND — a positional parser of the old export keeps working.
+                        + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\n");
         int pageNum = 0;
         int pageSize = 500;
         while (true) {
@@ -916,7 +921,12 @@ public class ReportingService {
                         .append(csvField(d.redeemedAt())).append(',')
                         .append(csvField(d.expiresAt())).append(',')
                         .append(d.expired()).append(',')
-                        .append(d.redemptionCount())
+                        .append(d.redemptionCount()).append(',')
+                        .append(csvField(d.senderName())).append(',')
+                        .append(csvField(d.senderPhone())).append(',')
+                        .append(csvField(d.transferredAt())).append(',')
+                        .append(csvField(d.transferredFromUserId())).append(',')
+                        .append(csvField(d.transferredFromPhone()))
                         .append('\n');
             }
             if (page.isLast()) break;

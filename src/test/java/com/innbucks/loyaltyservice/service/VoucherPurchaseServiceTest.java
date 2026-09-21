@@ -81,9 +81,15 @@ class VoucherPurchaseServiceTest {
         when(orders.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         Dtos.VoucherResponse issued = new Dtos.VoucherResponse(UUID.randomUUID(), "VCH-CODE",
-                "ISSUED", "SINGLE_USE", null, "+263786546765",
-                "Tawanda Mpofu", "+263782608767", 1,
-                new BigDecimal("5.00"), "USD", Instant.now(), null, new BigDecimal("5.00"));
+                "ISSUED", "SINGLE_USE",
+                MERCHANT, null, null, null,
+                null, "+263786546765", "Sedrick Nyanyiwa",
+                "Tawanda Mpofu", "+263782608767",
+                null, null, null,
+                1,
+                new BigDecimal("5.00"), "USD", new BigDecimal("5.00"),
+                Instant.now(), null, null, null, null, null,
+                null, null);
         when(voucherService.issueFromOrder(any())).thenReturn(issued);
         when(vouchers.findById(any())).thenReturn(Optional.empty());
     }

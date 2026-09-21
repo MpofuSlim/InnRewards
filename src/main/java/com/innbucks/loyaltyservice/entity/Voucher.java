@@ -82,9 +82,11 @@ public class Voucher {
     // recipient ("Tawanda Mpofu sent you a voucher"). Presentation facts, not
     // audit: the issuer_* columns below record who performed the API call (JWT,
     // never the body), while these may name a customer a staff member issued on
-    // behalf of. Name is caller-supplied and HTML-stripped; phone defaults to
-    // the issuing caller's own JWT phone. Both null on bulk/campaign stock and
-    // pre-V46 rows.
+    // behalf of. Both are the REQUEST's or nobody's — the old fallback to the
+    // issuing caller's JWT phone was removed (PR #129): every issue path is
+    // staff-only, so it always resolved to a cashier and misdirected the
+    // sender-copy message (code included) and the EcoCash payer prompt. Both
+    // null on bulk/campaign stock and pre-V46 rows.
     @Column(name = "sender_name", length = 200)
     private String senderName;
 

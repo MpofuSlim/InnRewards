@@ -832,7 +832,10 @@ public class ReportingService {
                 v.getDeliveryChannel() == null ? null : v.getDeliveryChannel().name(),
                 v.getCampaignSource(),
                 v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(), v.getRedeemedAt(), v.getExpiresAt(),
-                expired, redemptionCount, redemptions);
+                expired,
+                v.getSenderName(), v.getSenderPhone(),
+                v.getTransferredAt(), v.getTransferredFromUserId(), v.getTransferredFromPhone(),
+                redemptionCount, redemptions);
     }
 
     private static RedemptionDetail toRedemption(VoucherRedemption r) {
@@ -845,6 +848,24 @@ public class ReportingService {
     private String tenantName(UUID tenantId) {
         return tenants.findById(tenantId).map(t -> t.getName()).orElse(null);
     }
+
+    /**
+     * Header of the voucher CSV export. The endpoint's own Swagger says "same
+     * columns as VoucherDetail", so this must carry every component of
+     * {@link VoucherDetail} except {@code redemptions} (a nested list, which has
+     * no sensible flat column) — a field added to that record and not to this
+     * string is a column silently missing from every operator's export.
+     * {@code VoucherCsvHeaderTest} enforces exactly that, by SET rather than by
+     * order: the order here deliberately differs, because new columns are
+     * APPENDED after {@code redemptionCount} so a positional parser written
+     * against the old export keeps working.
+     */
+    static final String VOUCHER_CSV_HEADER =
+            "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
+                    + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
+                    + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
+                    + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount,"
+                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\n";
 
     /**
      * CSV export — one fully-detailed row per voucher. {@code level} selects the
@@ -876,11 +897,7 @@ public class ReportingService {
         if (fromI.isAfter(toI)) throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
 
         Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI);
-        StringBuilder sb = new StringBuilder(
-                "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
-                        + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
-                        + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
-                        + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount\n");
+        StringBuilder sb = new StringBuilder(VOUCHER_CSV_HEADER);
         int pageNum = 0;
         int pageSize = 500;
         while (true) {
@@ -916,7 +933,12 @@ public class ReportingService {
                         .append(csvField(d.redeemedAt())).append(',')
                         .append(csvField(d.expiresAt())).append(',')
                         .append(d.expired()).append(',')
-                        .append(d.redemptionCount())
+                        .append(d.redemptionCount()).append(',')
+                        .append(csvField(d.senderName())).append(',')
+                        .append(csvField(d.senderPhone())).append(',')
+                        .append(csvField(d.transferredAt())).append(',')
+                        .append(csvField(d.transferredFromUserId())).append(',')
+                        .append(csvField(d.transferredFromPhone()))
                         .append('\n');
             }
             if (page.isLast()) break;

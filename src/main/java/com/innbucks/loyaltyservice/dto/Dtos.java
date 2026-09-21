@@ -770,25 +770,73 @@ public class Dtos {
             VoucherResponse voucher
     ) {}
 
+    /**
+     * The one voucher shape, served identically on every surface — staff list,
+     * customer wallet AND the unauthenticated {@code /loyalty/public/**} staging
+     * endpoints (owner decision, 2026-09-18: no per-audience redaction; the
+     * public surface already returns the redeemable code itself, and
+     * {@code loyalty.public-test.enabled=false} remains the production control).
+     *
+     * <p>Three distinct people can appear on one voucher, and the console must
+     * not conflate them: the ASSIGNEE (who holds/receives it), the SENDER (who
+     * it is a gift from — V46 presentation fact, from the request body, never a
+     * JWT), and the ISSUER (the staff member whose JWT performed the API call —
+     * audit fact). A cashier keying in a gift between two customers appears
+     * only as the issuer.
+     */
     public record VoucherResponse(UUID id, String code, String status,
                                   // SINGLE_USE or MULTI_USE (V45). Null only on legacy rows the
                                   // migration backfill could not resolve.
                                   String voucherType,
+                                  // Where it lives: issuing merchant, outlet (null for
+                                  // merchant-level issuance), bulk batch + campaign label
+                                  // (both null outside bulk/campaign stock).
+                                  UUID merchantId, UUID shopId,
+                                  UUID batchId, String campaignSource,
+                                  // The holder. Name is what the list row / wallet shows;
+                                  // all null on unassigned bulk stock.
                                   UUID assignedUserId,
-                                  String assigneePhone,
+                                  String assigneePhone, String assigneeName,
                                   // Who the voucher is FROM (V46) — display identity for the wallet
                                   // ("From Tawanda Mpofu"). Both null on bulk stock and pre-V46 rows.
                                   String senderName, String senderPhone,
+                                  // Who performed the issuing API call, from their JWT — the shop
+                                  // staff member, NOT the sender. All null for pre-migration or
+                                  // system-issued rows.
+                                  UUID issuerUserId, String issuerPhone, String issuerEmail,
                                   int usesRemaining,
                                   // The voucher's money face value, frozen at issuance. Always an
                                   // AMOUNT in `currency` — value types are retired (V45).
                                   BigDecimal value, String currency,
-                                  Instant issuedAt, Instant expiresAt,
                                   // Multi-currency liability (V38): the USD worth of `value`, frozen
                                   // at the rate in force when the voucher was ISSUED. Null only on
                                   // legacy non-AMOUNT / pre-V38 rows — never zero. Display uses
                                   // `value` + `currency`; this is for liability reporting.
-                                  BigDecimal baseValue) {}
+                                  BigDecimal baseValue,
+                                  // Lifecycle, all UTC instants. deliveredAt = dispatch to the
+                                  // holder's phone was ATTEMPTED (V48 — not a receipt); viewedAt /
+                                  // redeemedAt / transferredAt null until that event happens.
+                                  Instant issuedAt, Instant deliveredAt, Instant viewedAt,
+                                  Instant redeemedAt, Instant transferredAt, Instant expiresAt,
+                                  // Single-hop transfer provenance (V34): the assignee the voucher
+                                  // moved AWAY from. Null until transferred.
+                                  UUID transferredFromUserId, String transferredFromPhone) {
+
+        /** Copy with the {@code code} nulled out — for views where the caller must
+         *  not see the redeemable code (e.g. the sender's view of a transfer they
+         *  just made, after the code has been rotated to the recipient). Lives on
+         *  the record so the positional component list is spelled in ONE file. */
+        public VoucherResponse withoutCode() {
+            return new VoucherResponse(id, null, status, voucherType,
+                    merchantId, shopId, batchId, campaignSource,
+                    assignedUserId, assigneePhone, assigneeName,
+                    senderName, senderPhone,
+                    issuerUserId, issuerPhone, issuerEmail,
+                    usesRemaining, value, currency, baseValue,
+                    issuedAt, deliveredAt, viewedAt, redeemedAt, transferredAt, expiresAt,
+                    transferredFromUserId, transferredFromPhone);
+        }
+    }
 
     /**
      * Hand a voucher to another customer. SINGLE HOP — see

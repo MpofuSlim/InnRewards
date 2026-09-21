@@ -434,16 +434,30 @@ public class ReportingController {
                                             "code": "K7M2PQ9XR4TB",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "shopId": null,
+                                            "batchId": null,
+                                            "campaignSource": null,
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
-                                            "assigneePhone": "+254700000000",
+                                            "assigneePhone": "+263786546765",
+                                            "assigneeName": "Sedrick Nyanyiwa",
                                             "senderName": "Tawanda Mpofu",
-                                            "senderPhone": "+254711222333",
+                                            "senderPhone": "+263782608767",
+                                            "issuerUserId": "77777777-7777-7777-7777-777777777777",
+                                            "issuerPhone": "+263772000111",
+                                            "issuerEmail": "shopadmin@westgate.co.zw",
                                             "usesRemaining": 1,
-                                            "value": 5.00,
+                                            "value": 5.0000,
                                             "currency": "USD",
+                                            "baseValue": 5.0000,
                                             "issuedAt": "2026-05-04T10:30:00Z",
+                                            "deliveredAt": "2026-05-04T10:30:05Z",
+                                            "viewedAt": null,
+                                            "redeemedAt": null,
+                                            "transferredAt": null,
                                             "expiresAt": "2026-06-03T10:30:00Z",
-                                            "baseValue": 5.00
+                                            "transferredFromUserId": null,
+                                            "transferredFromPhone": null
                                           }
                                         ],
                                         "recentTransactions": [
@@ -1251,6 +1265,11 @@ public class ReportingController {
                       "redeemedAt": "2026-06-14T09:31:00Z",
                       "expiresAt": "2026-12-31T23:59:59Z",
                       "expired": false,
+                      "senderName": "Tawanda Mpofu",
+                      "senderPhone": "+263782608767",
+                      "transferredAt": null,
+                      "transferredFromUserId": null,
+                      "transferredFromPhone": null,
                       "redemptionCount": 1,
                       "redemptions": null
                     }
@@ -1390,19 +1409,39 @@ public class ReportingController {
                                         "id": "d2c8f0a1-0123-4567-1234-567890123456",
                                         "code": "K7M2PQ9XR4TB",
                                         "status": "REDEEMED",
+                                        "tenantId": "11111111-1111-1111-1111-111111111111",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "merchantName": "Innbucks Westgate",
+                                        "shopId": "c5d1e3f4-3456-7890-abcd-ef0123456789",
+                                        "shopName": "Westgate Branch",
+                                        "templateId": "a1a1a1a1-1111-2222-3333-444444444444",
+                                        "templateName": "Coffee Combo",
                                         "shopName": "Westgate Branch",
                                         "templateName": "Coffee Combo",
+                                        "batchId": null,
+                                        "issuerUserId": "77777777-7777-7777-7777-777777777777",
                                         "issuerPhone": "+263772000111",
                                         "issuerEmail": "shopadmin@westgate.co.zw",
+                                        "receiverUserId": "33333333-3333-3333-3333-333333333333",
                                         "receiverPhone": "+263771234567",
                                         "receiverName": "Jane Moyo",
                                         "voucherType": "SINGLE_USE",
                                         "faceValue": 5.00,
                                         "currency": "USD",
+                                        "usesRemaining": 0,
+                                        "deliveryChannel": "WHATSAPP",
+                                        "campaignSource": "spring-2026",
                                         "issuedAt": "2026-06-01T08:00:00Z",
+                                        "deliveredAt": "2026-06-01T08:00:05Z",
+                                        "viewedAt": "2026-06-02T18:20:00Z",
                                         "redeemedAt": "2026-06-14T09:31:00Z",
+                                        "expiresAt": "2026-12-31T23:59:59Z",
                                         "expired": false,
+                                        "senderName": "Tawanda Mpofu",
+                                        "senderPhone": "+263782608767",
+                                        "transferredAt": null,
+                                        "transferredFromUserId": null,
+                                        "transferredFromPhone": null,
                                         "redemptionCount": 1,
                                         "redemptions": [
                                           {
@@ -1441,13 +1480,15 @@ public class ReportingController {
                     "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
                     + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,voucherType,"
                     + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
-                    + "redeemedAt,expiresAt,expired,redemptionCount\\n"
+                    + "redeemedAt,expiresAt,expired,redemptionCount,"
+                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"
                     + "d2c8f0a1-0123-4567-1234-567890123456,K7M2PQ9XR4TB,REDEEMED,11111111-1111-1111-1111-111111111111,"
                     + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
                     + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
                     + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"
                     + "SINGLE_USE,5.0000,USD,0,WHATSAPP,spring-2026,2026-06-01T08:00:00Z,2026-06-01T08:00:05Z,2026-06-02T18:20:00Z,"
-                    + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1\\n"))))
+                    + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1,"
+                    + "Tawanda Mpofu,+263782608767,,,\\n"))))
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<String> vouchersExport(
             @RequestParam(required = false) UUID merchantId,
@@ -1471,7 +1512,8 @@ public class ReportingController {
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
             content = @Content(mediaType = "text/csv",
                     examples = @ExampleObject(name = "CSV header",
-                            value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount\\n"))))
+                            value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount,"
+                                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"))))
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<String> vouchersExportOperator(
             @RequestParam(required = false) Voucher.Status status,

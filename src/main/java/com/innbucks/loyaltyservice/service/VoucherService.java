@@ -926,18 +926,7 @@ public class VoucherService {
         // acting on their behalf — neither of whom should now hold the rotated
         // code, or the rotation above would be pointless. The recipient reads it
         // in-app as the voucher's new assignee.
-        return redactCode(toResponse(v));
-    }
-
-    /** Copy of a VoucherResponse with the {@code code} nulled out — used where the
-     *  caller must not see the code (e.g. the sender's view of a transfer they just
-     *  made, after the code has been rotated to the recipient). */
-    private static Dtos.VoucherResponse redactCode(Dtos.VoucherResponse r) {
-        return new Dtos.VoucherResponse(r.id(), null, r.status(), r.voucherType(),
-                r.assignedUserId(), r.assigneePhone(),
-                r.senderName(), r.senderPhone(), r.usesRemaining(),
-                r.value(), r.currency(), r.issuedAt(), r.expiresAt(),
-                r.baseValue());
+        return toResponse(v).withoutCode();
     }
 
     @Transactional(readOnly = true)
@@ -987,10 +976,15 @@ public class VoucherService {
     public static Dtos.VoucherResponse toResponse(Voucher v) {
         return new Dtos.VoucherResponse(v.getId(), v.getCode(), v.getStatus().name(),
                 v.getVoucherType() == null ? null : v.getVoucherType().name(),
-                v.getAssignedUserId(), v.getAssigneePhone(),
+                v.getMerchantId(), v.getShopId(),
+                v.getBatchId(), v.getCampaignSource(),
+                v.getAssignedUserId(), v.getAssigneePhone(), v.getAssigneeName(),
                 v.getSenderName(), v.getSenderPhone(),
+                v.getIssuerUserId(), v.getIssuerPhone(), v.getIssuerEmail(),
                 v.getUsesRemaining(),
-                v.getValue(), v.getCurrency(),
-                v.getIssuedAt(), v.getExpiresAt(), v.getBaseValue());
+                v.getValue(), v.getCurrency(), v.getBaseValue(),
+                v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(),
+                v.getRedeemedAt(), v.getTransferredAt(), v.getExpiresAt(),
+                v.getTransferredFromUserId(), v.getTransferredFromPhone());
     }
 }

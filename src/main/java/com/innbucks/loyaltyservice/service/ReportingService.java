@@ -850,6 +850,24 @@ public class ReportingService {
     }
 
     /**
+     * Header of the voucher CSV export. The endpoint's own Swagger says "same
+     * columns as VoucherDetail", so this must carry every component of
+     * {@link VoucherDetail} except {@code redemptions} (a nested list, which has
+     * no sensible flat column) — a field added to that record and not to this
+     * string is a column silently missing from every operator's export.
+     * {@code VoucherCsvHeaderTest} enforces exactly that, by SET rather than by
+     * order: the order here deliberately differs, because new columns are
+     * APPENDED after {@code redemptionCount} so a positional parser written
+     * against the old export keeps working.
+     */
+    static final String VOUCHER_CSV_HEADER =
+            "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
+                    + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
+                    + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
+                    + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount,"
+                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\n";
+
+    /**
      * CSV export — one fully-detailed row per voucher. {@code level} selects the
      * scope and applies the SAME tenant/merchant/shop guard as the JSON reports;
      * pages the DB at 500 rows so a busy period doesn't materialise everything.
@@ -879,13 +897,7 @@ public class ReportingService {
         if (fromI.isAfter(toI)) throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
 
         Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI);
-        StringBuilder sb = new StringBuilder(
-                "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
-                        + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
-                        + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
-                        + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount,"
-                        // New columns APPEND — a positional parser of the old export keeps working.
-                        + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\n");
+        StringBuilder sb = new StringBuilder(VOUCHER_CSV_HEADER);
         int pageNum = 0;
         int pageSize = 500;
         while (true) {

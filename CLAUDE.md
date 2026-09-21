@@ -1054,6 +1054,48 @@ path back.**
   Skipped when sender == recipient phone (one message, not two). Pinned by
   `VoucherSenderIdentityTest` + the sender cases in `NotificationGatewayTest`.
 
+### The voucher list row carries all three people — including the cashier
+
+**Owner decision (2026-09-18): one `VoucherResponse` shape on every surface, the
+issuing staff member's identity included, because this cell is staging.** There
+is deliberately NO per-audience redaction, so `GET /loyalty/vouchers`, the
+customer wallet views and the unauthenticated `/loyalty/public/**` endpoints all
+serve the same record.
+
+- **Three distinct people can appear on one voucher and the console must not
+  conflate them.** The **assignee** holds it (`assignedUserId` / `assigneePhone`
+  / `assigneeName`), the **sender** gifted it (`senderName` / `senderPhone` —
+  V46 presentation facts taken from the request body, never a JWT), and the
+  **issuer** keyed it in (`issuerUserId` / `issuerPhone` / `issuerEmail` — from
+  the caller's JWT, audit). The real till flow makes all three different people:
+  a cashier issuing a gift from Tawanda to Sedrick is only ever the issuer. PR
+  #129 removed the write-path fallback that made the cashier the *sender*;
+  `VoucherResponseMappingTest.theSenderAndTheIssuerAreNeverTheSameField` keeps
+  the read path from re-merging them.
+- **Why serving issuer PII publicly is acceptable HERE and nowhere else.** The
+  public surface already returns the redeemable **code** for any phone anyone
+  names, so a staff phone number is not what makes it unsafe; the control that
+  matters remains `loyalty.public-test.enabled=false` on production. If that
+  surface is ever promoted toward production, split the shape THEN — the
+  single mapper `VoucherService.toResponse` is the one place to do it.
+- **`issuedAt` was always a full instant.** A console rendering "17 Sept 2026"
+  is discarding the time we already send; that is a client display fix, not a
+  backend gap. Pinned by `issuedAtCarriesTheTimeOfDay_notJustTheDate`.
+- **The mapping test is exhaustive on purpose.** The record is 28 positional
+  components with long runs of adjacent same-typed ones (three UUIDs, four
+  Strings, six Instants). Swapping neighbours compiles cleanly and no compiler
+  can catch it — the symptom is the issuer's phone appearing in the sender
+  column. Every component therefore gets a DISTINCT fixture value and its own
+  assertion; a shared value would let exactly that swap pass. `withoutCode()`
+  (formerly `redactCode`) moved onto the record for the same reason: it rebuilds
+  positionally, so it belongs beside the component list it mirrors.
+- **The CSV export's header is now tied to `VoucherDetail` by a test.** Its
+  Swagger has always claimed "same columns as VoucherDetail" while the header
+  was a hand-written string in another file — and that drift happened on this
+  very change. `VoucherCsvHeaderTest` compares by SET (not order) because new
+  columns are **appended** after `redemptionCount` so a positional parser of the
+  old export keeps working; `redemptions` is the one allowed omission.
+
 ### Delivery is WhatsApp-then-SMS, always — `deliveryChannel` never routed anything
 
 **Owner decision (2026-09-18): the channel selector goes.** `NotificationGateway.deliver`

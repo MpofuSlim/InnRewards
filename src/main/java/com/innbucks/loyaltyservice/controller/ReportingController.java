@@ -1480,13 +1480,15 @@ public class ReportingController {
                     "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
                     + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,voucherType,"
                     + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
-                    + "redeemedAt,expiresAt,expired,redemptionCount\\n"
+                    + "redeemedAt,expiresAt,expired,redemptionCount,"
+                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"
                     + "d2c8f0a1-0123-4567-1234-567890123456,K7M2PQ9XR4TB,REDEEMED,11111111-1111-1111-1111-111111111111,"
                     + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
                     + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
                     + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"
                     + "SINGLE_USE,5.0000,USD,0,WHATSAPP,spring-2026,2026-06-01T08:00:00Z,2026-06-01T08:00:05Z,2026-06-02T18:20:00Z,"
-                    + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1\\n"))))
+                    + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1,"
+                    + "Tawanda Mpofu,+263782608767,,,\\n"))))
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<String> vouchersExport(
             @RequestParam(required = false) UUID merchantId,
@@ -1510,7 +1512,8 @@ public class ReportingController {
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
             content = @Content(mediaType = "text/csv",
                     examples = @ExampleObject(name = "CSV header",
-                            value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount\\n"))))
+                            value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount,"
+                                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"))))
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<String> vouchersExportOperator(
             @RequestParam(required = false) Voucher.Status status,

@@ -153,10 +153,15 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
     }
 
     @Test
-    void names_serves_a_nameless_merchant_as_a_null_not_an_omission() throws Exception {
-        // The merchant exists and simply has no name on file. That is a
-        // different fact from "no such merchant", and the row says so.
-        UUID merchantId = seedMerchant(null, "nameless@merchant.test");
+    void every_known_merchant_yields_a_name_because_the_column_is_not_null() throws Exception {
+        // There is no "known but nameless" merchant to serve: merchants.name is
+        // VARCHAR(200) NOT NULL (V1__init) and the entity marks it
+        // nullable = false, so the only reason a row is missing from the
+        // response is that the id names nothing. An earlier revision of this
+        // test tried to seed a null name and was refused by the constraint --
+        // worth keeping as a case, because the consumer's null-tolerant parsing
+        // is defensive hardening, NOT a shape this endpoint can currently emit.
+        UUID merchantId = seedMerchant("Tariro Hardware", "tariro@merchant.test");
 
         mockMvc.perform(get("/loyalty/internal/merchants/names")
                         .header("X-Internal-Token", internalToken)
@@ -164,7 +169,7 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.merchants.length()").value(1))
                 .andExpect(jsonPath("$.merchants[0].merchantId").value(merchantId.toString()))
-                .andExpect(jsonPath("$.merchants[0].name").doesNotExist());
+                .andExpect(jsonPath("$.merchants[0].name").value("Tariro Hardware"));
     }
 
     @Test

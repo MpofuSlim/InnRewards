@@ -184,7 +184,9 @@ public class InternalMerchantLookupController {
      * {@code IN} list can never be unbounded.
      *
      * <p><b>An unknown id is simply ABSENT from the response</b> — not a 404,
-     * and not a null entry. One stale id in a batch of fifty must not cost the
+     * and not a null entry. Absence is the ONLY way a row goes missing:
+     * {@code merchants.name} is NOT NULL, so a known merchant always carries
+     * a name. One stale id in a batch of fifty must not cost the
      * other forty-nine their names, and the consumer's handling is identical
      * either way: render no name. The singular
      * {@code /merchants/{id}/admin-email} above keeps its 404 for the opposite
@@ -220,8 +222,11 @@ public class InternalMerchantLookupController {
         for (Merchant m : merchants.findAllById(distinct)) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("merchantId", m.getId());
-            // LinkedHashMap, not Map.of — a merchant with no name on file is
-            // an ordinary answer and Map.of rejects a null value.
+            // LinkedHashMap rather than Map.of purely defensively: today
+            // merchants.name is NOT NULL (V1__init) so this can never be null,
+            // and Map.of would throw if that ever changed. It is NOT a case
+            // this endpoint can currently produce -- a missing row means the
+            // id names nothing, never that a merchant is nameless.
             row.put("name", m.getName());
             out.add(row);
         }

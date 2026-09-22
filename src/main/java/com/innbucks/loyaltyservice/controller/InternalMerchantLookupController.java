@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -52,6 +53,11 @@ public class InternalMerchantLookupController {
     private final TicketingLoyaltyService ticketingLoyaltyService;
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final String expectedToken;
+
+    /** Ceiling on one names lookup. A page of listings or a payout run names
+     *  tens of merchants, never hundreds; the cap keeps the IN list bounded
+     *  whatever a caller asks for. */
+    private static final int MAX_NAME_IDS = 200;
 
     public InternalMerchantLookupController(MerchantRepository merchants,
                                             ShopRepository shops,
@@ -159,6 +165,73 @@ public class InternalMerchantLookupController {
         log.debug("Internal lookup resolved merchantId={} -> adminEmail present={}",
                 id, adminEmail != null && !adminEmail.isBlank());
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * The trading names of several merchants at once.
+     *
+     * <p><b>Why it exists.</b> marketplace-service holds a merchant's id and
+     * nothing else — {@code Listing.merchantId} is a loyalty id copied off a
+     * JWT claim — so every surface that should say who is selling (the seller
+     * badge, the public seller profile, the admin trust queue, the finance
+     * payout report) had only a UUID to render. The name lives here, in the
+     * registry that issued the id.
+     *
+     * <p><b>Batch by construction, because the callers are pages.</b> A
+     * catalogue page, a moderation queue and a payout CSV each name many
+     * merchants at once; a per-id endpoint would have made an N+1 of every
+     * one of them. {@code ids} is capped at {@link #MAX_NAME_IDS} so the
+     * {@code IN} list can never be unbounded.
+     *
+     * <p><b>An unknown id is simply ABSENT from the response</b> — not a 404,
+     * and not a null entry. Absence is the ONLY way a row goes missing:
+     * {@code merchants.name} is NOT NULL, so a known merchant always carries
+     * a name. One stale id in a batch of fifty must not cost the
+     * other forty-nine their names, and the consumer's handling is identical
+     * either way: render no name. The singular
+     * {@code /merchants/{id}/admin-email} above keeps its 404 for the opposite
+     * reason — there, the id IS the question.
+     */
+    @GetMapping("/merchants/names")
+    @Operation(summary = "(S2S) Trading names for a batch of merchant ids",
+            description = "Returns {merchants:[{merchantId, name}]} for the ids that exist. "
+                          + "Unknown ids are omitted rather than 404ing the batch. Used by "
+                          + "marketplace-service, which stores merchant ids but no merchant "
+                          + "names, to render who is selling.")
+    public ResponseEntity<?> merchantNames(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestParam(value = "ids", required = false) List<UUID> ids) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (ids == null || ids.isEmpty()) {
+            // An empty ask is an ordinary answer, not a client error: a page
+            // with no listings on it legitimately needs no names.
+            return ResponseEntity.ok(Map.of("merchants", List.of()));
+        }
+        if (ids.size() > MAX_NAME_IDS) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "too_many_ids",
+                    "message", "At most " + MAX_NAME_IDS + " merchant ids per call"));
+        }
+        // distinct(): a caller assembling ids from a page of rows will repeat
+        // the same merchant, and there is no reason to widen the IN list or
+        // return that merchant twice.
+        List<UUID> distinct = ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        List<Map<String, Object>> out = new java.util.ArrayList<>(distinct.size());
+        for (Merchant m : merchants.findAllById(distinct)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("merchantId", m.getId());
+            // LinkedHashMap rather than Map.of purely defensively: today
+            // merchants.name is NOT NULL (V1__init) so this can never be null,
+            // and Map.of would throw if that ever changed. It is NOT a case
+            // this endpoint can currently produce -- a missing row means the
+            // id names nothing, never that a merchant is nameless.
+            row.put("name", m.getName());
+            out.add(row);
+        }
+        log.debug("Internal lookup resolved {} of {} merchant name(s)", out.size(), distinct.size());
+        return ResponseEntity.ok(Map.of("merchants", out));
     }
 
     @GetMapping("/shops/{id}")

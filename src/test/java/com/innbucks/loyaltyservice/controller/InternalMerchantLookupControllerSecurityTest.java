@@ -101,6 +101,94 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
         return merchantRepository.save(merchant).getId();
     }
 
+    // ------------------------------------------------------------------
+    // Batch merchant names — what marketplace-service renders "who is selling"
+    // from. It holds ids and no names.
+    // ------------------------------------------------------------------
+
+    @Test
+    void names_without_internal_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .param("ids", UUID.randomUUID().toString()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void names_with_wrong_internal_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .header("X-Internal-Token", "not-the-real-token")
+                        .param("ids", UUID.randomUUID().toString()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void names_returns_a_row_per_known_id() throws Exception {
+        UUID a = seedMerchant("Rudo Traders", "rudo@merchant.test");
+        UUID b = seedMerchant("Chipo Electronics", "chipo2@merchant.test");
+
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .header("X-Internal-Token", internalToken)
+                        .param("ids", a + "," + b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchants.length()").value(2))
+                .andExpect(jsonPath("$.merchants[?(@.merchantId=='" + a + "')].name")
+                        .value("Rudo Traders"))
+                .andExpect(jsonPath("$.merchants[?(@.merchantId=='" + b + "')].name")
+                        .value("Chipo Electronics"));
+    }
+
+    @Test
+    void names_omits_an_unknown_id_rather_than_failing_the_batch() throws Exception {
+        // One stale id must not cost the others their names: the consumer
+        // renders no name for a missing row, which is what it would do for a
+        // 404 anyway — but a 404 would take the whole page down with it.
+        UUID known = seedMerchant("Tendai Grocers", "tendai@merchant.test");
+
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .header("X-Internal-Token", internalToken)
+                        .param("ids", known + "," + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchants.length()").value(1))
+                .andExpect(jsonPath("$.merchants[0].merchantId").value(known.toString()));
+    }
+
+    @Test
+    void names_serves_a_nameless_merchant_as_a_null_not_an_omission() throws Exception {
+        // The merchant exists and simply has no name on file. That is a
+        // different fact from "no such merchant", and the row says so.
+        UUID merchantId = seedMerchant(null, "nameless@merchant.test");
+
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .header("X-Internal-Token", internalToken)
+                        .param("ids", merchantId.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchants.length()").value(1))
+                .andExpect(jsonPath("$.merchants[0].merchantId").value(merchantId.toString()))
+                .andExpect(jsonPath("$.merchants[0].name").doesNotExist());
+    }
+
+    @Test
+    void names_with_no_ids_is_an_empty_list_not_a_400() throws Exception {
+        // A page with nothing on it legitimately needs no names.
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchants.length()").value(0));
+    }
+
+    @Test
+    void names_refuses_an_unbounded_batch() throws Exception {
+        String tooMany = java.util.stream.Stream.generate(() -> UUID.randomUUID().toString())
+                .limit(201)
+                .collect(java.util.stream.Collectors.joining(","));
+
+        mockMvc.perform(get("/loyalty/internal/merchants/names")
+                        .header("X-Internal-Token", internalToken)
+                        .param("ids", tooMany))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("too_many_ids"));
+    }
+
     @Test
     void get_shop_without_internal_token_returns_401() throws Exception {
         mockMvc.perform(get("/loyalty/internal/shops/{id}", UUID.randomUUID()))

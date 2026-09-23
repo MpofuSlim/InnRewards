@@ -76,9 +76,12 @@ public class Merchant extends Auditable {
     @Column(nullable = false, length = 20)
     private Status status = Status.ACTIVE;
 
-    // Email of the user-service identity that admins this merchant. Stamped
-    // at create time from the JWT subject so AuthService can resolve a
-    // MERCHANT_ADMIN's merchantId at login without manual binding.
+    // Email of the user-service identity that admins this merchant: whose
+    // sign-in resolves to it (user-service mints the merchantId claim from it),
+    // who may manage it here (MerchantAuthz), and who receives its invoices and
+    // paid-order notifications. Set at create - the caller, or whoever a
+    // SUPER_ADMIN names - and movable afterwards by a SUPER_ADMIN only. Every
+    // move leaves a merchant_admin_changes row (V50).
     @Column(name = "admin_email", length = 255)
     private String adminEmail;
 

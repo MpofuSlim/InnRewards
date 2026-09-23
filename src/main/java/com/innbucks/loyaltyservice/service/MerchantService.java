@@ -3,9 +3,12 @@ package com.innbucks.loyaltyservice.service;
 import com.innbucks.loyaltyservice.client.UserServiceClient;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.MerchantAdminChange;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.repository.MerchantAdminChangeRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -43,15 +47,21 @@ public class MerchantService {
 
     private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
 
+    // Every move of merchants.admin_email leaves a row here (V50) - see
+    // recordAdminChange for why the merchant row's own updated_by is not enough.
+    private final MerchantAdminChangeRepository adminChanges;
+
     public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient,
                            com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules,
                            com.innbucks.loyaltyservice.config.LoyaltyProperties props,
-                           com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
+                           com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
+                           MerchantAdminChangeRepository adminChanges) {
         this.merchants = merchants;
         this.userServiceClient = userServiceClient;
         this.rules = rules;
         this.props = props;
         this.supportedCurrencies = supportedCurrencies;
+        this.adminChanges = adminChanges;
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
@@ -78,9 +88,11 @@ public class MerchantService {
         if (req.billingCycle() != null) m.setBillingCycle(req.billingCycle());
         applyFeeIssued(m, req.feeIssued());
         applyFeeRedeemed(m, req.feeRedeemed());
-        m.setAdminEmail(callerEmail());
+        String adminEmail = resolveAdminEmail(req.adminEmail());
+        m.setAdminEmail(adminEmail);
         applyFeeWaiver(m, req);
         merchants.save(m);
+        recordAdminChange(m, MerchantAdminChange.ChangeType.CREATED, null, adminEmail);
         com.innbucks.loyaltyservice.entity.LoyaltyRule overrideRule =
                 createOverrideRule(tenantId, m.getId(), req.loyaltyOverride());
         requirePricedForIssuing(tenantId, m, overrideRule);
@@ -188,6 +200,110 @@ public class MerchantService {
         if (auth == null) return null;
         String name = auth.getName();
         return name == null || name.isBlank() ? null : name;
+    }
+
+    /**
+     * Who a new merchant is bound to.
+     *
+     * <p>{@code admin_email} decides who a merchant BELONGS to, in three places:
+     * which account's sign-in resolves to it (user-service mints the
+     * {@code merchantId} claim from it, and only when exactly ONE merchant
+     * matches), who may manage it here ({@code MerchantAuthz}), and who receives
+     * its invoices and paid-order notifications. It used to be the caller's email
+     * unconditionally, which made onboarding on someone's behalf impossible: a
+     * platform admin creating a merchant for a seller bound it to themselves, the
+     * seller's sign-in resolved to nothing, and every merchant-scoped call they
+     * made was refused.
+     *
+     * <ul>
+     *   <li>Omitted, or the caller's own email in any case - the caller, exactly
+     *       as before. Self-onboarding is unchanged.</li>
+     *   <li>Someone else's email - SUPER_ADMIN only. Anyone else is refused
+     *       rather than silently bound to themselves: ignoring the field would
+     *       leave the client believing it had bound a merchant it had not. And it
+     *       must not be allowed: a merchant admin creating a merchant under a
+     *       stranger's email would give that stranger a second match, which
+     *       strips the {@code merchantId} claim from their token and locks them
+     *       out of their own merchant.</li>
+     * </ul>
+     *
+     * <p>The named account does not have to exist yet - onboarding the merchant
+     * before its admin signs up is an ordinary order of events, so an unknown
+     * email is not an error. Format is checked by bean validation on the DTO.
+     */
+    private static String resolveAdminEmail(String requested) {
+        String caller = callerEmail();
+        String named = requested == null ? "" : requested.trim();
+        if (named.isEmpty() || named.equalsIgnoreCase(Objects.requireNonNullElse(caller, ""))) {
+            return caller;
+        }
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+            return named;
+        }
+        throw LoyaltyException.forbidden("ADMIN_EMAIL_NOT_PERMITTED",
+                "Only a platform admin can onboard a merchant for someone else. "
+                        + "Omit adminEmail to onboard it for yourself.");
+    }
+
+    /**
+     * Rebind a merchant to a different admin (SUPER_ADMIN only - enforced on the
+     * controller). This moves authority over the merchant from one person to
+     * another, so it always leaves a history row.
+     *
+     * <p>An EXACT match with the current binding is a no-op and records nothing.
+     * A case-only difference is a real change: user-service resolves a merchant's
+     * admin ACCOUNT by exact email, so correcting the case is how a binding that
+     * signs in fine but never receives its order notifications gets fixed.
+     *
+     * <p>Takes effect at the affected accounts' next sign-in or token refresh. A
+     * token already issued keeps the merchant id it was minted with until it
+     * expires.
+     */
+    public Dtos.MerchantResponse reassignAdmin(UUID tenantId, UUID merchantId, String adminEmail) {
+        Merchant m = requireMerchant(tenantId, merchantId);
+        String next = adminEmail == null ? "" : adminEmail.trim();
+        if (next.isEmpty()) {
+            // The DTO's @NotBlank makes this unreachable over HTTP; clearing a
+            // binding is its own verb (unbindAdmin), never an empty PUT.
+            throw LoyaltyException.badRequest("ADMIN_EMAIL_REQUIRED", "adminEmail is required");
+        }
+        String previous = m.getAdminEmail();
+        if (!next.equals(previous)) {
+            m.setAdminEmail(next);
+            recordAdminChange(m, MerchantAdminChange.ChangeType.REASSIGNED, previous, next);
+        }
+        return toResponse(m);
+    }
+
+    /**
+     * Clear a merchant's binding (SUPER_ADMIN only - enforced on the
+     * controller): nobody's sign-in resolves to it, nobody but a SUPER_ADMIN can
+     * manage it here, and its invoices and order notifications go to no one. The
+     * right state for a test merchant, and the way to leave an account that
+     * created several with exactly the one it runs. Idempotent.
+     */
+    public Dtos.MerchantResponse unbindAdmin(UUID tenantId, UUID merchantId) {
+        Merchant m = requireMerchant(tenantId, merchantId);
+        String previous = m.getAdminEmail();
+        if (previous != null) {
+            m.setAdminEmail(null);
+            recordAdminChange(m, MerchantAdminChange.ChangeType.UNBOUND, previous, null);
+        }
+        return toResponse(m);
+    }
+
+    /**
+     * Written in the same transaction as the change. The merchant row's own
+     * {@code updated_by} is not a history: the next unrelated edit - an activate,
+     * a fee change - overwrites it, and "who moved this merchant to that person"
+     * is exactly the question asked after a payout or an invoice went astray.
+     */
+    private void recordAdminChange(Merchant m, MerchantAdminChange.ChangeType type,
+                                   String previous, String next) {
+        UUID actorUuid = CallerDetails.currentUserId();
+        String actor = actorUuid != null ? actorUuid.toString() : callerEmail();
+        adminChanges.save(new MerchantAdminChange(m.getTenantId(), m.getId(), type,
+                previous, next, actor, Instant.now()));
     }
 
     @Transactional(readOnly = true)
@@ -324,12 +440,21 @@ public class MerchantService {
         return toResponse(m, null);
     }
 
-    /** {@code loyaltyRuleId} is only known on the onboarding path — see the DTO. */
+    /**
+     * {@code loyaltyRuleId} is only known on the onboarding path — see the DTO.
+     *
+     * <p>{@code adminEmail} is filled for a SUPER_ADMIN caller only. The merchant
+     * list is tenant-wide, so a SHOP_ADMIN of one merchant can read every other
+     * merchant's row; the binding is a person's email, and only the operator who
+     * can change it needs to see it. Decided here, at the one mapper every path
+     * goes through, so no endpoint can forget.
+     */
     public static Dtos.MerchantResponse toResponse(Merchant m, UUID loyaltyRuleId) {
         return new Dtos.MerchantResponse(m.getId(), m.getTenantId(), m.getName(),
                 m.getCategory(), m.getCurrency(), m.getBillingCycle(), m.getStatus(),
                 new Dtos.FeeModel(m.getFeeIssuedType(),   m.getFeeIssuedFixed(),   m.getFeeIssuedPercentage()),
                 new Dtos.FeeModel(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage()),
-                loyaltyRuleId, m.isFeeWaived(), m.getFeeWaivedReason());
+                loyaltyRuleId, m.isFeeWaived(), m.getFeeWaivedReason(),
+                CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN") ? m.getAdminEmail() : null);
     }
 }

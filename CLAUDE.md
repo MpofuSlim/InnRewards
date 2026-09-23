@@ -193,6 +193,55 @@ tenant-scoped) is the **only** way out of BLOCKED — nothing else in the servic
 clears it. It refuses a non-BLOCKED account rather than becoming a general
 make-it-active lever that bypasses PENDING/INACTIVE.
 
+## A merchant's admin is a BINDING, and it can now move (V50)
+
+`merchants.admin_email` decides who a merchant **belongs to**, in three places
+at once: whose sign-in resolves to it (user-service's
+`AuthService.resolveMerchantIdClaim` mints the `merchantId` claim from it — and
+only when the email matches **exactly one** merchant), who may manage it here
+(`MerchantAuthz`), and who receives its invoices and paid-order notifications.
+
+- **The bug this fixed.** The column used to be the caller's email,
+  unconditionally, with no field to name anyone else and no way to change it
+  afterwards. So a platform admin onboarding a merchant for a seller bound it to
+  **themselves**: the seller's sign-in matched nothing (every marketplace call
+  refused with `merchant_scope_missing`), the admin's own email gained one more
+  match (at two or more, an admin who also runs a merchant loses their own claim
+  too), and the seller's invoices and order notifications went to the admin.
+- **`POST /loyalty/merchants` takes an optional `adminEmail`.** Omitted, or the
+  caller's own email in any case → the caller, exactly as before. Someone
+  else's email → **SUPER_ADMIN only**; anyone else gets **403
+  `ADMIN_EMAIL_NOT_PERMITTED`**. It is refused rather than silently ignored,
+  because ignoring it leaves the client believing it bound a merchant it did
+  not — and it must not be allowed, because a merchant admin creating a
+  merchant under a stranger's email gives the stranger a second match, which
+  strips the stranger's `merchantId` claim. A named account need not exist yet.
+- **`PUT /loyalty/merchants/{id}/admin-email`** rebinds and
+  **`DELETE /loyalty/merchants/{id}/admin-email`** clears — both
+  `hasRole('SUPER_ADMIN')`. Clearing is a separate verb on purpose: an empty or
+  malformed PUT is a 400, never read as "unbind". An EXACT repeat is a no-op; a
+  **case-only change is applied**, because user-service finds a merchant's admin
+  ACCOUNT by exact email (`findByEmail`), so a wrongly-cased binding signs in
+  fine but never receives its order notifications.
+- **Every move leaves a `merchant_admin_changes` row** (`CREATED` /
+  `REASSIGNED` / `UNBOUND`, from → to, who, when), in the same transaction as the
+  change. The merchant row's `updated_by` is not a history — the next unrelated
+  edit overwrites it. No FK to `merchants`, deliberately: the audit row must
+  outlive its subject. Every create writes one too, so a post-V50 merchant's
+  history always starts at its origin.
+- **`MerchantResponse.adminEmail` is filled for SUPER_ADMIN callers only**, in
+  the one mapper every path uses (`MerchantService.toResponse`), and the
+  component is `NON_NULL` so the key is simply absent for everyone else. The list
+  is tenant-wide — a SHOP_ADMIN of one merchant reads every other merchant's row
+  — and the binding is a person's email.
+- **Takes effect at the next sign-in or token refresh.** A token already issued
+  keeps the `merchantId` it was minted with until it expires.
+- **Not done, deliberately:** no read endpoint for the history (query the table),
+  and `GET /loyalty/merchants?unassigned=true` still reads user-service's
+  `loyalty_merchant_id`, which nothing stamps on a MERCHANT_ADMIN — so it does
+  not reflect `admin_email` and returns every merchant. Aligning it is a separate
+  change.
+
 ## Timestamps — UTC
 
 Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
@@ -202,7 +251,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V49**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V50**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]

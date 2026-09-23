@@ -27,9 +27,10 @@ import java.util.UUID;
  *   <li><b>SHOP_ADMIN / SHOP_USER</b> — their JWT carries a {@code merchantId}
  *       claim scoping them to exactly one merchant; any other merchant is denied.</li>
  *   <li><b>MERCHANT_ADMIN</b> — no merchant claim in the token; ownership is the
- *       {@link Merchant#getAdminEmail() adminEmail} stamped from the creator's
- *       JWT subject at merchant-create time. The caller may act only on merchants
- *       whose {@code adminEmail} equals their own email (case-insensitive).</li>
+ *       {@link Merchant#getAdminEmail() adminEmail} set at merchant-create time
+ *       (the creator, or whoever a SUPER_ADMIN named) and movable afterwards by a
+ *       SUPER_ADMIN only. The caller may act only on merchants whose
+ *       {@code adminEmail} equals their own email (case-insensitive).</li>
  * </ul>
  *
  * <p>This deliberately reuses the existing {@code adminEmail} column and the

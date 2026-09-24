@@ -7,7 +7,6 @@ import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
 import org.springframework.stereotype.Component;
 
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -26,16 +25,19 @@ import java.util.UUID;
  *   <li><b>SUPER_ADMIN</b> — platform operator; may act on any merchant.</li>
  *   <li><b>SHOP_ADMIN / SHOP_USER</b> — their JWT carries a {@code merchantId}
  *       claim scoping them to exactly one merchant; any other merchant is denied.</li>
- *   <li><b>MERCHANT_ADMIN</b> — no merchant claim in the token; ownership is the
- *       {@link Merchant#getAdminEmail() adminEmail} set at merchant-create time
- *       (the creator, or whoever a SUPER_ADMIN named) and movable afterwards by a
- *       SUPER_ADMIN only. The caller may act only on merchants whose
- *       {@code adminEmail} equals their own email (case-insensitive).</li>
+ *   <li><b>MERCHANT_ADMIN</b> — an OWNER or ADMIN of an organization holding the
+ *       loyalty product ({@link CallerDetails#currentOrganizationId()}). They may
+ *       act on exactly the merchants whose {@link Merchant#getOrganizationId()
+ *       organizationId} is that organization — every brand the business runs,
+ *       and nobody else's.</li>
  * </ul>
  *
- * <p>This deliberately reuses the existing {@code adminEmail} column and the
- * caller's email/merchant claims, so it needs no new JWT claim and no front-end
- * change.
+ * <p>Ownership used to be an email: {@code merchants.admin_email} had to equal
+ * the caller's login. That made one column the ownership key, the notification
+ * address and (through user-service's claim lookup) marketplace's seller
+ * identity at once, and it had no way to let a colleague in. A merchant with no
+ * organization (a pre-V51 row nobody has stamped) matches no caller at all and
+ * is reachable by SUPER_ADMIN only — fail closed, never "anyone".
  */
 @Component
 public class MerchantAuthz {
@@ -81,14 +83,11 @@ public class MerchantAuthz {
             throw notOwner();
         }
 
-        // MERCHANT_ADMIN: ownership is the adminEmail stamped at create time.
-        // adminEmail is a nullable column (auto-provisioned merchants have none),
-        // so coalesce to "" for a non-null receiver — equalsIgnoreCase is null-safe
-        // on its argument. Uses the requireNonNullElse idiom so neither the caller
-        // email nor the owner email needs a null-check for Qodana to flag.
-        String callerEmail = CallerDetails.currentEmail();
-        String ownerEmail = merchant.getAdminEmail();
-        if (Objects.requireNonNullElse(ownerEmail, "").equalsIgnoreCase(callerEmail)) {
+        // MERCHANT_ADMIN: ownership is the organization. Both sides must be
+        // present — a null on either (a caller with no loyalty organization, or
+        // an unstamped merchant) is a refusal, never a match.
+        UUID callerOrganization = CallerDetails.currentOrganizationId();
+        if (callerOrganization != null && callerOrganization.equals(merchant.getOrganizationId())) {
             return merchant;
         }
         throw notOwner();

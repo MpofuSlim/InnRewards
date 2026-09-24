@@ -56,6 +56,10 @@ public class JwtFilter extends OncePerRequestFilter {
      */
     static final String LOYALTY_OTP_SCOPE = "loyalty-otp";
 
+    static final String MERCHANT_ADMIN = "MERCHANT_ADMIN";
+    static final String LOYALTY_PRODUCT = "loyalty";
+    private static final java.util.Set<String> RUNS_ORGANIZATION = java.util.Set.of("OWNER", "ADMIN");
+
     /**
      * The second accepted marker: a session THIS service minted, after a proof
      * the customer performed themselves (the InnBucks / Veengu registration
@@ -187,11 +191,30 @@ public class JwtFilter extends OncePerRequestFilter {
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);
 
+            // A business acts in loyalty through its ORGANIZATION (user-service
+            // V39): the session's orgId, when the caller is that organization's
+            // OWNER or ADMIN and it holds the loyalty product. That — and only
+            // that — is what makes a caller a MERCHANT_ADMIN here. The role in
+            // the token's roles claim is deliberately NOT honoured: it is granted
+            // by BOTH the loyalty and the marketplace bundles, so trusting it let
+            // a marketplace-only business administer loyalty, and it could not
+            // say WHICH business the caller speaks for. Deriving it means an
+            // admin colleague added through /organizations works here without a
+            // platform role, and a STAFF member or a business without loyalty
+            // gets nothing.
+            UUID loyaltyOrganizationId = loyaltyOrganizationOf(
+                    jwtUtil.extractOrganizationId(token),
+                    jwtUtil.extractOrganizationRole(token),
+                    jwtUtil.extractProducts(token));
+
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String role : roles) {
-                if (role != null && !role.isBlank()) {
+                if (role != null && !role.isBlank() && !MERCHANT_ADMIN.equals(role)) {
                     authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
                 }
+            }
+            if (loyaltyOrganizationId != null) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + MERCHANT_ADMIN));
             }
             for (String service : services) {
                 if (service != null && !service.isBlank()) {
@@ -256,7 +279,7 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-            auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber, userId));
+            auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber, userId, loyaltyOrganizationId));
             SecurityContextHolder.getContext().setAuthentication(auth);
             // TRACE, not DEBUG: this line carries the subject (email = PII) plus
             // the caller's roles on every authenticated request. Keep it off by
@@ -343,5 +366,17 @@ public class JwtFilter extends OncePerRequestFilter {
                         + homeCountry + "\",\"data\":{\"errorCode\":\"wrong_cell\",\"homeCountry\":\""
                         + homeCountry + "\",\"homeBaseUrl\":null}}"
         );
+    }
+
+    /**
+     * The organization a caller may act for in loyalty: {@code orgId} when they
+     * are its OWNER or ADMIN and it holds the loyalty product, else null. Every
+     * part is required — a STAFF member, a business without loyalty, or a
+     * session that has not chosen an organization gets nothing.
+     */
+    static UUID loyaltyOrganizationOf(UUID orgId, String orgRole, List<String> products) {
+        if (orgId == null || orgRole == null || products == null) return null;
+        if (!RUNS_ORGANIZATION.contains(orgRole)) return null;
+        return products.contains(LOYALTY_PRODUCT) ? orgId : null;
     }
 }

@@ -11,9 +11,10 @@ import java.util.UUID;
  * Authentication as {@code details} by {@link JwtFilter}.
  *
  * <p>{@code merchantId} is set for principals whose JWT carries the claim —
- * today that's SHOP_ADMIN and SHOP_USER. MERCHANT_ADMIN tokens do NOT carry a
- * merchantId; those callers supply it in the request body, and write endpoints
- * use {@link #resolveMerchantId(UUID)} to pick the right source.
+ * SHOP_ADMIN and SHOP_USER only. A merchant admin's token carries none (their
+ * scope is {@code organizationId}); they supply the merchant in the request
+ * body, and write endpoints use {@link #resolveMerchantId(UUID)} to pick the
+ * right source.
  *
  * <p>{@code shopId} is set only for SHOP_ADMIN and SHOP_USER (cashiers and
  * outlet supervisors). It identifies the specific outlet the principal works
@@ -31,8 +32,34 @@ import java.util.UUID;
  * TenantContext} admits a caller when this UUID matches a {@code tenant_members}
  * row, falling back to the email (principal name) for legacy rows. Null on
  * tokens minted before the claim landed.
+ *
+ * <p>{@code organizationId} is the business the caller may act for IN LOYALTY:
+ * the session's {@code orgId}, set by {@link JwtFilter} only when the caller is
+ * that organization's OWNER or ADMIN and it holds the {@code loyalty} product.
+ * It is the ownership key for merchants ({@code merchants.organization_id}) and
+ * one way into a tenant. Null for everyone else — including a STAFF member, and
+ * a business whose organization has no loyalty product.
  */
-public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UUID userId) {
+public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UUID userId,
+                            UUID organizationId) {
+
+    /** A caller with no loyalty organization — shop staff, customers, platform staff. */
+    public CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UUID userId) {
+        this(merchantId, shopId, phoneNumber, userId, null);
+    }
+
+    /**
+     * The organization the caller may act for in loyalty, or {@code null}. See
+     * the class doc: only an OWNER or ADMIN of an organization with the loyalty
+     * product ever has one.
+     */
+    public static UUID currentOrganizationId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return null;
+        Object details = auth.getDetails();
+        if (details instanceof CallerDetails cd) return cd.organizationId();
+        return null;
+    }
 
     public static UUID currentMerchantId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();

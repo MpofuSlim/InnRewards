@@ -76,14 +76,14 @@ public class Merchant extends Auditable {
     @Column(nullable = false, length = 20)
     private Status status = Status.ACTIVE;
 
-    // Email of the user-service identity that admins this merchant: whose
-    // sign-in resolves to it (user-service mints the merchantId claim from it),
-    // who may manage it here (MerchantAuthz), and who receives its invoices and
-    // paid-order notifications. Set at create - the caller, or whoever a
-    // SUPER_ADMIN names - and movable afterwards by a SUPER_ADMIN only. Every
-    // move leaves a merchant_admin_changes row (V50).
-    @Column(name = "admin_email", length = 255)
-    private String adminEmail;
+    // The organization (user-service V39) this merchant belongs to: whose
+    // OWNERs and ADMINs may manage it here (MerchantAuthz), and whose admins
+    // receive its invoices. Set at create from the caller's session, or named by
+    // a SUPER_ADMIN. Null on a pre-V51 row until an operator stamps it, which
+    // leaves the merchant reachable by SUPER_ADMIN only. The old admin_email
+    // column is still in the table, dormant and unmapped (see V51).
+    @Column(name = "organization_id")
+    private UUID organizationId;
 
     public enum BillingCycle { WEEKLY, MONTHLY, DAILY }
     public enum Status { ACTIVE, INACTIVE }

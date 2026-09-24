@@ -1,13 +1,17 @@
 package com.innbucks.loyaltyservice.service;
 
-import com.innbucks.loyaltyservice.client.UserServiceClient;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
-import com.innbucks.loyaltyservice.repository.MerchantAdminChangeRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -18,7 +22,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,13 +30,30 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for {@link MerchantService#list(UUID, Pageable, boolean)}.
+ * Unit tests for {@link MerchantService}: onboarding (fees, overrides, the
+ * zero-fee guard) and listing.
  *
- * <p>Pins how the unassigned filter routes between the repository's two
- * finders depending on what user-service returns, and that user-service
- * failures propagate (no silent fallback — see the service comment).
+ * <p>Every test runs as a merchant admin acting for {@link #ORG} in loyalty —
+ * the only caller shape that may onboard a merchant for itself since ownership
+ * moved from an email to the organization. Ownership itself is pinned in
+ * {@code MerchantOrganizationOwnershipTest}.
  */
 class MerchantServiceTest {
+
+    private static final UUID ORG = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
+
+    @BeforeEach
+    void actAsAMerchantAdminOfTheOrganization() {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                "owner@rudo.co.zw", null, List.of(new SimpleGrantedAuthority("ROLE_MERCHANT_ADMIN")));
+        auth.setDetails(new CallerDetails(null, null, null, UUID.randomUUID(), ORG));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
 
     private static final com.innbucks.loyaltyservice.config.LoyaltyProperties PROPS =
             new com.innbucks.loyaltyservice.config.LoyaltyProperties(null, null, null, null, null, null, null);
@@ -53,81 +73,21 @@ class MerchantServiceTest {
     }
 
     @Test
-    void list_defaultUnassignedFalse_skipsUserServiceAndReturnsAll() {
+    void list_returnsTheTenantsPage() {
         MerchantRepository repo = mock(MerchantRepository.class);
-        UserServiceClient userClient = mock(UserServiceClient.class);
         UUID tenantId = UUID.randomUUID();
         Pageable page = PageRequest.of(0, 20);
-        when(repo.findByTenantId(tenantId, page))
-                .thenReturn(new PageImpl<>(List.of(merchant(UUID.randomUUID(), tenantId, "A"))));
+        Merchant a = merchant(UUID.randomUUID(), tenantId, "Cafe A");
+        a.setOrganizationId(ORG);
+        when(repo.findByTenantId(tenantId, page)).thenReturn(new PageImpl<>(List.of(a), page, 1));
 
-        Page<Dtos.MerchantResponse> result =
-                new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class), PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class)).list(tenantId, page);
+        Page<Dtos.MerchantResponse> result = newService(repo).list(tenantId, page);
 
-        assertThat(result.getContent()).hasSize(1);
-        verify(repo).findByTenantId(tenantId, page);
-        verifyNoInteractions(userClient);
-    }
-
-    @Test
-    void list_unassignedTrue_emptyExclusionSet_fallsThroughToFindByTenantId() {
-        // Hibernate refuses to emit `IN ()`; when nobody has an admin yet,
-        // the unassigned page IS the unfiltered page.
-        MerchantRepository repo = mock(MerchantRepository.class);
-        UserServiceClient userClient = mock(UserServiceClient.class);
-        UUID tenantId = UUID.randomUUID();
-        Pageable page = PageRequest.of(0, 20);
-        when(userClient.assignedMerchantIds()).thenReturn(Set.of());
-        when(repo.findByTenantId(tenantId, page))
-                .thenReturn(new PageImpl<>(List.of(merchant(UUID.randomUUID(), tenantId, "Solo"))));
-
-        Page<Dtos.MerchantResponse> result =
-                new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class), PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class)).list(tenantId, page, true);
-
-        assertThat(result.getContent()).hasSize(1);
-        verify(repo).findByTenantId(tenantId, page);
-        verify(repo, never()).findByTenantIdAndIdNotIn(any(), any(), any());
-    }
-
-    @Test
-    void list_unassignedTrue_nonEmptyExclusion_callsNotInFinderWithThatSet() {
-        MerchantRepository repo = mock(MerchantRepository.class);
-        UserServiceClient userClient = mock(UserServiceClient.class);
-        UUID tenantId = UUID.randomUUID();
-        UUID claimed = UUID.randomUUID();
-        UUID free = UUID.randomUUID();
-        Pageable page = PageRequest.of(0, 20);
-        when(userClient.assignedMerchantIds()).thenReturn(Set.of(claimed));
-        when(repo.findByTenantIdAndIdNotIn(eq(tenantId), eq(Set.of(claimed)), eq(page)))
-                .thenReturn(new PageImpl<>(List.of(merchant(free, tenantId, "Up for grabs"))));
-
-        Page<Dtos.MerchantResponse> result =
-                new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class), PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class)).list(tenantId, page, true);
-
-        assertThat(result.getContent()).extracting(Dtos.MerchantResponse::id).containsExactly(free);
-        verify(repo).findByTenantIdAndIdNotIn(tenantId, Set.of(claimed), page);
-        verify(repo, never()).findByTenantId(any(UUID.class), any(Pageable.class));
-    }
-
-    @Test
-    void list_unassignedTrue_userServiceDown_propagatesIllegalStateException() {
-        // Silent fallback to "all merchants" would show the picker
-        // already-claimed merchants and defeat the whole feature, so the
-        // service lets the exception bubble for the controller to map to 503.
-        MerchantRepository repo = mock(MerchantRepository.class);
-        UserServiceClient userClient = mock(UserServiceClient.class);
-        UUID tenantId = UUID.randomUUID();
-        Pageable page = PageRequest.of(0, 20);
-        when(userClient.assignedMerchantIds())
-                .thenThrow(new IllegalStateException("user-service unavailable"));
-
-        assertThatThrownBy(() -> new MerchantService(repo, userClient, mock(LoyaltyRuleRepository.class), PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class)).list(tenantId, page, true))
-                .isInstanceOf(IllegalStateException.class);
-        verifyNoInteractions(repo);
+        assertThat(result.getContent()).extracting(Dtos.MerchantResponse::organizationId).containsExactly(ORG);
     }
 
     private static MerchantService newService(MerchantRepository repo) {
-        return new MerchantService(repo, mock(UserServiceClient.class), mock(LoyaltyRuleRepository.class), PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class));
+        return new MerchantService(repo, mock(LoyaltyRuleRepository.class), PROPS, CURRENCIES);
     }
 
     private static final Dtos.FeeModel PRICED =
@@ -166,7 +126,7 @@ class MerchantServiceTest {
         LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        Dtos.MerchantResponse resp = new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(), req(null, null));
 
         // No override -> no rule is written. The repository IS read, because the
@@ -201,7 +161,7 @@ class MerchantServiceTest {
                 new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE, java.math.BigDecimal.ZERO, new java.math.BigDecimal("1")),
                 null);                                   // redeem fee keeps inheriting
 
-        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        Dtos.MerchantResponse resp = new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(tenantId, new Dtos.MerchantRequest("Cafe A", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY, null, null, override));
 
@@ -234,7 +194,7 @@ class MerchantServiceTest {
                         new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5")),
                 null);
 
-        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, bad)))
                 .hasMessageContaining("FIXED")
                 .hasMessageContaining("percentage");
@@ -250,7 +210,7 @@ class MerchantServiceTest {
         Dtos.MerchantRuleOverride bad = new Dtos.MerchantRuleOverride(
                 null, null, null, null, null, new java.math.BigDecimal("-1"), null, null);
 
-        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, bad)))
                 .hasMessageContaining("minTransactionAmount");
         verify(rules, never()).save(any());
@@ -333,10 +293,8 @@ class MerchantServiceTest {
         // KE cell: a merchant created without an explicit currency must inherit KES.
         // The allowlist unions the cell currency by construction (SupportedCurrencies),
         // which is exactly what keeps a KE cell working without extra config.
-        MerchantService svc = new MerchantService(repo, mock(UserServiceClient.class),
-                mock(LoyaltyRuleRepository.class), PROPS,
-                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "KES"),
-                mock(MerchantAdminChangeRepository.class));
+        MerchantService svc = new MerchantService(repo, mock(LoyaltyRuleRepository.class), PROPS,
+                new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "KES"));
         ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
 
         Dtos.MerchantRequest noCurrency = new Dtos.MerchantRequest(
@@ -425,7 +383,7 @@ class MerchantServiceTest {
 
         // No record fee, no override, no global rule -> the platform would run
         // this merchant for free forever.
-        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null)))
                 .hasMessageContaining("billed nothing for issuing");
     }
@@ -439,7 +397,7 @@ class MerchantServiceTest {
                 java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
 
         // An explicit FIXED 0 is still zero — spelling it out is not a waiver.
-        assertThatThrownBy(() -> new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, freeIssue, null)))
                 .hasMessageContaining("billed nothing for issuing");
     }
@@ -476,7 +434,7 @@ class MerchantServiceTest {
         when(rules.findApplicable(any(), any(), eq(TransactionType.PURCHASE))).thenReturn(List.of(global));
 
         // Nothing on the merchant itself, but the tenant standard prices it.
-        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        Dtos.MerchantResponse resp = new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null));
 
         assertThat(resp.id()).isNotNull();
@@ -500,7 +458,7 @@ class MerchantServiceTest {
                 new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE, java.math.BigDecimal.ZERO, new java.math.BigDecimal("1")),
                 null);
 
-        Dtos.MerchantResponse resp = new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        Dtos.MerchantResponse resp = new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .create(UUID.randomUUID(),
                         new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, override));
 
@@ -548,7 +506,7 @@ class MerchantServiceTest {
         when(repo.findByTenantId(tenantId)).thenReturn(List.of(priced, forgotten, deliberate));
         when(rules.findByTenantId(tenantId)).thenReturn(List.of());
 
-        Dtos.ZeroFeeAudit audit = new MerchantService(repo, mock(UserServiceClient.class), rules, PROPS, CURRENCIES, mock(MerchantAdminChangeRepository.class))
+        Dtos.ZeroFeeAudit audit = new MerchantService(repo, rules, PROPS, CURRENCIES)
                 .auditZeroFeeMerchants(tenantId);
 
         assertThat(audit.merchantsExamined()).isEqualTo(3);

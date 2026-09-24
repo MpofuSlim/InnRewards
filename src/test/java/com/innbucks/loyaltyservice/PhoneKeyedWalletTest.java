@@ -20,6 +20,7 @@ import com.innbucks.loyaltyservice.service.TransferService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import com.innbucks.loyaltyservice.service.WalletService;
+import com.innbucks.loyaltyservice.testsupport.MerchantFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,7 +77,7 @@ class PhoneKeyedWalletTest {
         draft.setName("Phone-Keyed Wallet Test");
         final Tenant t = tenantRepository.save(draft);
 
-        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+        Dtos.MerchantResponse mr = MerchantFixtures.createAsPlatform(merchantService, t.getId(),
                 new Dtos.MerchantRequest("Cafe Pending", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.05"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null)));
@@ -162,7 +163,7 @@ class PhoneKeyedWalletTest {
         draft.setName("P2P authz");
         final Tenant t = tenantRepository.save(draft);
 
-        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+        Dtos.MerchantResponse mr = MerchantFixtures.createAsPlatform(merchantService, t.getId(),
                 new Dtos.MerchantRequest("AuthzCafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));

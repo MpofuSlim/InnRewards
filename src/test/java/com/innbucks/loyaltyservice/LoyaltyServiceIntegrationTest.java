@@ -20,6 +20,7 @@ import com.innbucks.loyaltyservice.service.TransferService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import com.innbucks.loyaltyservice.service.WalletService;
+import com.innbucks.loyaltyservice.testsupport.MerchantFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -69,7 +70,7 @@ class LoyaltyServiceIntegrationTest {
     @Transactional
     void earnsPointsAndRedeemsVoucher() {
         Tenant t = saveTenant();
-        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+        Dtos.MerchantResponse mr = MerchantFixtures.createAsPlatform(merchantService, t.getId(),
                 new Dtos.MerchantRequest("Cafe Westgate", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.05"), null),
@@ -110,7 +111,7 @@ class LoyaltyServiceIntegrationTest {
     @Transactional
     void transferDeductsAndCreditsAtomically() {
         Tenant t = saveTenant();
-        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+        Dtos.MerchantResponse mr = MerchantFixtures.createAsPlatform(merchantService, t.getId(),
                 new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
@@ -143,7 +144,7 @@ class LoyaltyServiceIntegrationTest {
     @Transactional
     void qrConsumeAwardsPointsAndIsSingleUse() {
         Tenant t = saveTenant();
-        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+        Dtos.MerchantResponse mr = MerchantFixtures.createAsPlatform(merchantService, t.getId(),
                 new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
@@ -188,7 +189,7 @@ class LoyaltyServiceIntegrationTest {
         // points-earning transaction (no fee on points), then call
         // generate() and expect empty.
         Tenant t = saveTenant();
-        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+        Dtos.MerchantResponse mr = MerchantFixtures.createAsPlatform(merchantService, t.getId(),
                 new Dtos.MerchantRequest("Pharmacy Gweru", "Health", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("1.00"), null),

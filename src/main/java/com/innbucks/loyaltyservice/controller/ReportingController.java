@@ -159,7 +159,7 @@ public class ReportingController {
                           "expiring soon).\n\n" +
                           "**Visibility is ownership-scoped**: SUPER_ADMIN / TENANT_ADMIN / " +
                           "PLATFORM_ADMIN see every merchant in the tenant; a MERCHANT_ADMIN sees only " +
-                          "merchants they administer (adminEmail match); SHOP_ADMIN sees only the " +
+                          "merchants their organization owns; SHOP_ADMIN sees only the " +
                           "merchant pinned in their token. Out-of-scope merchants are absent rather " +
                           "than 403 — the list is \"everything you administer\". Paginated (name-ordered); " +
                           "page numbers are per-caller stable. Requires X-Tenant-Id.")
@@ -184,7 +184,7 @@ public class ReportingController {
                                             "currency": "USD",
                                             "billingCycle": "MONTHLY",
                                             "status": "ACTIVE",
-                                            "adminEmail": "owner@innbucks.co.zw",
+                                            "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
                                             "createdAt": "2026-01-12T08:30:00Z",
                                             "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
                                             "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },

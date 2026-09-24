@@ -27,8 +27,9 @@ import static org.mockito.Mockito.when;
  * <p>Pins the per-merchant / per-shop ownership model that closes the
  * cross-merchant and cross-shop IDOR: a SUPER_ADMIN operator may act on any
  * merchant/shop; SHOP staff are pinned to the merchant/shop in their JWT; a
- * MERCHANT_ADMIN may act only on merchants they created (adminEmail match) and
- * shops belonging to those merchants.
+ * MERCHANT_ADMIN may act only on merchants their ORGANIZATION owns and shops
+ * belonging to those merchants. An email match grants nothing any more, and a
+ * merchant no organization owns is reachable by SUPER_ADMIN only.
  */
 class MerchantAuthzTest {
 
@@ -43,18 +44,27 @@ class MerchantAuthzTest {
         SecurityContextHolder.clearContext();
     }
 
+    private static final UUID ACME = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
+    private static final UUID RIVAL = UUID.fromString("9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e60");
+
     private void authenticate(String email, String role, UUID merchantClaim, UUID shopClaim) {
+        authenticate(email, role, merchantClaim, shopClaim, null);
+    }
+
+    /** {@code organization} is the loyalty organization JwtFilter resolved for the caller. */
+    private void authenticate(String email, String role, UUID merchantClaim, UUID shopClaim, UUID organization) {
         var auth = new UsernamePasswordAuthenticationToken(email, null,
                 List.of(new SimpleGrantedAuthority("ROLE_" + role)));
-        auth.setDetails(new CallerDetails(merchantClaim, shopClaim, "+263770000000", UUID.randomUUID()));
+        auth.setDetails(new CallerDetails(merchantClaim, shopClaim, "+263770000000", UUID.randomUUID(),
+                organization));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
-    private Merchant merchant(UUID id, String adminEmail) {
+    private Merchant merchant(UUID id, UUID organizationId) {
         Merchant m = new Merchant();
         m.setId(id);
         m.setTenantId(tenant);
-        m.setAdminEmail(adminEmail);
+        m.setOrganizationId(organizationId);
         when(merchants.findById(id)).thenReturn(Optional.of(m));
         return m;
     }
@@ -83,7 +93,7 @@ class MerchantAuthzTest {
     @Test
     void superAdmin_mayAdministerAnyMerchant() {
         UUID mId = UUID.randomUUID();
-        merchant(mId, "someone@else.test");
+        merchant(mId, RIVAL);
         authenticate("ops@platform.test", "SUPER_ADMIN", null, null);
         assertThat(authz.requireCallerAdministersMerchant(tenant, mId).getId()).isEqualTo(mId);
     }
@@ -101,15 +111,38 @@ class MerchantAuthzTest {
     }
 
     @Test
-    void merchantAdmin_ownsMerchantsTheyCreated_byAdminEmail() {
-        UUID mine = UUID.randomUUID();
-        UUID sibling = UUID.randomUUID();
-        merchant(mine, "boss@acme.test");
-        merchant(sibling, "rival@other.test");
-        authenticate("boss@acme.test", "MERCHANT_ADMIN", null, null);
+    void merchantAdmin_ownsEveryMerchantOfTheirOrganization_andNoOneElses() {
+        UUID chickenInn = UUID.randomUUID();
+        UUID pizzaInn = UUID.randomUUID();
+        UUID rivals = UUID.randomUUID();
+        merchant(chickenInn, ACME);
+        merchant(pizzaInn, ACME);
+        merchant(rivals, RIVAL);
+        authenticate("boss@acme.test", "MERCHANT_ADMIN", null, null, ACME);
 
-        assertThat(authz.requireCallerAdministersMerchant(tenant, mine).getId()).isEqualTo(mine);
-        assertForbidden(() -> authz.requireCallerAdministersMerchant(tenant, sibling), "NOT_MERCHANT_OWNER");
+        assertThat(authz.requireCallerAdministersMerchant(tenant, chickenInn).getId()).isEqualTo(chickenInn);
+        assertThat(authz.requireCallerAdministersMerchant(tenant, pizzaInn).getId()).isEqualTo(pizzaInn);
+        assertForbidden(() -> authz.requireCallerAdministersMerchant(tenant, rivals), "NOT_MERCHANT_OWNER");
+    }
+
+    @Test
+    void merchantAdmin_withNoLoyaltyOrganization_ownsNothing() {
+        // What JwtFilter produces for a STAFF member, a business without the
+        // loyalty product, or a session that has not chosen an organization.
+        UUID mId = UUID.randomUUID();
+        merchant(mId, ACME);
+        authenticate("boss@acme.test", "MERCHANT_ADMIN", null, null, null);
+
+        assertForbidden(() -> authz.requireCallerAdministersMerchant(tenant, mId), "NOT_MERCHANT_OWNER");
+    }
+
+    @Test
+    void anUnownedMerchant_isReachableBySuperAdminOnly_neverByAnOrganization() {
+        UUID unowned = UUID.randomUUID();
+        merchant(unowned, null);
+        authenticate("boss@acme.test", "MERCHANT_ADMIN", null, null, ACME);
+
+        assertForbidden(() -> authz.requireCallerAdministersMerchant(tenant, unowned), "NOT_MERCHANT_OWNER");
     }
 
     @Test
@@ -144,13 +177,13 @@ class MerchantAuthzTest {
     void merchantAdmin_accessesShopsOfOwnedMerchantOnly() {
         UUID ownedMerchant = UUID.randomUUID();
         UUID rivalMerchant = UUID.randomUUID();
-        merchant(ownedMerchant, "boss@acme.test");
-        merchant(rivalMerchant, "rival@other.test");
+        merchant(ownedMerchant, ACME);
+        merchant(rivalMerchant, RIVAL);
         UUID ownShop = UUID.randomUUID();
         UUID rivalShop = UUID.randomUUID();
         shop(ownShop, ownedMerchant);
         shop(rivalShop, rivalMerchant);
-        authenticate("boss@acme.test", "MERCHANT_ADMIN", null, null);
+        authenticate("boss@acme.test", "MERCHANT_ADMIN", null, null, ACME);
 
         assertThat(authz.requireCallerAccessesShop(tenant, ownShop).getId()).isEqualTo(ownShop);
         assertForbidden(() -> authz.requireCallerAccessesShop(tenant, rivalShop), "NOT_MERCHANT_OWNER");

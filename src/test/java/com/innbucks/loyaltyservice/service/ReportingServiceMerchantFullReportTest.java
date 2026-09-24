@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
  *   <li>assembly — points/voucher/invoice/rule/shop blocks land in the right
  *       fields with the right rollups;</li>
  *   <li>visibility — the A01 ownership model is enforced in the SERVICE, so an
- *       out-of-scope merchant is absent for MERCHANT_ADMIN (adminEmail match)
+ *       out-of-scope merchant is absent for MERCHANT_ADMIN (organization match)
  *       and SHOP_ADMIN (token merchant pin), while tenant-level admins see all;</li>
  *   <li>pagination — the slice happens AFTER the visibility filter.</li>
  * </ul>
@@ -78,6 +78,8 @@ class ReportingServiceMerchantFullReportTest {
     private static final UUID M_ALPHA = UUID.fromString("aaaaaaaa-1111-2222-3333-444444444444");
     private static final UUID M_BETA  = UUID.fromString("bbbbbbbb-1111-2222-3333-444444444444");
     private static final UUID M_GAMMA = UUID.fromString("cccccccc-1111-2222-3333-444444444444");
+    private static final UUID ORG_ALPHA = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
+    private static final UUID ORG_BETA = UUID.fromString("9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e60");
 
     @AfterEach
     void clearAuth() {
@@ -91,14 +93,14 @@ class ReportingServiceMerchantFullReportTest {
         SecurityContextHolder.getContext().setAuthentication(token);
     }
 
-    private static Merchant merchant(UUID id, String name, String adminEmail) {
+    private static Merchant merchant(UUID id, String name, UUID organizationId) {
         Merchant m = new Merchant();
         m.setId(id);
         m.setTenantId(TENANT);
         m.setName(name);
         m.setCategory("Coffee");
         m.setCurrency("USD");
-        m.setAdminEmail(adminEmail);
+        m.setOrganizationId(organizationId);
         return m;
     }
 
@@ -116,8 +118,8 @@ class ReportingServiceMerchantFullReportTest {
 
     @Test
     void superAdmin_seesAllMerchants_nameOrdered_withFullAssembly() {
-        Merchant alpha = merchant(M_ALPHA, "Alpha Cafe", "alpha@innbucks.co.zw");
-        Merchant beta = merchant(M_BETA, "Beta Fuel", "beta@innbucks.co.zw");
+        Merchant alpha = merchant(M_ALPHA, "Alpha Cafe", ORG_BETA);
+        Merchant beta = merchant(M_BETA, "Beta Fuel", ORG_BETA);
         // Repo returns out of order — the service must sort by name.
         when(merchants.findByTenantId(TENANT)).thenReturn(List.of(beta, alpha));
 
@@ -201,25 +203,26 @@ class ReportingServiceMerchantFullReportTest {
     }
 
     @Test
-    void merchantAdmin_seesOnlyMerchantsTheyAdminister_caseInsensitive() {
+    void merchantAdmin_seesOnlyMerchantsTheirOrganizationOwns() {
         when(merchants.findByTenantId(TENANT)).thenReturn(List.of(
-                merchant(M_ALPHA, "Alpha Cafe", "Owner@Innbucks.co.zw"),
-                merchant(M_BETA, "Beta Fuel", "someone-else@innbucks.co.zw"),
+                merchant(M_ALPHA, "Alpha Cafe", ORG_ALPHA),
+                merchant(M_BETA, "Beta Fuel", ORG_BETA),
                 merchant(M_GAMMA, "Gamma Groceries", null)));
 
-        authenticate("owner@innbucks.co.zw", new CallerDetails(null, null, null, null),
+        authenticate("owner@innbucks.co.zw", new CallerDetails(null, null, null, null, ORG_ALPHA),
                 "ROLE_MERCHANT_ADMIN");
         Page<Dtos.MerchantFullReport> page = reporting.merchantFullReports(TENANT, PageRequest.of(0, 20));
 
         assertEquals(1, page.getTotalElements());
         assertEquals(M_ALPHA, page.getContent().get(0).id());
+        assertEquals(ORG_ALPHA, page.getContent().get(0).organizationId());
     }
 
     @Test
     void shopAdmin_isPinnedToTheMerchantInTheirToken() {
         when(merchants.findByTenantId(TENANT)).thenReturn(List.of(
-                merchant(M_ALPHA, "Alpha Cafe", "alpha@innbucks.co.zw"),
-                merchant(M_BETA, "Beta Fuel", "beta@innbucks.co.zw")));
+                merchant(M_ALPHA, "Alpha Cafe", ORG_BETA),
+                merchant(M_BETA, "Beta Fuel", ORG_BETA)));
 
         authenticate("cashier@innbucks.co.zw", new CallerDetails(M_BETA, null, null, null),
                 "ROLE_SHOP_ADMIN");
@@ -232,9 +235,9 @@ class ReportingServiceMerchantFullReportTest {
     @Test
     void paginationSlicesAfterTheVisibilityFilter() {
         when(merchants.findByTenantId(TENANT)).thenReturn(List.of(
-                merchant(M_ALPHA, "Alpha", "a@x.zw"),
-                merchant(M_BETA, "Beta", "b@x.zw"),
-                merchant(M_GAMMA, "Gamma", "c@x.zw")));
+                merchant(M_ALPHA, "Alpha", ORG_BETA),
+                merchant(M_BETA, "Beta", ORG_BETA),
+                merchant(M_GAMMA, "Gamma", ORG_BETA)));
 
         authenticate("op@innbucks.co.zw", new CallerDetails(null, null, null, null), "ROLE_SUPER_ADMIN");
         Page<Dtos.MerchantFullReport> page = reporting.merchantFullReports(TENANT, PageRequest.of(1, 2));
@@ -247,7 +250,7 @@ class ReportingServiceMerchantFullReportTest {
     @Test
     void unauthenticatedCaller_seesNothing() {
         when(merchants.findByTenantId(TENANT)).thenReturn(List.of(
-                merchant(M_ALPHA, "Alpha", "a@x.zw")));
+                merchant(M_ALPHA, "Alpha", ORG_BETA)));
 
         // No SecurityContext at all (defence in depth — the controller's
         // @PreAuthorize should have rejected this long before).

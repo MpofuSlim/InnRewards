@@ -7,8 +7,6 @@ import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
-import com.fasterxml.jackson.annotation.JsonInclude;
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -139,15 +137,15 @@ public class Dtos {
                     description = "Why billing was waived. Required when waiveFees is true; it is what makes the "
                             + "zero-fee audit readable months later.")
             @Size(max = 200) String waiveFeesReason,
-            @Schema(example = "rudo@chikwanha-traders.co.zw", nullable = true,
-                    description = "Email of the person who will RUN this merchant: the account whose sign-in "
-                            + "resolves to it, who may manage it here, and who receives its invoices and "
-                            + "paid-order notifications. Omit it to bind the merchant to yourself. Only a "
-                            + "SUPER_ADMIN may name someone else - anyone else naming a different email is "
-                            + "refused with ADMIN_EMAIL_NOT_PERMITTED. The account does not have to exist yet.")
-            @Email @Size(max = 255) String adminEmail
+            @Schema(example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f", nullable = true,
+                    description = "The organization (business) that will OWN this merchant: its owners and "
+                            + "admins manage it here and receive its invoices. Omit it to onboard the merchant "
+                            + "for the organization your session acts for. Only a SUPER_ADMIN may name another "
+                            + "- anyone else naming a different organization is refused with "
+                            + "ORGANIZATION_NOT_PERMITTED. A SUPER_ADMIN who omits it creates an unowned merchant.")
+            UUID organizationId
     ) {
-        /** Back-compat constructor for the pre-adminEmail shape. */
+        /** Back-compat constructor for the shape without an organization. */
         public MerchantRequest(String name, String category, String currency,
                                Merchant.BillingCycle billingCycle,
                                FeeModel feeIssued, FeeModel feeRedeemed,
@@ -189,19 +187,11 @@ public class Dtos {
                                    boolean feeWaived,
                                    @Schema(nullable = true, description = "Why billing was waived, when it was.")
                                    String feeWaivedReason,
-                                   @JsonInclude(JsonInclude.Include.NON_NULL)
-                                   @Schema(nullable = true, example = "rudo@chikwanha-traders.co.zw",
-                                           description = "Who this merchant is bound to. Returned to SUPER_ADMIN "
-                                                   + "callers only; the key is absent for everyone else, and absent "
-                                                   + "for a SUPER_ADMIN when the merchant is unbound.")
-                                   String adminEmail) {}
-
-    /** Body of {@code PUT /loyalty/merchants/{id}/admin-email}. */
-    public record MerchantAdminEmailRequest(
-            @Schema(example = "rudo@chikwanha-traders.co.zw",
-                    description = "Email of the person who should run this merchant. Replaces the current "
-                            + "binding outright; the account does not have to exist yet.")
-            @NotBlank @Email @Size(max = 255) String adminEmail) {}
+                                   @Schema(nullable = true, example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
+                                           description = "The organization that owns this merchant. Null for a "
+                                                   + "merchant no business has been assigned yet (reachable by a "
+                                                   + "SUPER_ADMIN only).")
+                                   UUID organizationId) {}
 
     /** One row of the zero-fee audit: a merchant we issue vouchers for free today. */
     public record ZeroFeeMerchant(
@@ -1094,9 +1084,10 @@ public class Dtos {
             @Schema(example = "USD") String currency,
             @Schema(example = "MONTHLY") Merchant.BillingCycle billingCycle,
             @Schema(example = "ACTIVE") Merchant.Status status,
-            @Schema(example = "owner@innbucks.co.zw", nullable = true,
-                    description = "Email of the MERCHANT_ADMIN who administers this merchant (ownership anchor).")
-            String adminEmail,
+            @Schema(example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f", nullable = true,
+                    description = "The organization that owns this merchant (ownership anchor). Null on a "
+                            + "merchant nobody has been assigned yet.")
+            UUID organizationId,
             Instant createdAt,
             @Schema(description = "Fee charged when a voucher is issued.") FeeModel feeIssued,
             @Schema(description = "Fee charged when a voucher is redeemed.") FeeModel feeRedeemed,

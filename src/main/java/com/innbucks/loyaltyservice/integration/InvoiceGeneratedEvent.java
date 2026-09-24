@@ -7,8 +7,8 @@ import java.util.UUID;
 /**
  * Published by {@code InvoicingService} once a merchant invoice row is persisted.
  * An {@code @TransactionalEventListener(AFTER_COMMIT)} in
- * {@link InvoiceEmailNotifier} emails the merchant admin only after the invoice
- * actually commits.
+ * {@link InvoiceEmailNotifier} emails the admins of the organization that owns
+ * the merchant only after the invoice actually commits.
  *
  * <p>Carries a value snapshot (not the {@code Invoice}/{@code Merchant}
  * entities) so the post-commit listener composes the email without a DB reload
@@ -17,7 +17,7 @@ import java.util.UUID;
 public record InvoiceGeneratedEvent(
         UUID merchantId,
         String merchantName,
-        String adminEmail,
+        UUID organizationId,
         String invoiceNumber,
         LocalDate periodStart,
         LocalDate periodEnd,

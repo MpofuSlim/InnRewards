@@ -10,20 +10,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClient;
 
-import java.util.Set;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Contract test for {@link UserServiceClient}'s {@code assignedMerchantIds()}
- * call against user-service's {@code GET /users/internal/merchants/assigned}.
- * Pins the wire shape (X-Internal-Token header, ApiResult envelope parsing)
- * and the not-silently-fall-back behaviour on a non-2xx — per the CLAUDE.md
- * cross-service-client mandate.
+ * Contract test for {@link UserServiceClient#organizationAdminEmails} against
+ * user-service's {@code GET /users/internal/organizations/{id}/admins} — who
+ * receives a merchant's invoice. Pins the wire shape (X-Internal-Token header,
+ * ApiResult envelope with {@code data:[{userUuid, email}]}) and the
+ * best-effort contract: every failure is an empty list, never an exception,
+ * because the only caller is an after-commit mailer. Per the CLAUDE.md
+ * cross-service-client mandate. The stubs transcribe user-service's
+ * {@code InternalOrganizationController} (ticketing-system #615).
  *
  * <p>Pure JUnit + WireMock, no Spring context — we new up a {@code RestClient}
  * pointed at WireMock and reflectively set both the {@code restClient} and
@@ -69,80 +70,107 @@ class UserServiceClientContractTest {
         return c;
     }
 
+    private static final UUID ORG = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
+    private static final String ADMINS_PATH = "/users/internal/organizations/" + ORG + "/admins";
+
     @Test
-    @DisplayName("happy path: parses ApiResult envelope into a Set<UUID>; sends X-Internal-Token")
-    void assignedMerchantIds_happyPath_parsesEnvelopeAndSendsToken() {
-        UUID a = UUID.randomUUID();
-        UUID b = UUID.randomUUID();
-        wireMock.stubFor(get(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN"))
+    @DisplayName("organization admins: parses the ApiResult envelope into emails; sends X-Internal-Token")
+    void organizationAdminEmails_happyPath_parsesEnvelopeAndSendsToken() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"code\":\"200 OK\",\"message\":\"Assigned merchant ids\","
-                                + "\"data\":[\"" + a + "\",\"" + b + "\"]}")));
+                        .withBody("{\"code\":\"200 OK\",\"message\":\"Organization admins\",\"data\":["
+                                + "{\"userUuid\":\"" + UUID.randomUUID() + "\",\"email\":\"rudo@chikwanha-traders.co.zw\"},"
+                                + "{\"userUuid\":\"" + UUID.randomUUID() + "\",\"email\":\"tendai@chikwanha-traders.co.zw\"}]}")));
 
-        Set<UUID> result = client.assignedMerchantIds();
-
-        assertThat(result).containsExactlyInAnyOrder(a, b);
-        wireMock.verify(getRequestedFor(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN"))
+        assertThat(client.organizationAdminEmails(ORG))
+                .containsExactly("rudo@chikwanha-traders.co.zw", "tendai@chikwanha-traders.co.zw");
+        wireMock.verify(getRequestedFor(urlEqualTo(ADMINS_PATH))
                 .withHeader("X-Internal-Token", equalTo("the-shared-secret")));
     }
 
     @Test
-    @DisplayName("empty data array returns an empty set (no admins anywhere)")
-    void assignedMerchantIds_emptyData_returnsEmpty() {
-        wireMock.stubFor(get(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN"))
+    @DisplayName("organization admins: a phone-only admin (null/blank email) is skipped, duplicates collapse")
+    void organizationAdminEmails_blankAndDuplicateEmails_areDropped() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"code\":\"200 OK\",\"message\":\"Assigned merchant ids\",\"data\":[]}")));
+                        .withBody("{\"code\":\"200 OK\",\"message\":\"x\",\"data\":["
+                                + "{\"userUuid\":\"" + UUID.randomUUID() + "\",\"email\":null},"
+                                + "{\"userUuid\":\"" + UUID.randomUUID() + "\",\"email\":\"  \"},"
+                                + "{\"userUuid\":\"" + UUID.randomUUID() + "\",\"email\":\"rudo@chikwanha-traders.co.zw\"},"
+                                + "{\"userUuid\":\"" + UUID.randomUUID() + "\",\"email\":\"rudo@chikwanha-traders.co.zw\"}]}")));
 
-        assertThat(client.assignedMerchantIds()).isEmpty();
+        assertThat(client.organizationAdminEmails(ORG)).containsExactly("rudo@chikwanha-traders.co.zw");
     }
 
     @Test
-    @DisplayName("ignores malformed UUID entries instead of failing the whole list")
-    void assignedMerchantIds_malformedUuid_isSkipped() {
-        UUID a = UUID.randomUUID();
-        wireMock.stubFor(get(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN"))
+    @DisplayName("organization admins: an empty data array is an empty list (nobody to email)")
+    void organizationAdminEmails_emptyData_isEmpty() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"code\":\"200 OK\",\"message\":\"x\",\"data\":[\"" + a + "\",\"not-a-uuid\"]}")));
+                        .withBody("{\"code\":\"200 OK\",\"message\":\"Organization admins\",\"data\":[]}")));
 
-        assertThat(client.assignedMerchantIds()).containsExactly(a);
+        assertThat(client.organizationAdminEmails(ORG)).isEmpty();
     }
 
     @Test
-    @DisplayName("5xx from user-service: throws IllegalStateException (no silent fallback)")
-    void assignedMerchantIds_5xx_throws() {
-        wireMock.stubFor(get(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN"))
+    @DisplayName("organization admins: 401 (token rejected) is an empty list, never an exception")
+    void organizationAdminEmails_401_isEmpty() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH)).willReturn(aResponse().withStatus(401)));
+
+        assertThat(client.organizationAdminEmails(ORG)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("organization admins: 404 (a user-service too old to serve it) is an empty list")
+    void organizationAdminEmails_404_isEmpty() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH)).willReturn(aResponse().withStatus(404)));
+
+        assertThat(client.organizationAdminEmails(ORG)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("organization admins: 5xx is an empty list — the invoice exists regardless")
+    void organizationAdminEmails_5xx_isEmpty() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH))
                 .willReturn(aResponse().withStatus(503).withBody("upstream down")));
 
-        assertThatThrownBy(() -> client.assignedMerchantIds())
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("user-service unavailable");
+        assertThat(client.organizationAdminEmails(ORG)).isEmpty();
     }
 
     @Test
-    @DisplayName("401 from user-service (wrong/missing internal token): throws IllegalStateException")
-    void assignedMerchantIds_401_throws() {
-        wireMock.stubFor(get(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN"))
-                .willReturn(aResponse().withStatus(401)));
+    @DisplayName("organization admins: a non-JSON 200 body is an empty list")
+    void organizationAdminEmails_garbageBody_isEmpty() {
+        wireMock.stubFor(get(urlEqualTo(ADMINS_PATH))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "text/html")
+                        .withBody("<html>Request Rejected</html>")));
 
-        assertThatThrownBy(() -> client.assignedMerchantIds())
-                .isInstanceOf(IllegalStateException.class);
+        assertThat(client.organizationAdminEmails(ORG)).isEmpty();
     }
 
     @Test
-    @DisplayName("missing internal-api-token config: throws IllegalStateException without an HTTP call")
-    void assignedMerchantIds_blankToken_throws_noHttp() {
-        UserServiceClient noTokenClient = makeClient("");
+    @DisplayName("organization admins: connection refused is an empty list")
+    void organizationAdminEmails_connectRefused_isEmpty() {
+        // A separate client at a known-closed port; never stop/restart the
+        // shared WireMock, whose second start gets a different dynamic port.
+        UserServiceClient offline = makeClient("the-shared-secret");
+        ReflectionTestUtils.setField(offline, "restClient",
+                RestClient.builder().baseUrl("http://localhost:1").build());
 
-        assertThatThrownBy(noTokenClient::assignedMerchantIds)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("not configured");
+        assertThat(offline.organizationAdminEmails(ORG)).isEmpty();
+    }
 
-        wireMock.verify(0, getRequestedFor(urlEqualTo("/users/internal/merchants/assigned?role=MERCHANT_ADMIN")));
+    @Test
+    @DisplayName("organization admins: a null organization or an unconfigured token never hits the wire")
+    void organizationAdminEmails_guardRails_noHttp() {
+        assertThat(client.organizationAdminEmails(null)).isEmpty();
+        assertThat(makeClient("").organizationAdminEmails(ORG)).isEmpty();
+
+        wireMock.verify(0, getRequestedFor(urlPathMatching("/users/internal/organizations/.*")));
     }
 }

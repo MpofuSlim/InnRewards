@@ -28,7 +28,8 @@ import java.util.UUID;
 
 /**
  * Service-to-service endpoints consumed by other backends (today: user-service
- * at login + shop-staff creation, payment-service for shop-checkout). Gated
+ * for shop-staff creation and scope, payment-service for shop-checkout,
+ * booking-service for the ticketing bridge). Gated
  * by a shared-secret header rather than the user JWT — the caller is another
  * microservice, not a logged-in user.
  *
@@ -54,11 +55,6 @@ public class InternalMerchantLookupController {
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final String expectedToken;
 
-    /** Ceiling on one names lookup. A page of listings or a payout run names
-     *  tens of merchants, never hundreds; the cap keeps the IN list bounded
-     *  whatever a caller asks for. */
-    private static final int MAX_NAME_IDS = 200;
-
     public InternalMerchantLookupController(MerchantRepository merchants,
                                             ShopRepository shops,
                                             UserService userService,
@@ -75,163 +71,43 @@ public class InternalMerchantLookupController {
         this.expectedToken = expectedToken;
     }
 
-    @GetMapping("/merchants/by-admin")
-    @Operation(summary = "(S2S) Resolve a merchant by admin email",
-            description = "Returns the merchantId for the oldest merchant whose adminEmail matches the query. " +
-                          "Used by user-service when a logged-in admin's JWT carries an email but not a merchantId.")
-    public ResponseEntity<?> byAdminEmail(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                          @RequestParam("email") String email) {
+    /**
+     * Every loyalty merchant an organization owns (user-service V39).
+     *
+     * <p>user-service's shop-staff screens ask this to decide which merchants'
+     * staff a merchant admin may manage: ownership is
+     * {@code merchants.organization_id}, and the organization is the one the
+     * admin's session acts for. It replaced {@code ids-by-admin}, which answered
+     * the same question keyed on the admin's EMAIL — the binding this change
+     * retired.
+     *
+     * <p>An organization that owns nothing is a 200 with an empty list: the
+     * consumer's next step (refuse, fail closed) is the same, and a 404 here
+     * would make the endpoint an existence oracle for organizations.
+     */
+    @GetMapping("/merchants/ids-by-organization")
+    @Operation(summary = "(S2S) List every merchantId an organization owns",
+            description = "Returns {organizationId, merchantIds} — the ids of ALL merchants whose "
+                          + "organizationId matches, oldest first. Used by user-service to authorize a "
+                          + "merchant admin over shop-staff endpoints. Empty list when it owns none.")
+    public ResponseEntity<?> idsByOrganization(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestParam(value = "organizationId", required = false) UUID organizationId) {
         if (!authorized(token)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
-        if (email == null || email.isBlank()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "email is required"));
+        if (organizationId == null) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", "organizationId is required"));
         }
-        Optional<Merchant> hit = merchants.findFirstByAdminEmailOrderByCreatedAtAsc(email);
-        if (hit.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
-        UUID merchantId = hit.get().getId();
-        log.debug("Internal lookup resolved adminEmail={} -> merchantId={}", email, merchantId);
-        return ResponseEntity.ok(Map.of("merchantId", merchantId));
-    }
-
-    @GetMapping("/merchants/ids-by-admin")
-    @Operation(summary = "(S2S) List every merchantId an admin owns",
-            description = "Returns the ids of ALL merchants whose adminEmail matches the query " +
-                          "(case-insensitive). Used by user-service to authorize a MERCHANT_ADMIN " +
-                          "over shop-staff endpoints — a MERCHANT_ADMIN's JWT carries no merchantId, " +
-                          "and they may run more than one merchant, so the whole set is needed.")
-    public ResponseEntity<?> idsByAdminEmail(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                             @RequestParam("email") String email) {
-        if (!authorized(token)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-        if (email == null || email.isBlank()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "email is required"));
-        }
-        java.util.List<UUID> merchantIds = merchants.findByAdminEmailIgnoreCase(email.trim()).stream()
+        List<UUID> merchantIds = merchants.findByOrganizationIdOrderByCreatedAtAsc(organizationId).stream()
                 .map(Merchant::getId)
                 .toList();
-        log.debug("Internal lookup resolved adminEmail={} -> {} merchant(s)", email, merchantIds.size());
-        return ResponseEntity.ok(Map.of("merchantIds", merchantIds));
-    }
-
-    /**
-     * The INVERSE of {@link #idsByAdminEmail}: merchant → the email of the
-     * person who runs it.
-     *
-     * <p>Every other consumer of this binding has arrived holding an email and
-     * wanted the merchant. The marketplace arrives holding a merchant — a paid
-     * order names a {@code merchantId} on every line — and needs to reach a
-     * person. Nothing downstream could answer that: user-service stamps
-     * {@code loyalty_merchant_id} on SHOP staff rows only, so a MERCHANT_ADMIN's
-     * own user row does not name their merchant, and this column is the only
-     * place the link is recorded.
-     *
-     * <p>Singular because the column is: one merchant has exactly one
-     * {@code admin_email}. (One PERSON may run several merchants, which is why
-     * the lookup in the other direction returns a list.)
-     *
-     * <p>A merchant with no admin email on file is a **200 with a null
-     * {@code adminEmail}**, not a 404 — the merchant exists, and the consumer's
-     * next step is identical either way (nobody to notify). The 404 is reserved
-     * for a merchantId that names nothing, which is a genuinely different fact
-     * and one the caller should see in its logs.
-     */
-    @GetMapping("/merchants/{id}/admin-email")
-    @Operation(summary = "(S2S) The admin email of one merchant",
-            description = "Returns {merchantId, adminEmail} for the given merchant — the inverse of "
-                          + "ids-by-admin. Used by user-service to resolve a merchant's admin USER "
-                          + "on behalf of marketplace-service, which knows a merchantId and needs to "
-                          + "tell a person they have a paid order. adminEmail is null when the "
-                          + "merchant has none on file; an unknown merchant is a 404.")
-    public ResponseEntity<?> adminEmailForMerchant(
-            @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @PathVariable UUID id) {
-        if (!authorized(token)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-        Optional<Merchant> hit = merchants.findById(id);
-        if (hit.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
-        String adminEmail = hit.get().getAdminEmail();
+        log.debug("Internal lookup resolved organizationId={} -> {} merchant(s)", organizationId, merchantIds.size());
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("merchantId", id);
-        // LinkedHashMap, not Map.of — that one rejects a null value, and a
-        // merchant with no admin on file is an ordinary answer here.
-        body.put("adminEmail", adminEmail);
-        log.debug("Internal lookup resolved merchantId={} -> adminEmail present={}",
-                id, adminEmail != null && !adminEmail.isBlank());
+        body.put("organizationId", organizationId);
+        body.put("merchantIds", merchantIds);
         return ResponseEntity.ok(body);
-    }
-
-    /**
-     * The trading names of several merchants at once.
-     *
-     * <p><b>Why it exists.</b> marketplace-service holds a merchant's id and
-     * nothing else — {@code Listing.merchantId} is a loyalty id copied off a
-     * JWT claim — so every surface that should say who is selling (the seller
-     * badge, the public seller profile, the admin trust queue, the finance
-     * payout report) had only a UUID to render. The name lives here, in the
-     * registry that issued the id.
-     *
-     * <p><b>Batch by construction, because the callers are pages.</b> A
-     * catalogue page, a moderation queue and a payout CSV each name many
-     * merchants at once; a per-id endpoint would have made an N+1 of every
-     * one of them. {@code ids} is capped at {@link #MAX_NAME_IDS} so the
-     * {@code IN} list can never be unbounded.
-     *
-     * <p><b>An unknown id is simply ABSENT from the response</b> — not a 404,
-     * and not a null entry. Absence is the ONLY way a row goes missing:
-     * {@code merchants.name} is NOT NULL, so a known merchant always carries
-     * a name. One stale id in a batch of fifty must not cost the
-     * other forty-nine their names, and the consumer's handling is identical
-     * either way: render no name. The singular
-     * {@code /merchants/{id}/admin-email} above keeps its 404 for the opposite
-     * reason — there, the id IS the question.
-     */
-    @GetMapping("/merchants/names")
-    @Operation(summary = "(S2S) Trading names for a batch of merchant ids",
-            description = "Returns {merchants:[{merchantId, name}]} for the ids that exist. "
-                          + "Unknown ids are omitted rather than 404ing the batch. Used by "
-                          + "marketplace-service, which stores merchant ids but no merchant "
-                          + "names, to render who is selling.")
-    public ResponseEntity<?> merchantNames(
-            @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @RequestParam(value = "ids", required = false) List<UUID> ids) {
-        if (!authorized(token)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-        if (ids == null || ids.isEmpty()) {
-            // An empty ask is an ordinary answer, not a client error: a page
-            // with no listings on it legitimately needs no names.
-            return ResponseEntity.ok(Map.of("merchants", List.of()));
-        }
-        if (ids.size() > MAX_NAME_IDS) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "code", "too_many_ids",
-                    "message", "At most " + MAX_NAME_IDS + " merchant ids per call"));
-        }
-        // distinct(): a caller assembling ids from a page of rows will repeat
-        // the same merchant, and there is no reason to widen the IN list or
-        // return that merchant twice.
-        List<UUID> distinct = ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
-        List<Map<String, Object>> out = new java.util.ArrayList<>(distinct.size());
-        for (Merchant m : merchants.findAllById(distinct)) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("merchantId", m.getId());
-            // LinkedHashMap rather than Map.of purely defensively: today
-            // merchants.name is NOT NULL (V1__init) so this can never be null,
-            // and Map.of would throw if that ever changed. It is NOT a case
-            // this endpoint can currently produce -- a missing row means the
-            // id names nothing, never that a merchant is nameless.
-            row.put("name", m.getName());
-            out.add(row);
-        }
-        log.debug("Internal lookup resolved {} of {} merchant name(s)", out.size(), distinct.size());
-        return ResponseEntity.ok(Map.of("merchants", out));
     }
 
     @GetMapping("/shops/{id}")

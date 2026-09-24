@@ -193,54 +193,73 @@ tenant-scoped) is the **only** way out of BLOCKED — nothing else in the servic
 clears it. It refuses a non-BLOCKED account rather than becoming a general
 make-it-active lever that bypasses PENDING/INACTIVE.
 
-## A merchant's admin is a BINDING, and it can now move (V50)
+## A merchant belongs to an ORGANIZATION, not an email (V51)
 
-`merchants.admin_email` decides who a merchant **belongs to**, in three places
-at once: whose sign-in resolves to it (user-service's
-`AuthService.resolveMerchantIdClaim` mints the `merchantId` claim from it — and
-only when the email matches **exactly one** merchant), who may manage it here
-(`MerchantAuthz`), and who receives its invoices and paid-order notifications.
+**`merchants.organization_id` is who a merchant belongs to.** It replaced
+`merchants.admin_email` (V50's binding), which had been the ownership key, the
+authorization rule AND the notification address at once — for loyalty, and
+through user-service's login-time claim lookup, for the marketplace too. One
+person per merchant, no colleagues, and an admin running two businesses got no
+`merchantId` claim anywhere. user-service V39 made the BUSINESS the tenant;
+this is loyalty's half of that (step 2 of the organizations plan, shipped in
+lock-step with user-service dropping the `merchantId` claim and marketplace
+re-keying sellers).
 
-- **The bug this fixed.** The column used to be the caller's email,
-  unconditionally, with no field to name anyone else and no way to change it
-  afterwards. So a platform admin onboarding a merchant for a seller bound it to
-  **themselves**: the seller's sign-in matched nothing (every marketplace call
-  refused with `merchant_scope_missing`), the admin's own email gained one more
-  match (at two or more, an admin who also runs a merchant loses their own claim
-  too), and the seller's invoices and order notifications went to the admin.
-- **`POST /loyalty/merchants` takes an optional `adminEmail`.** Omitted, or the
-  caller's own email in any case → the caller, exactly as before. Someone
-  else's email → **SUPER_ADMIN only**; anyone else gets **403
-  `ADMIN_EMAIL_NOT_PERMITTED`**. It is refused rather than silently ignored,
-  because ignoring it leaves the client believing it bound a merchant it did
-  not — and it must not be allowed, because a merchant admin creating a
-  merchant under a stranger's email gives the stranger a second match, which
-  strips the stranger's `merchantId` claim. A named account need not exist yet.
-- **`PUT /loyalty/merchants/{id}/admin-email`** rebinds and
-  **`DELETE /loyalty/merchants/{id}/admin-email`** clears — both
-  `hasRole('SUPER_ADMIN')`. Clearing is a separate verb on purpose: an empty or
-  malformed PUT is a 400, never read as "unbind". An EXACT repeat is a no-op; a
-  **case-only change is applied**, because user-service finds a merchant's admin
-  ACCOUNT by exact email (`findByEmail`), so a wrongly-cased binding signs in
-  fine but never receives its order notifications.
-- **Every move leaves a `merchant_admin_changes` row** (`CREATED` /
-  `REASSIGNED` / `UNBOUND`, from → to, who, when), in the same transaction as the
-  change. The merchant row's `updated_by` is not a history — the next unrelated
-  edit overwrites it. No FK to `merchants`, deliberately: the audit row must
-  outlive its subject. Every create writes one too, so a post-V50 merchant's
-  history always starts at its origin.
-- **`MerchantResponse.adminEmail` is filled for SUPER_ADMIN callers only**, in
-  the one mapper every path uses (`MerchantService.toResponse`), and the
-  component is `NON_NULL` so the key is simply absent for everyone else. The list
-  is tenant-wide — a SHOP_ADMIN of one merchant reads every other merchant's row
-  — and the binding is a person's email.
-- **Takes effect at the next sign-in or token refresh.** A token already issued
-  keeps the `merchantId` it was minted with until it expires.
-- **Not done, deliberately:** no read endpoint for the history (query the table),
-  and `GET /loyalty/merchants?unassigned=true` still reads user-service's
-  `loyalty_merchant_id`, which nothing stamps on a MERCHANT_ADMIN — so it does
-  not reflect `admin_email` and returns every merchant. Aligning it is a separate
-  change.
+- **Who is a merchant admin here is decided from the ORGANIZATION claims,
+  never the role alone.** `JwtFilter` grants `ROLE_MERCHANT_ADMIN` iff the token
+  carries `orgId` + `orgRole` ∈ {OWNER, ADMIN} + `products` ∋ `loyalty`
+  (`loyaltyOrganizationOf`), and puts that org on
+  `CallerDetails.organizationId`. **A bare `MERCHANT_ADMIN` in the roles claim
+  grants nothing** — otherwise a marketplace-only business, or a pre-V39 token,
+  would administer loyalty. The upside is the point: an ADMIN colleague added
+  through `/organizations` with no staff role at all is a merchant admin here.
+  STAFF is not (a cashier does not run the business). Product match is exact
+  and lowercase, as user-service mints it. Pinned by
+  `JwtFilterLoyaltyOrganizationTest`.
+- **`MerchantAuthz` / `ReportingService` compare the merchant's
+  `organizationId` with the caller's.** SUPER_ADMIN is exempt, SHOP_ADMIN is
+  still pinned by its token `merchantId` (a row-stamped claim user-service
+  keeps for shop staff). An unowned merchant (`organization_id IS NULL`) is
+  reachable by SUPER_ADMIN only.
+- **`POST /loyalty/merchants` takes an optional `organizationId`.** Omitted →
+  the caller's own organization; a caller acting for none is **403
+  `ORGANIZATION_SCOPE_MISSING`** (never an unowned merchant nobody can
+  manage). Naming a different organization → SUPER_ADMIN only, anyone else
+  **403 `ORGANIZATION_NOT_PERMITTED`** — refused rather than ignored, so a
+  client never believes it onboarded a merchant for someone it did not.
+  SUPER_ADMIN omitting it creates an unowned merchant, which is what service
+  fixtures rely on (`testsupport/MerchantFixtures`).
+- **Tenant membership has an ORGANIZATION path, checked first**
+  (`TenantContext`): a caller acting for a business is a member of the program
+  that business created (`tenants.organization_id`, stamped at create) and of
+  any program where it owns a merchant (`TenantCachedLookup.organizationOwnsMerchantIn`
+  — deliberately NOT cached: it must turn false the moment a merchant moves).
+  `tenant_members` still works for everyone it always did. Pinned end to end
+  by `MerchantOrganizationOwnershipSecurityTest`, including the case where one
+  business's admin works in another's program only on its own merchant.
+- **Invoices go to the organization's OWNERs and ADMINs, resolved at send time**
+  (`UserServiceClient.organizationAdminEmails` →
+  `GET /users/internal/organizations/{id}/admins`), so a colleague added today
+  gets the next invoice and one removed does not. Best-effort per recipient; an
+  unowned merchant emails nobody and never asks user-service.
+- **S2S:** `GET /loyalty/internal/merchants/ids-by-organization?organizationId=`
+  (plain map `{organizationId, merchantIds}`) is what user-service's
+  `ShopStaffService` uses to scope a merchant admin's shop-staff calls.
+- **Gone, with the binding:** `adminEmail` on the create request and response,
+  `PUT`/`DELETE /loyalty/merchants/{id}/admin-email`,
+  `GET /loyalty/merchants?unassigned=true`, and the internal `by-admin`,
+  `ids-by-admin`, `{id}/admin-email` and `names` lookups (marketplace now reads
+  seller names from user-service's organization directory). The
+  `MerchantAdminChange` entity went too.
+- **`admin_email` and `merchant_admin_changes` are left DORMANT, not dropped** —
+  same call as `event_outbox`. They are the only record of who each pre-V51
+  merchant belonged to, which is exactly what the staging remap reads
+  (`admin_email` / `tenants.owner_email` → user → the organization it OWNS).
+  V51 backfills nothing because this database holds no users or organizations
+  to map an email to.
+- **Not done, deliberately:** moving shop staff (SHOP_ADMIN / SHOP_USER) under
+  organization membership. They keep their row-stamped `merchantId`/`shopId`
+  claims; that move is a separate design change.
 
 ## Timestamps — UTC
 
@@ -251,7 +270,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V50**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V51**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]

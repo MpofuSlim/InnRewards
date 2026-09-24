@@ -41,7 +41,17 @@ public final class TestJwtFactory {
         return builder("super@test.local").role("SUPER_ADMIN").tier(4).verified(true).sign(secret);
     }
 
-    /** MERCHANT_ADMIN. Their JWT intentionally carries NO merchantId — they pass it in the body. */
+    /**
+     * The organization a MERCHANT_ADMIN token acts for unless the test says
+     * otherwise. Since loyalty ownership moved to organizations (V51), a merchant
+     * admin is precisely an OWNER or ADMIN of an organization holding the loyalty
+     * product — the bare role in the roles claim grants nothing — so every
+     * merchant-admin token a test mints carries this unless it opts out with
+     * {@link Builder#withoutOrganization()}.
+     */
+    public static final UUID DEFAULT_ORGANIZATION = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
+
+    /** MERCHANT_ADMIN acting for {@link #DEFAULT_ORGANIZATION}. No merchantId — they pass it in the body. */
     public static String merchantAdmin(String email, String secret) {
         return builder(email).role("MERCHANT_ADMIN").sign(secret);
     }
@@ -71,6 +81,10 @@ public final class TestJwtFactory {
         private UUID merchantId;
         private UUID shopId;
         private UUID userId;
+        private UUID organizationId;
+        private String organizationRole;
+        private List<String> products;
+        private boolean withoutOrganization;
         // Default: token is valid for 1 hour from now.
         private long ttlMillis = 3_600_000L;
 
@@ -127,6 +141,20 @@ public final class TestJwtFactory {
         }
 
         /** Token issued in the past with expiry also in the past — for expired-token tests. */
+        /** The session's organization claims, as user-service mints them (V39). */
+        public Builder organization(UUID organizationId, String organizationRole, List<String> products) {
+            this.organizationId = organizationId;
+            this.organizationRole = organizationRole;
+            this.products = products;
+            return this;
+        }
+
+        /** A MERCHANT_ADMIN role with NO organization claims — the shape loyalty must refuse. */
+        public Builder withoutOrganization() {
+            this.withoutOrganization = true;
+            return this;
+        }
+
         public Builder expired() {
             this.ttlMillis = -60_000L;
             return this;
@@ -153,6 +181,19 @@ public final class TestJwtFactory {
             }
             if (userId != null) {
                 builder.claim("userUuid", userId.toString());
+            }
+            UUID org = organizationId;
+            String orgRole = organizationRole;
+            List<String> orgProducts = products;
+            if (org == null && !withoutOrganization && roles.contains("MERCHANT_ADMIN")) {
+                org = DEFAULT_ORGANIZATION;
+                orgRole = "OWNER";
+                orgProducts = List.of("loyalty");
+            }
+            if (org != null) {
+                builder.claim("orgId", org.toString());
+                if (orgRole != null) builder.claim("orgRole", orgRole);
+                builder.claim("products", orgProducts == null ? List.of() : orgProducts);
             }
             long now = System.currentTimeMillis();
             return builder

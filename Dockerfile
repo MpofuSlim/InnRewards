@@ -27,8 +27,18 @@ FROM eclipse-temurin:25-jre-alpine AS runtime
 # CVE-2026-56131 / CVE-2026-56407 / CVE-2026-56408 (HIGH) — libexpat < 2.8.2
 # (missing call-depth tracking + integer overflows in doProlog / copyString).
 # Fixed in alpine libexpat 2.8.2-r0.
+# libexpat >= 2.8.5-r0 — CVE-2026-93990 (HIGH), XML injection via malformed
+# UTF-16 input. A version FLOOR, not a bare `apk upgrade libexpat`: that RUN
+# string never changed, so buildx replayed the CACHED layer (the GHA build
+# cache) still holding 2.8.4-r0 and the upgrade never re-ran — the Release for
+# the #138 merge failed Trivy on exactly that. Bumping the floor changes the
+# instruction (busting the cache) AND makes apk fail the build loudly if the
+# fixed version is not reachable, instead of silently keeping the vulnerable
+# one. Same convention as ticketing-system's Dockerfiles: raise the floor when
+# Trivy reports a new CVE.
 RUN apk update \
- && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust libexpat
+ && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust \
+ && apk add --no-cache --upgrade 'libexpat>=2.8.5-r0'
 RUN addgroup -S app && adduser -S -G app app \
     && mkdir -p /app/data \
     && chown -R app:app /app

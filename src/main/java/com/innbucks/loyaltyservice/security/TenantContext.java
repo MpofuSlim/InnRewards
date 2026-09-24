@@ -146,6 +146,18 @@ public class TenantContext {
         if (isPlainCustomer(authentication)) {
             return;
         }
+        // Membership by ORGANIZATION (user-service V39) comes first: a caller
+        // acting for a business in loyalty (CallerDetails.organizationId — its
+        // OWNER or ADMIN, with the loyalty product) is a member of the program
+        // that business created, and of any program where it owns a merchant.
+        // That is what lets a colleague added through the organization work
+        // here; a tenant_members row is only ever written for the creator.
+        UUID organizationId = CallerDetails.currentOrganizationId();
+        if (organizationId != null
+                && (organizationId.equals(tenant.getOrganizationId())
+                    || lookup.organizationOwnsMerchantIn(tenant.getId(), organizationId))) {
+            return;
+        }
         // Dual-mode membership: prefer the caller's stable UUID (JWT userId
         // claim); fall back to the email (principal name) so legacy members
         // whose rows predate the UUID migration — and tokens minted before the

@@ -144,7 +144,7 @@ public class InvoicingService {
         // — see InvoiceEmailNotifier). A value snapshot rides the event so the
         // post-commit listener needs no entity reload.
         events.publishEvent(new InvoiceGeneratedEvent(
-                m.getId(), m.getName(), m.getAdminEmail(), saved.getInvoiceNumber(),
+                m.getId(), m.getName(), m.getOrganizationId(), saved.getInvoiceNumber(),
                 saved.getPeriodStart(), saved.getPeriodEnd(),
                 saved.getVouchersIssued(), saved.getVouchersRedeemed(),
                 saved.getTotalAmount(), saved.getCurrency()));

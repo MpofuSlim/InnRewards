@@ -81,13 +81,13 @@ public class MerchantController {
                           "rule, or passing `waiveFees: true` with a `waiveFeesReason` to onboard it free on " +
                           "purpose. The **redeem** side may be zero freely — billing only issuance is a normal " +
                           "arrangement. Waived merchants are listed by `GET /loyalty/merchants/fee-audit`.\n\n" +
-                          "**Who runs it.** A merchant is bound to one admin email, which decides whose sign-in " +
-                          "resolves to it, who may manage it, and who receives its invoices and paid-order " +
-                          "notifications. Omit `adminEmail` to bind it to yourself. A SUPER_ADMIN onboarding a " +
-                          "merchant for someone else must name them in `adminEmail` — otherwise the merchant is " +
-                          "bound to the SUPER_ADMIN and the real merchant admin cannot use it. Anyone else naming " +
-                          "a different email is refused with `ADMIN_EMAIL_NOT_PERMITTED`. Change the binding " +
-                          "later with `PUT /loyalty/merchants/{id}/admin-email`.")
+                          "**Who owns it.** A merchant belongs to an organization (a business), whose owners and " +
+                          "admins manage it and receive its invoices. It is onboarded for the organization your " +
+                          "session acts for — you must run it (OWNER or ADMIN) and it must hold the loyalty " +
+                          "product, otherwise `ORGANIZATION_SCOPE_MISSING`. Omit `organizationId`. A SUPER_ADMIN " +
+                          "onboarding a merchant for a business names it in `organizationId`; omitted, the " +
+                          "merchant is unowned and only a SUPER_ADMIN can manage it. Anyone else naming a " +
+                          "different organization is refused with `ORGANIZATION_NOT_PERMITTED`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -112,12 +112,13 @@ public class MerchantController {
                                         "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
                                         "loyaltyRuleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
                                         "feeWaived": false,
-                                        "feeWaivedReason": null
+                                        "feeWaivedReason": null,
+                                        "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f"
                                       }
                                     }
                                     """),
-                                    @ExampleObject(name = "Created on a seller's behalf (SUPER_ADMIN view)",
-                                            description = "adminEmail is returned to SUPER_ADMIN callers only.",
+                                    @ExampleObject(name = "Created on a business's behalf (SUPER_ADMIN)",
+                                            description = "The organization named in the request owns it.",
                                             value = """
                                     {
                                       "code": "201 CREATED",
@@ -135,7 +136,7 @@ public class MerchantController {
                                         "loyaltyRuleId": null,
                                         "feeWaived": false,
                                         "feeWaivedReason": null,
-                                        "adminEmail": "rudo@chikwanha-traders.co.zw"
+                                        "organizationId": "9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e60"
                                       }
                                     }
                                     """)}
@@ -173,15 +174,23 @@ public class MerchantController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "The caller may not onboard merchants, or named someone else without being a SUPER_ADMIN",
+                    description = "The caller may not onboard merchants, has no loyalty organization, or named "
+                            + "another business without being a SUPER_ADMIN",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
-                                    @ExampleObject(name = "Onboarding for someone else", value = """
+                                    @ExampleObject(name = "No loyalty organization on the session", value = """
                                     {
-                                      "code": "ADMIN_EMAIL_NOT_PERMITTED",
-                                      "message": "Only a platform admin can onboard a merchant for someone else. Omit adminEmail to onboard it for yourself.",
+                                      "code": "ORGANIZATION_SCOPE_MISSING",
+                                      "message": "Your session isn't acting for a business with loyalty. Choose your organization and try again.",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Onboarding for another business", value = """
+                                    {
+                                      "code": "ORGANIZATION_NOT_PERMITTED",
+                                      "message": "Only a platform admin can onboard a merchant for another business. Omit organizationId to onboard it for your own.",
                                       "data": null
                                     }
                                     """),
@@ -215,14 +224,14 @@ public class MerchantController {
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                     required = true,
                     content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "On a seller's behalf (SUPER_ADMIN)",
-                                    description = "Binds the merchant to the person who will run it. Without "
-                                            + "adminEmail it would be bound to the SUPER_ADMIN making the call.",
+                            @ExampleObject(name = "On a business's behalf (SUPER_ADMIN)",
+                                    description = "The named organization owns the merchant. Without it the "
+                                            + "merchant is unowned and only a SUPER_ADMIN can manage it.",
                                     value = """
                                     {
                                       "name": "Chikwanha Traders",
                                       "category": "Grocery",
-                                      "adminEmail": "rudo@chikwanha-traders.co.zw",
+                                      "organizationId": "9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e60",
                                       "loyaltyOverride": { "feeIssued": { "type": "FIXED", "fixed": 0.25, "percentage": 0 } }
                                     }
                                     """),
@@ -351,11 +360,8 @@ public class MerchantController {
     @GetMapping
     @Operation(summary = "List merchants for the current tenant",
             description = "Returns every merchant belonging to the X-Tenant-Id tenant. Used by the " +
-                          "tenant admin UI to populate merchant pickers. Pass `unassigned=true` to " +
-                          "filter to merchants that do NOT yet have any MERCHANT_ADMIN user attached " +
-                          "— used by the new-merchant-admin onboarding flow so the FE can show only " +
-                          "yet-unclaimed merchants. The unassigned filter calls user-service; a 503 " +
-                          "means user-service is unreachable and the caller should retry.")
+                          "tenant admin UI to populate merchant pickers. Each row carries the " +
+                          "`organizationId` that owns it.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -378,7 +384,8 @@ public class MerchantController {
                                             "billingCycle": "MONTHLY",
                                             "status": "ACTIVE",
                                             "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
-                                            "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
+                                            "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
+                                            "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f"
                                           },
                                           {
                                             "id": "c5d1e3f4-3456-7890-abcd-ef0123456789",
@@ -389,7 +396,8 @@ public class MerchantController {
                                             "billingCycle": "WEEKLY",
                                             "status": "INACTIVE",
                                             "feeIssued":   { "type": "PERCENTAGE", "fixed": 0,    "percentage": 1.5 },
-                                            "feeRedeemed": { "type": "PERCENTAGE", "fixed": 0,    "percentage": 1.0 }
+                                            "feeRedeemed": { "type": "PERCENTAGE", "fixed": 0,    "percentage": 1.0 },
+                                            "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f"
                                           }
                                         ],
                                         "page": 0,
@@ -406,26 +414,10 @@ public class MerchantController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantResponse>>> list(
-            @ParameterObject Pageable pageable,
-            @RequestParam(value = "unassigned", defaultValue = "false") boolean unassigned) {
-        try {
-            PageResponse<Dtos.MerchantResponse> data = PageResponse.from(
-                    merchants.list(tenantContext.requireTenantId(), pageable, unassigned));
-            return ResponseEntity.ok(ApiResult.ok("Merchants retrieved successfully", data));
-        } catch (IllegalStateException upstream) {
-            // The unassigned filter needs user-service to identify the
-            // exclusion set. Surface a 503 so the FE knows to retry — the
-            // alternative (silently returning every merchant) would hand
-            // the registering admin already-claimed merchants and defeat
-            // the picker.
-            log.warn("Unassigned-merchants lookup failed: {}", upstream.getMessage());
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(ApiResult.<PageResponse<Dtos.MerchantResponse>>builder()
-                            .code("503 SERVICE_UNAVAILABLE")
-                            .message("Could not determine assigned merchants; please retry")
-                            .data(null)
-                            .build());
-        }
+            @ParameterObject Pageable pageable) {
+        PageResponse<Dtos.MerchantResponse> data = PageResponse.from(
+                merchants.list(tenantContext.requireTenantId(), pageable));
+        return ResponseEntity.ok(ApiResult.ok("Merchants retrieved successfully", data));
     }
 
     @PostMapping("/{id}/activate")
@@ -452,7 +444,8 @@ public class MerchantController {
                                         "billingCycle": "MONTHLY",
                                         "status": "ACTIVE",
                                         "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
-                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
+                                        "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f"
                                       }
                                     }
                                     """)
@@ -506,7 +499,8 @@ public class MerchantController {
                                         "billingCycle": "MONTHLY",
                                         "status": "INACTIVE",
                                         "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
-                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   },
+                                        "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f"
                                       }
                                     }
                                     """)
@@ -534,190 +528,5 @@ public class MerchantController {
         merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
         Dtos.MerchantResponse data = merchants.setActive(tenantId, id, false);
         return ResponseEntity.ok(ApiResult.ok("Merchant deactivated successfully", data));
-    }
-
-    @PutMapping("/{id}/admin-email")
-    @Operation(summary = "Rebind a merchant to a different admin (SUPER_ADMIN)",
-            description = "Replaces the email this merchant is bound to. That email decides whose sign-in "
-                    + "resolves to the merchant, who may manage it, and who receives its invoices and paid-order "
-                    + "notifications - so this moves the merchant from one person to another, and every change "
-                    + "is recorded.\n\n"
-                    + "Use it to fix a merchant that was onboarded by the wrong account. A merchant admin whose "
-                    + "email matches several merchants gets NO merchant scope at sign-in, so moving the extra "
-                    + "merchants to their real admins is also how an over-bound account is repaired.\n\n"
-                    + "Setting the exact current value is a no-op. A case-only change IS applied: some lookups "
-                    + "match the email exactly, so correcting the case is a real fix.\n\n"
-                    + "**Takes effect at the next sign-in or token refresh** of the accounts involved. A token "
-                    + "already issued keeps the merchant scope it was minted with until it expires.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200",
-                    description = "Binding updated (or already this value)",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Rebound", value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "Merchant admin updated successfully",
-                                      "data": {
-                                        "id": "c5d1e3f4-3456-7890-bcde-f01234567891",
-                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                        "name": "Chikwanha Traders",
-                                        "category": "Grocery",
-                                        "currency": "USD",
-                                        "billingCycle": "MONTHLY",
-                                        "status": "ACTIVE",
-                                        "feeIssued":   { "type": "FIXED", "fixed": 0.25, "percentage": 0 },
-                                        "feeRedeemed": { "type": "FIXED", "fixed": 0,    "percentage": 0 },
-                                        "loyaltyRuleId": null,
-                                        "feeWaived": false,
-                                        "feeWaivedReason": null,
-                                        "adminEmail": "rudo@chikwanha-traders.co.zw"
-                                      }
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "adminEmail missing, blank or not an email",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = {
-                                    @ExampleObject(name = "Missing", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "Validation failed",
-                                      "data": { "adminEmail": "must not be blank" }
-                                    }
-                                    """),
-                                    @ExampleObject(name = "Not an email", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "Validation failed",
-                                      "data": { "adminEmail": "must be a well-formed email address" }
-                                    }
-                                    """)}
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403",
-                    description = "Caller is not a SUPER_ADMIN",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not a platform admin", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "You don't have permission to do that.",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404",
-                    description = "Merchant not found in this tenant",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not found", value = """
-                                    {
-                                      "code": "404 NOT_FOUND",
-                                      "message": "merchant not found",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            )
-    })
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.MerchantResponse>> reassignAdmin(
-            @PathVariable UUID id,
-            @Valid @RequestBody Dtos.MerchantAdminEmailRequest req) {
-        UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
-        Dtos.MerchantResponse data = merchants.reassignAdmin(tenantId, id, req.adminEmail());
-        return ResponseEntity.ok(ApiResult.ok("Merchant admin updated successfully", data));
-    }
-
-    @DeleteMapping("/{id}/admin-email")
-    @Operation(summary = "Clear a merchant's admin binding (SUPER_ADMIN)",
-            description = "Leaves the merchant bound to nobody: no sign-in resolves to it, only a SUPER_ADMIN "
-                    + "can manage it, and its invoices and paid-order notifications go to no one. The right "
-                    + "state for a test merchant, and the way to leave an account that created several with "
-                    + "exactly the one it runs. Idempotent, and recorded like every other binding change.\n\n"
-                    + "Deliberately a separate verb from the PUT: an empty or malformed PUT body is refused, "
-                    + "never read as \"clear it\".")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200",
-                    description = "Binding cleared (or already clear)",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Unbound",
-                                    description = "adminEmail is absent because the merchant is now unbound.",
-                                    value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "Merchant admin cleared successfully",
-                                      "data": {
-                                        "id": "c5d1e3f4-3456-7890-bcde-f01234567891",
-                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                        "name": "Chikwanha Traders",
-                                        "category": "Grocery",
-                                        "currency": "USD",
-                                        "billingCycle": "MONTHLY",
-                                        "status": "ACTIVE",
-                                        "feeIssued":   { "type": "FIXED", "fixed": 0.25, "percentage": 0 },
-                                        "feeRedeemed": { "type": "FIXED", "fixed": 0,    "percentage": 0 },
-                                        "loyaltyRuleId": null,
-                                        "feeWaived": false,
-                                        "feeWaivedReason": null
-                                      }
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403",
-                    description = "Caller is not a SUPER_ADMIN",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not a platform admin", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "You don't have permission to do that.",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404",
-                    description = "Merchant not found in this tenant",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not found", value = """
-                                    {
-                                      "code": "404 NOT_FOUND",
-                                      "message": "merchant not found",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            )
-    })
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.MerchantResponse>> unbindAdmin(@PathVariable UUID id) {
-        UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
-        Dtos.MerchantResponse data = merchants.unbindAdmin(tenantId, id);
-        return ResponseEntity.ok(ApiResult.ok("Merchant admin cleared successfully", data));
     }
 }

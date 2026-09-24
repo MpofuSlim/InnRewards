@@ -50,7 +50,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -240,7 +239,7 @@ public class ReportingService {
      * <ul>
      *   <li>SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN — every merchant in the tenant;</li>
      *   <li>SHOP_ADMIN / SHOP_USER — only the merchant pinned in their JWT claim;</li>
-     *   <li>MERCHANT_ADMIN — only merchants whose {@code adminEmail} is theirs.</li>
+     *   <li>MERCHANT_ADMIN — only merchants their organization owns.</li>
      * </ul>
      * Rather than 403-ing, out-of-scope merchants are simply absent — the list is
      * "everything you administer", whoever asks.
@@ -276,8 +275,8 @@ public class ReportingService {
         if (scopedMerchant != null) {
             return scopedMerchant.equals(m.getId());
         }
-        String callerEmail = CallerDetails.currentEmail();         // MERCHANT_ADMIN
-        return Objects.requireNonNullElse(m.getAdminEmail(), "").equalsIgnoreCase(callerEmail);
+        UUID callerOrganization = CallerDetails.currentOrganizationId();   // MERCHANT_ADMIN
+        return callerOrganization != null && callerOrganization.equals(m.getOrganizationId());
     }
 
     private Dtos.MerchantFullReport buildMerchantFullReport(Merchant m,
@@ -397,7 +396,7 @@ public class ReportingService {
                         now.plus(30, ChronoUnit.DAYS), Voucher.LIVE_STATUSES));
 
         return new Dtos.MerchantFullReport(id, m.getTenantId(), m.getName(), m.getCategory(),
-                m.getCurrency(), m.getBillingCycle(), m.getStatus(), m.getAdminEmail(), m.getCreatedAt(),
+                m.getCurrency(), m.getBillingCycle(), m.getStatus(), m.getOrganizationId(), m.getCreatedAt(),
                 new Dtos.FeeModel(m.getFeeIssuedType(), m.getFeeIssuedFixed(), m.getFeeIssuedPercentage()),
                 new Dtos.FeeModel(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage()),
                 shopList, ruleLines, campaignLines, points, voucherSummary, invoiceSummary, stats);

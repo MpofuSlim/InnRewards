@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -82,69 +81,64 @@ public class UserServiceClient {
     }
 
     /**
-     * Returns the set of {@code loyalty_merchant_id}s that already have at
-     * least one user carrying the given role (in practice always
-     * {@code MERCHANT_ADMIN}). Backs the
-     * {@code GET /loyalty/merchants?unassigned=true} filter — the result is
-     * the deny-list excluded from the page so the FE can show a registering
-     * admin only merchants still up for grabs.
+     * The email addresses of the people who run an organization (its OWNER and
+     * ADMIN members with an active account), via user-service's
+     * {@code GET /users/internal/organizations/{id}/admins}. Used to send a
+     * merchant's invoice to the business that owns it — the recipient used to be
+     * the merchant's {@code admin_email}, the binding this service retired.
      *
-     * <p>Authenticated with the shared {@code X-Internal-Token} (the same
-     * secret event-service uses on its internal calls). The endpoint is
-     * hidden from public Swagger and denied at the gateway edge.
-     *
-     * <p>Throws {@link IllegalStateException} on any failure — the caller is
-     * the unassigned-filter path, where an empty fallback would silently show
-     * every merchant (including ones that already have admins) and defeat
-     * the whole point of the picker. Better to surface 503 to the FE so it
-     * can retry / show an error.
+     * <p>Best-effort: the only caller is the after-commit invoice mailer, so a
+     * blank token, a non-2xx (401, or a user-service too old to serve the
+     * endpoint), an outage or a parse failure is an empty list and a warning,
+     * never an exception. The invoice exists regardless and is on the billing
+     * page. Blank emails (a phone-only account) are skipped.
      */
-    public Set<UUID> assignedMerchantIds() {
+    public List<String> organizationAdminEmails(UUID organizationId) {
+        if (organizationId == null) {
+            return List.of();
+        }
         if (internalToken == null || internalToken.isBlank()) {
-            throw new IllegalStateException(
-                    "innbucks.internal-api-token not configured; cannot call user-service /merchants/assigned");
+            log.warn("innbucks.internal-api-token not configured; skipping organization-admin lookup for {}",
+                    organizationId);
+            return List.of();
         }
         try {
             String body = restClient.get()
-                    .uri("/users/internal/merchants/assigned?role=MERCHANT_ADMIN")
+                    .uri("/users/internal/organizations/{id}/admins", organizationId)
                     .header("X-Internal-Token", internalToken)
                     .retrieve()
                     .body(String.class);
             if (body == null) {
-                return Collections.emptySet();
+                return List.of();
             }
-            UserServiceApiResult<List<String>> envelope = objectMapper.readValue(
-                    body, new TypeReference<UserServiceApiResult<List<String>>>() {});
+            UserServiceApiResult<List<OrganizationAdmin>> envelope = objectMapper.readValue(
+                    body, new TypeReference<UserServiceApiResult<List<OrganizationAdmin>>>() {});
             if (envelope == null || envelope.data() == null) {
-                return Collections.emptySet();
+                return List.of();
             }
-            Set<UUID> out = new LinkedHashSet<>();
-            for (String s : envelope.data()) {
-                if (s == null || s.isBlank()) continue;
-                try {
-                    out.add(UUID.fromString(s));
-                } catch (IllegalArgumentException ignored) {
-                    log.warn("user-service returned a non-UUID assigned merchant id: '{}'", s);
-                }
-            }
-            return out;
+            return envelope.data().stream()
+                    .filter(java.util.Objects::nonNull)
+                    .map(OrganizationAdmin::email)
+                    .filter(e -> e != null && !e.isBlank())
+                    .map(String::trim)
+                    .distinct()
+                    .toList();
         } catch (Exception e) {
-            // One catch covers both: restClient throws RuntimeException on the
-            // HTTP path; ObjectMapper.readValue throws checked IOException on
-            // parse failures. The unassigned-merchants picker treats both the
-            // same way — surface so the controller can map to 503. A silent
-            // empty fallback would show the FE every merchant (including
-            // already-claimed ones) and defeat the whole picker.
-            log.warn("user-service /merchants/assigned lookup failed cause={}", e.toString());
-            throw new IllegalStateException("user-service unavailable: " + e.getMessage(), e);
+            log.warn("user-service organization-admin lookup failed organizationId={} cause={}",
+                    organizationId, e.toString());
+            return List.of();
         }
     }
+
+    /** One entry of user-service's organization-admins answer; unknown fields are ignored. */
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    public record OrganizationAdmin(UUID userUuid, String email) {}
 
     /**
      * Returns the phone numbers of every staff member linked to the given
      * merchant, via user-service's
      * {@code GET /users/internal/shop-staff/by-merchant/{merchantId}/contacts}
-     * (shared {@code X-Internal-Token}, mirroring {@link #assignedMerchantIds()}).
+     * (shared {@code X-Internal-Token}).
      * Consumed by {@link com.innbucks.loyaltyservice.service.StaffRegistry}
      * for the earn-integrity {@code STAFF_RECIPIENT} guard.
      *
@@ -203,9 +197,9 @@ public class UserServiceClient {
      * Resolves a user's contact details (phone / email / first name) by their
      * stable {@code user_uuid} via user-service's
      * {@code GET /users/internal/{userUuid}/contact}. Authenticated with the
-     * shared {@code X-Internal-Token} (mirrors {@link #assignedMerchantIds()}).
+     * shared {@code X-Internal-Token}.
      *
-     * <p>Unlike {@code assignedMerchantIds()}, this is <strong>best-effort</strong>:
+     * <p>This is <strong>best-effort</strong>:
      * the sole caller is the tenant-attach notifier, where a missing contact
      * just means "skip the you've-been-added ping". Any non-2xx (404 unknown
      * user, 401 misconfigured token), unreachable user-service, blank token, or

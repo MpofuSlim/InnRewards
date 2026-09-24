@@ -86,7 +86,7 @@ class QrServiceSecurityTest {
         Merchant merchant = new Merchant();
         merchant.setId(merchantId);
         merchant.setTenantId(tenantId);
-        merchant.setAdminEmail("owner@merchant.test");   // owned by someone else
+        merchant.setOrganizationId(UUID.randomUUID());   // owned by another business
         when(merchants.findById(merchantId)).thenReturn(Optional.of(merchant));
 
         authenticateCustomer("attacker@evil.test", "+263771234567");

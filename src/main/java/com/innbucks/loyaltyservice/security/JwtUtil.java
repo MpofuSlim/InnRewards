@@ -187,6 +187,29 @@ public class JwtUtil {
     }
 
     /**
+     * The organization the session acts for (user-service V39), or null when
+     * the session has chosen none — a customer, platform staff, a phone-proof
+     * session, or someone in several organizations who has not picked one yet.
+     */
+    public UUID extractOrganizationId(String token) {
+        return extractUuidClaim(token, "orgId");
+    }
+
+    /** The caller's role in {@link #extractOrganizationId}: OWNER, ADMIN or STAFF; null without one. */
+    public String extractOrganizationRole(String token) {
+        return getClaims(token).get("orgRole", String.class);
+    }
+
+    /** The organization's ACTIVE products, lowercase ("loyalty", "marketplace", "ticketing"). */
+    public List<String> extractProducts(String token) {
+        Object raw = getClaims(token).get("products");
+        if (raw instanceof Collection<?> c) {
+            return c.stream().map(Object::toString).toList();
+        }
+        return List.of();
+    }
+
+    /**
      * Stable cross-service UUID of the caller, read from the {@code userUuid}
      * claim that user-service already mints on every access token. This is the
      * key tenant membership is checked against (see {@code TenantContext}).

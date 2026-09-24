@@ -37,5 +37,14 @@ public class Tenant extends Auditable {
     @Column(name = "owner_email", length = 200)
     private String ownerEmail;
 
+    /**
+     * The organization (user-service V39) that created this program. Its
+     * OWNERs and ADMINs are members without a tenant_members row, so a
+     * colleague added through the organization can work in it. Null on a
+     * pre-V51 tenant until an operator stamps it.
+     */
+    @Column(name = "organization_id")
+    private UUID organizationId;
+
     public enum Status { ACTIVE, SUSPENDED, INACTIVE }
 }

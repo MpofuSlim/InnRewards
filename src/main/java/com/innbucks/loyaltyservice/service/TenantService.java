@@ -9,6 +9,7 @@ import com.innbucks.loyaltyservice.integration.TenantMemberNotifier;
 import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -64,6 +65,10 @@ public class TenantService {
         t.setCode(req.code());
         t.setName(name);
         t.setOwnerEmail(creatorEmail);
+        // The business creating the program (null for a SUPER_ADMIN, or a
+        // caller with no loyalty organization). Its owners and admins are
+        // members without a tenant_members row — see TenantContext.
+        t.setOrganizationId(CallerDetails.currentOrganizationId());
         tenants.save(t);
         // Attach the supplied user as the tenant's first member so they can
         // immediately pass this tenant's id as X-Tenant-Id.

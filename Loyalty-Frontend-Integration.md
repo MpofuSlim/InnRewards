@@ -381,6 +381,50 @@ auto-block the account. Without a fingerprint that protection can't run.
 Check `usesRemaining` in the response: a multi-use voucher returns
 `PARTIALLY_USED` with a remaining count rather than `REDEEMED`.
 
+### Mistyped codes and the guessing lockout
+
+| `code` | Status | Meaning | What to show |
+|---|---|---|---|
+| `VOUCHER_CODE_MISTYPED` | 400 | A 16-digit code whose check digit shows a wrong digit, two neighbours swapped, or a digit dropped or doubled. Worked out from the code alone; **never counts** toward the lockout. | "That code doesn't look right — check it and try again." |
+| `404 NOT_FOUND` | 404 | No such voucher. **Counts.** | "We couldn't find that voucher." |
+| `NOT_VOUCHER_OWNER` | 403 | A voucher that isn't this customer's (whatever its state). **Counts.** | the `message` |
+| `VOUCHER_ATTEMPTS_LOCKED` | 429 | 5 counted misses within a minute: this caller is locked out of voucher redemption for **30 minutes**. Also returned, for at most a minute, when this caller already has as many redeems in flight as misses left. | "Too many incorrect codes. Try again in N minutes." |
+
+```json
+{
+  "code": "VOUCHER_ATTEMPTS_LOCKED",
+  "message": "Too many incorrect voucher codes were tried. Please wait and try again later.",
+  "data": { "retryAfterSeconds": 1800 }
+}
+```
+
+- **Read the wait from `data.retryAfterSeconds`** (also sent as the
+  `Retry-After` header, which a browser may not expose to your code). Show a
+  countdown; don't auto-retry — every call during the lock is refused, **even
+  with the correct code**, and the lock is never shortened or extended by more
+  attempts.
+- **Who is locked:** a customer by their phone, a cashier by their own staff
+  account. One cashier being locked does not affect the other tills at the
+  shop — another staff login can carry on.
+- **What never counts:** a mistyped 16-digit code (the 400 above), and — for
+  the voucher's holder or staff — an expired, revoked or already-used voucher, a
+  voucher for another shop, or a holder-account problem. Only unknown codes and
+  other people's codes do.
+- **Not every typo is caught.** The check digit catches one wrong digit, two
+  swapped neighbours (except 0↔9), and a dropped or doubled digit; about one in
+  ten bigger slips gets through and comes back as a counted 404. Older
+  12-character codes have no check digit at all, so every typo on one is a
+  counted 404. The local check-digit validation above catches the same cases
+  before a call is made.
+- **Don't fire redeems in parallel for one user.** Attempts in flight use the
+  same budget, so a burst is refused with a short 429.
+- **A successful redemption does not reset the count.**
+- `POST /loyalty/vouchers/codes/{code}/viewed` shares the same lock: for a
+  customer, its `NOT_VOUCHER_OWNER` 403 **and an unknown code's silent 200**
+  both count, and it answers 429 while the caller is locked. Only call it for a
+  voucher the customer actually holds (one from their own wallet list).
+- The staging-only `/loyalty/public/vouchers/redeem` is **not** locked.
+
 ---
 
 ## 9. QR

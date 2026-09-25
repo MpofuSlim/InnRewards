@@ -275,6 +275,50 @@ public class LoyaltyMetrics {
                 .increment();
     }
 
+    /**
+     * Voucher redeem lockout ({@code VoucherGuessGuard}). {@code kind} is the
+     * identity type the caller was keyed on — {@code phone} (customer),
+     * {@code staff} (till / admin account) or {@code user} (a customer token with
+     * no phone claim) — never the identity itself.
+     *
+     * <ul>
+     *   <li>{@code failures} — misses counted toward a lock.</li>
+     *   <li>{@code locked} — locks set. Any {@code kind=staff} lock is worth a
+     *   look (a till being used to guess, or a cashier fighting a bad code); a
+     *   burst across many identities is a campaign.</li>
+     *   <li>{@code refused} — 429s served to a locked caller.</li>
+     *   <li>{@code degraded{op,cause}} — Redis absent ({@code no_redis}) or
+     *   failing ({@code error}), the in-memory fallback
+     *   answered. Sustained non-zero means locks are per-replica and are lost on
+     *   restart until Redis is back.</li>
+     *   <li>{@code unkeyed} — a caller with no identity to key on, so nothing was
+     *   counted. Should stay at zero: every role allowed to redeem carries one.</li>
+     * </ul>
+     */
+    public void incVoucherGuard(String outcome, String kind) {
+        Counter.builder("loyalty.voucher.guard." + outcome)
+                .description("Voucher redeem lockout: " + outcome)
+                .tag("kind", kind)
+                .register(registry)
+                .increment();
+    }
+
+    public void incVoucherGuardDegraded(String op, String cause) {
+        Counter.builder("loyalty.voucher.guard.degraded")
+                .description("Voucher redeem lockout answered from the in-memory fallback")
+                .tag("op", op)
+                .tag("cause", cause)
+                .register(registry)
+                .increment();
+    }
+
+    public void incVoucherGuardUnkeyed() {
+        Counter.builder("loyalty.voucher.guard.unkeyed")
+                .description("Voucher redeem attempts with no caller identity to key the lockout on")
+                .register(registry)
+                .increment();
+    }
+
     /** Wraps a redemption call so the latency series captures real end-to-end. */
     public Timer redemptionLatency() {
         return redemptionLatency;

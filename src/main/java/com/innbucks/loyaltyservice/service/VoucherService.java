@@ -10,6 +10,7 @@ import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherBatch;
 import com.innbucks.loyaltyservice.entity.VoucherRedemption;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.exception.VoucherCodeGuessException;
 import com.innbucks.loyaltyservice.integration.NotificationGateway;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
@@ -39,6 +40,9 @@ import java.util.UUID;
 @Transactional
 @Slf4j
 public class VoucherService {
+
+    /** Redeem refusal for a code the check digit says was mistyped. Not a guess. */
+    public static final String MISTYPED_CODE = "VOUCHER_CODE_MISTYPED";
 
     private final VoucherRepository vouchers;
     private final VoucherBatchRepository batches;
@@ -516,12 +520,30 @@ public class VoucherService {
         return v;
     }
 
-    public void markViewed(String code) {
-        findByTypedCode(code).ifPresent(v -> {
+    /**
+     * Records that the voucher's holder opened it. An unknown code is a silent
+     * no-op for the caller (a best-effort read receipt has no 404).
+     *
+     * @return whether a voucher with this code exists — the redeem lockout
+     *         counts a customer's unknown code as a miss, since answering one
+     *         unknown code for free is what would make this an oracle
+     */
+    public boolean markViewed(String code) {
+        Optional<Voucher> found = findByTypedCode(code);
+        found.ifPresent(v -> {
             // Only the voucher's owner (assignee) — or issuing/merchant staff — may
             // record a VIEW. Without this any authenticated principal could mark an
             // arbitrary code viewed and pollute issue→view analytics.
-            requireCallerMayViewVoucher(v);
+            //
+            // The refusal is a counted guess for the redeem lockout, and so is
+            // an unknown code (counted by the controller from the return value):
+            // a real code answers 403 here where an unknown one answers 200, so
+            // this endpoint is an oracle for which codes exist unless BOTH count.
+            try {
+                requireCallerMayViewVoucher(v);
+            } catch (LoyaltyException notTheHolder) {
+                throw VoucherCodeGuessException.from(notTheHolder);
+            }
             if (v.getViewedAt() == null) {
                 v.setViewedAt(Instant.now());
                 // Reads like a tautology since V48 left ISSUED as the only
@@ -532,6 +554,7 @@ public class VoucherService {
                 }
             }
         });
+        return found.isPresent();
     }
 
     private void requireCallerMayViewVoucher(Voucher v) {
@@ -572,70 +595,55 @@ public class VoucherService {
         }
     }
 
+    /**
+     * {@link FraudService#record} for the redeem path, made unable to replace the
+     * refusal it documents. The evidence INSERT runs in its own transaction and
+     * can fail on its own — V17's CHECK once rejected NOT_ASSIGNEE, so every such
+     * refusal reached the client as a 409 instead of its 403, and the redeem
+     * lockout never saw it. The refusal is the contract; losing its evidence row
+     * is a WARN.
+     */
+    private void recordAttempt(UUID tenantId, Dtos.RedeemVoucherRequest req, UUID merchantId,
+                               String voucherCode, FraudAttempt.Reason reason, String detail) {
+        try {
+            fraud.record(tenantId, req.userId(), merchantId, voucherCode, reason, detail,
+                    req.deviceFingerprint(), req.ipAddress());
+        } catch (RuntimeException e) {
+            log.warn("Could not record a {} fraud attempt for merchant {}; the refusal stands", reason,
+                    merchantId, e);
+        }
+    }
+
     private Dtos.RedemptionResponse doRedeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
         Voucher v = lockByTypedCode(req.code()).orElse(null);
+        if (v == null && VoucherCodes.isMistypedNumeric(VoucherCodes.normalize(req.code()))) {
+            // A code the check digit says was mistyped — a wrong or swapped
+            // digit, one dropped or doubled. Answered from the code ALONE, so it
+            // tells the caller nothing about which vouchers exist, and it is
+            // neither recorded as fraud nor counted toward the redeem lockout: a
+            // cashier keying a customer's code wrong is not guessing. Checked
+            // only after the lookup missed, so a stored row that happens to look
+            // like this is still found.
+            throw LoyaltyException.badRequest(MISTYPED_CODE,
+                    "That voucher code doesn't look right. Please check it and try again.");
+        }
         if (v == null || !v.getTenantId().equals(tenantId)) {
             // The CANONICAL spelling, so one guessed code is one fraud_attempts
             // value however it was typed. Never longer than the input (see
             // VoucherCodes.normalize), so the request's @Size keeps it inside
             // the VARCHAR(64) column.
-            fraud.record(tenantId, req.userId(), merchantId, VoucherCodes.normalize(req.code()),
-                    FraudAttempt.Reason.INVALID_CODE, "voucher not found",
-                    req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.notFound("voucher");
+            recordAttempt(tenantId, req, merchantId, VoucherCodes.normalize(req.code()),
+                    FraudAttempt.Reason.INVALID_CODE, "voucher not found");
+            // A counted guess for the redeem lockout; the wire response is
+            // byte-identical to notFound("voucher").
+            throw VoucherCodeGuessException.unknownCode();
         }
 
         String expectedSig = signer.sign(signPayload(tenantId, v.getTemplateId(), v.getCode()));
         if (!expectedSig.equals(v.getSignature())) {
-            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                    FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature",
-                    req.deviceFingerprint(), req.ipAddress());
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature");
             throw LoyaltyException.forbidden("BAD_SIGNATURE", "This voucher couldn't be verified — its signature is invalid.");
-        }
-
-        if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
-            // The EXPIRED status flip used to be set on the managed entity right
-            // here, and was then discarded by the throw below along with the
-            // audit row — see rejectRedemption. It is now applied by the
-            // after-rollback listener, which is also the only place it CAN be
-            // applied: this transaction holds a PESSIMISTIC_WRITE lock on the
-            // row, so a second transaction trying to update it would block on us
-            // while we waited on it.
-            rejectRedemption(v, merchantId, req, "expired", true);
-            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                    FraudAttempt.Reason.EXPIRED, "redemption after expiry",
-                    req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.badRequest("EXPIRED", "This voucher has expired.");
-        }
-
-        // REVOKED is checked BEFORE exhaustion, deliberately. Both are terminal,
-        // but revocation is an operator decision and clients are documented to
-        // branch on `code`: with the old order, a voucher revoked after its last
-        // use answered ALREADY_REDEEMED, so a console showed "already redeemed"
-        // for a voucher someone had deliberately cancelled. The more specific
-        // fact wins. (revoke() only sets the status and never zeroes the uses, so
-        // a revoked voucher with uses left answered REVOKED under either order.)
-        if (v.getStatus() == Voucher.Status.REVOKED) {
-            rejectRedemption(v, merchantId, req, "revoked");
-            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                    FraudAttempt.Reason.ALREADY_REDEEMED, "redemption of a revoked voucher",
-                    req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.conflict("REVOKED", "This voucher is no longer valid.");
-        }
-        if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0) {
-            rejectRedemption(v, merchantId, req, "already redeemed");
-            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                    FraudAttempt.Reason.ALREADY_REDEEMED, "duplicate redemption attempt",
-                    req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.conflict("ALREADY_REDEEMED", "This voucher has already been fully redeemed.");
-        }
-
-        if (v.getMerchantId() != null && !v.getMerchantId().equals(merchantId)) {
-            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                    FraudAttempt.Reason.WRONG_MERCHANT,
-                    "expected " + v.getMerchantId() + " got " + merchantId,
-                    req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher can't be redeemed at this shop.");
         }
 
         // A genuine CUSTOMER caller may only redeem a voucher assigned to THEM.
@@ -645,6 +653,15 @@ public class VoucherService {
         // rotation above. The check is scoped to real customers: staff / cashier
         // roles (SHOP_USER, SHOP_ADMIN, MERCHANT_ADMIN, SUPER_ADMIN) present the
         // code at the counter on the holder's behalf and carry no phone claim.
+        //
+        // Checked FIRST after the signature, ahead of the expiry / status /
+        // merchant refusals, and that order is load-bearing for the redeem
+        // lockout: those refusals are honest answers about a REAL code and are
+        // not counted, so a non-holder reaching them learned that someone else's
+        // code exists — spent, expired, or live at another shop (a customer
+        // names the merchant in the body, so a random one turned every live hit
+        // into an uncounted WRONG_MERCHANT). A non-holder now always gets the
+        // counted NOT_VOUCHER_OWNER; the holder still gets the specific reason.
         //
         // Compared against the RESOLVED holder (holderPhone), not the raw
         // assigneePhone column: a voucher issued by assignedUserId alone has a
@@ -662,12 +679,54 @@ public class VoucherService {
             // and would hand unassigned stock to any caller with no phone claim.
             if (callerPhone == null || !callerPhone.equals(holder)) {
                 rejectRedemption(v, merchantId, req, "not voucher assignee");
-                fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                        FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher",
-                        req.deviceFingerprint(), req.ipAddress());
-                throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
-                        "This voucher isn't assigned to you.");
+                recordAttempt(tenantId, req, merchantId, v.getCode(),
+                        FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher");
+                // Someone else's code: a counted guess for the redeem lockout.
+                // Same status, code and message as before.
+                throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                        "This voucher isn't assigned to you."));
             }
+        }
+
+        if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
+            // The EXPIRED status flip used to be set on the managed entity right
+            // here, and was then discarded by the throw below along with the
+            // audit row — see rejectRedemption. It is now applied by the
+            // after-rollback listener, which is also the only place it CAN be
+            // applied: this transaction holds a PESSIMISTIC_WRITE lock on the
+            // row, so a second transaction trying to update it would block on us
+            // while we waited on it.
+            rejectRedemption(v, merchantId, req, "expired", true);
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.EXPIRED, "redemption after expiry");
+            throw LoyaltyException.badRequest("EXPIRED", "This voucher has expired.");
+        }
+
+        // REVOKED is checked BEFORE exhaustion, deliberately. Both are terminal,
+        // but revocation is an operator decision and clients are documented to
+        // branch on `code`: with the old order, a voucher revoked after its last
+        // use answered ALREADY_REDEEMED, so a console showed "already redeemed"
+        // for a voucher someone had deliberately cancelled. The more specific
+        // fact wins. (revoke() only sets the status and never zeroes the uses, so
+        // a revoked voucher with uses left answered REVOKED under either order.)
+        if (v.getStatus() == Voucher.Status.REVOKED) {
+            rejectRedemption(v, merchantId, req, "revoked");
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.ALREADY_REDEEMED, "redemption of a revoked voucher");
+            throw LoyaltyException.conflict("REVOKED", "This voucher is no longer valid.");
+        }
+        if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0) {
+            rejectRedemption(v, merchantId, req, "already redeemed");
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.ALREADY_REDEEMED, "duplicate redemption attempt");
+            throw LoyaltyException.conflict("ALREADY_REDEEMED", "This voucher has already been fully redeemed.");
+        }
+
+        if (v.getMerchantId() != null && !v.getMerchantId().equals(merchantId)) {
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.WRONG_MERCHANT,
+                    "expected " + v.getMerchantId() + " got " + merchantId);
+            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher can't be redeemed at this shop.");
         }
 
         // The HOLDER's account state, resolved from the voucher — see
@@ -689,9 +748,8 @@ public class VoucherService {
                 case OK -> { /* spendable */ }
                 case BLOCKED -> {
                     rejectRedemption(v, merchantId, req, "holder account blocked");
-                    fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
-                            FraudAttempt.Reason.BLOCKED_USER, "blocked holder attempted redemption",
-                            req.deviceFingerprint(), req.ipAddress());
+                    recordAttempt(tenantId, req, merchantId, v.getCode(),
+                            FraudAttempt.Reason.BLOCKED_USER, "blocked holder attempted redemption");
                     throw LoyaltyException.forbidden("USER_BLOCKED",
                             "This voucher's account is currently suspended. Please contact support.");
                 }

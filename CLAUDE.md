@@ -270,7 +270,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V51**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V52**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1604,6 +1604,128 @@ invent its own.
 - **Never log a voucher code.** It is a bearer credential. Log the voucher id.
 - **JavaScript clients must keep `code` a string** — 16 digits exceed 2^53.
   The Swagger descriptions and the FE guide both say so.
+
+## Voucher guessing is locked out — 5 misses a minute, 30 minutes off (V52)
+
+**Owner decision (2026-09-25): 5 unknown voucher codes within one minute locks
+that caller out of voucher redemption for 30 minutes.** `VoucherGuessGuard`,
+wired into `VoucherController.redeem` and `.markViewed` through
+`guard.attempt(...)`; the numbers are `loyalty.voucher.redeem-guard.*`
+(`VoucherGuardProperties`).
+
+- **Keyed on the caller's TOKEN, never the request.** A customer by the
+  `phoneNumber` claim (else `userUuid`); staff by their ACCOUNT (`userUuid`,
+  else the subject) — even when a staff token carries a phone, and a
+  CUSTOMER+staff account counts as staff. One cashier's lock never blocks
+  another till (owner decision: same rule per cashier). Body fields
+  (`userId`, `deviceFingerprint`, `ipAddress`) and `X-Tenant-Id` are all
+  caller-chosen, so keying on any of them lets an attacker rotate past the lock
+  or aim it at someone else. Pinned by `VoucherRedeemLockoutTest.theBodyCannotSteerTheKey`.
+- **No IP key — deliberately, not an omission.** Loyalty cannot see a client
+  address: the gateway's `forward-headers-strategy: framework` replaces the
+  remote address with the caller-controlled left-most `X-Forwarded-For` entry
+  and strips `x-forwarded-*` before proxying, so every request reaches loyalty
+  from the gateway pod. An IP key would be ONE key for the whole cell — five
+  misses by anyone would lock everyone. Enabling one needs nginx realip +
+  a dedicated overwritten header + port 30080 firewalled first; that is edge
+  work, and the owner chose phone/account only.
+- **The public `/loyalty/public/vouchers/redeem` is NOT locked** (owner
+  decision). It has no caller identity (`asCustomer` installs the voucher's
+  HOLDER, so a person key there would lock the victim), it is staging-only, and
+  `loyalty.public-test.enabled=false` is its production control.
+- **Attempts are RESERVED before the lookup, not counted after it.** The first
+  version checked the lock first and counted afterwards — and a burst of
+  parallel requests all passed the check before the fifth miss landed, so a
+  caller could guess as many codes as the gateway let through at once (its
+  per-token burst is 100). `attempt` now takes a slot BEFORE the call and
+  settles it after: a guess becomes a counted miss, anything else gives the slot
+  back. Misses plus in-flight attempts can never exceed the budget; the attempt
+  past it is a 429 whose `Retry-After` is when the oldest slot frees (≤ the
+  window), not the 30-minute lock, which only five settled misses set. Pinned by
+  `aRealBurstOfParallelGuesses_getsExactlyFiveLookups` (in memory,
+  `@RepeatedTest(20)` — the race it pins was intermittent) and
+  `aConcurrentBurstOfGuesses_getsExactlyFiveThrough` (real Redis).
+- **What counts.** A `VoucherCodeGuessException` from the call: an unknown code
+  (or one in another tenant), or someone else's code refused to a customer
+  (`NOT_VOUCHER_OWNER`, on redeem and on mark-viewed). Both keep their exact old
+  wire responses; only the TYPE is new. And, on mark-viewed, a CUSTOMER's
+  unknown code — still a silent 200, but counted from the result, because that
+  endpoint answers 403 for a real code and 200 for an unknown one: counting only
+  the 403s made misses free and hits the only cost, which is no limit at all.
+  Staff unknown codes there are not counted (a 200 either way; nothing to learn).
+- **What never counts:** EXPIRED / REVOKED / ALREADY_REDEEMED /
+  WRONG_MERCHANT / BAD_SIGNATURE / holder-account refusals — honest answers
+  about a real code (`ConcurrentVoucherRedemptionIT` alone produces nine
+  ALREADY_REDEEMEDs from one caller) — and a check-digit typo. **For those
+  honest answers to be safe, the customer ownership check runs FIRST**, right
+  after the signature: before, a non-holder reached them and learned that
+  someone else's code exists — spent, expired, or live at another shop (a
+  customer names the merchant in the body, so a random one turned every live
+  hit into an uncounted WRONG_MERCHANT). A non-holder now always gets the
+  counted `NOT_VOUCHER_OWNER`; the holder still gets the specific reason.
+- **A mistyped code is a `400 VOUCHER_CODE_MISTYPED`, recorded nowhere and
+  never counted.** `VoucherCodes.isMistypedNumeric`: all digits, 15–17 long,
+  not well-formed. Be exact about what that catches: every single wrong digit,
+  every swap of neighbours except 09↔90, and any dropped or extra digit — but
+  NOT every multi-digit error (about one in ten slips past the check digit and
+  counts), and **nothing at all on a legacy 12-character code**, which has no
+  check digit, so every typo on one is a counted miss. It is computed from the
+  code alone (reveals nothing) and decided only AFTER the lookup misses (a
+  stored row that happens to look mistyped is still found).
+- **Settled after the transaction.** The body runs inside `attempt`, so for
+  redeem the `@Transactional` service has rolled back and released its
+  `PESSIMISTIC_WRITE` lock before the slot is settled — a slow Redis never
+  lengthens a row lock. A locked caller learns nothing, costs no connection or
+  row lock, and is refused even with a correct code. The attempt that trips the
+  lock keeps its own 404/403; the next gets the 429.
+- **A success does NOT reset the count** (owner decision) — otherwise a guesser
+  holding one real voucher resets their budget with it.
+- **Redis first, memory as the fallback; never fail open, never 503.** Two Lua
+  scripts (`ADMIT_SCRIPT`, `MISS_SCRIPT`) over three keys: a sliding log of
+  misses and a sliding set of in-flight reservations (ZSETs, Redis `TIME`) and
+  the lock, all always with a TTL. A miss settled while locked is neither logged
+  nor allowed to extend the lock, so `Retry-After` is truthful and every lock
+  ends; admit repairs a TTL-less lock; a reservation that is never settled ages
+  out with the window. If Redis is absent or throws, `FallbackStore` (Caffeine,
+  bounded) applies the same rules — and **every read and write of one
+  identity's lock happens inside that identity's `compute`**: reading the lock
+  outside it let a concurrent miss lock the caller and clear their log in
+  between, and the late admit then saw an empty budget (a 40-thread burst got 11
+  lookups). Locks Redis reports are MIRRORED locally so a blip mid-lock does not
+  end it, but a mirror is ignored while Redis is up, so an operator's `DEL`
+  really lifts a lock. Nothing escapes the guard except the 429 and whatever the
+  guarded call itself throws.
+- **Redis keys hold a SHA-256 ref, never the phone:**
+  `loyalty:voucher-guard:{<ref>}:lock` / `:fails` / `:inflight`, ref = first 32
+  hex of `sha256("<kind>:<value>")`. Manual unlock (runbook):
+  `printf 'phone:+263771234567' | sha256sum | cut -c1-32`, then `DEL` the lock
+  and fails keys. A lock taken while Redis was down lives in one replica's
+  memory and ends with its TTL or a restart.
+- **The 429** is `VOUCHER_ATTEMPTS_LOCKED` with `Retry-After`,
+  `Cache-Control: no-store` and `data.retryAfterSeconds` (a browser client
+  cannot read `Retry-After` unless the gateway's CORS exposes it). Its own
+  `GlobalExceptionHandler` method, more specific than the `LoyaltyException`
+  one; `GlobalExceptionHandlerDispatchTest` proves Spring picks it.
+- **Redis timeouts are now bounded** (`REDIS_COMMAND_TIMEOUT` 500ms,
+  `REDIS_CONNECT_TIMEOUT` 1s). Lettuce's default is 60s, which would have held a
+  redemption for a minute before falling back. This also bounds `JwtFilter`'s
+  fail-open denylist reads and `OnDemandEligibilityCheck`'s SETNX.
+- **Metrics:** `loyalty.voucher.guard.{failures,locked,refused}{kind}`,
+  `.degraded{op=admit|miss|release,cause}`, `.unkeyed`. Any `kind=staff` lock is
+  worth a look; a burst of locks across many identities is a campaign; sustained
+  `degraded` means locks are per-replica until Redis returns.
+
+**V52 is part of this, and fixed a live bug on its own.** V17's
+`chk_fraud_attempts_reason` listed eleven reasons; `NOT_ASSIGNEE`, `SELF_EARN`,
+`STAFF_RECIPIENT` and `ADJUSTMENT_LIMIT` were added to the enum later without
+widening it. Every refusal recording one of them failed its evidence INSERT,
+which escaped as `DataIntegrityViolationException` → **409**, so a customer
+presenting someone else's voucher got a 409 instead of `403 NOT_VOUCHER_OWNER`
+(and the earn-integrity refusals likewise). `FraudReasonCheckConstraintTest`
+now ties the newest CHECK to the enum, so adding a reason without a migration
+fails the build. And `VoucherService.recordAttempt` wraps every redeem-path
+`fraud.record` so a failed evidence row can never replace the refusal it was
+documenting again.
 
 ## A voucher is worth its face value, ONCE — MULTI_USE is retired
 

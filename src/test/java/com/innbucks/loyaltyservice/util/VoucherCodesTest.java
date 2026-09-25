@@ -159,6 +159,39 @@ class VoucherCodesTest {
         assertThatThrownBy(() -> VoucherCodes.checkDigit("123")).isInstanceOf(IllegalArgumentException.class);
     }
 
+    // --------------------------------------------------------------- mistyped
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "9087876598764563",    // wrong check digit
+            "9078876598764566",    // adjacent swap
+            "908787659876456",     // a digit dropped
+            "90878765987645666",   // a digit doubled
+            "0087876598764566",    // leading zero, which is never issued
+    })
+    void mistyped_recognisesTheCommonSlips(String typo) {
+        assertThat(VoucherCodes.isMistypedNumeric(typo)).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            CODE,                  // well-formed: an unknown one is a guess, not a typo
+            "K7M2PQ9XR4TB",        // legacy alphanumeric
+            "123456789012",        // 12 digits: a legacy code could be all digits
+            "12345678901234",      // too short to be one digit off
+            "123456789012345678",  // too long to be one digit off
+            "908787659876456O",    // a letter
+            "",
+    })
+    void mistyped_isNeverClaimedForAnythingElse(String candidate) {
+        assertThat(VoucherCodes.isMistypedNumeric(candidate)).isFalse();
+    }
+
+    @Test
+    void mistyped_nullIsFalse() {
+        assertThat(VoucherCodes.isMistypedNumeric(null)).isFalse();
+    }
+
     /** Plain Luhn, independent of the implementation under test. */
     static boolean luhnValid(String number) {
         int sum = 0;

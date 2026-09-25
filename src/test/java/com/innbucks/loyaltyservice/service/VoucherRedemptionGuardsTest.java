@@ -834,4 +834,48 @@ class VoucherRedemptionGuardsTest {
                     assertThat(e.getMessage()).isEqualTo("you can only act on your own vouchers");
                 });
     }
+
+    @Test
+    void aNonHolder_alwaysGetsTheCountedRefusal_neverAnHonestAnswerAboutSomeoneElsesCode() {
+        // Expired, spent, revoked, or live at a merchant the customer named at
+        // random in the body: each used to answer with its own uncounted
+        // reason, telling a guesser the code exists. The owner check now runs
+        // first.
+        asCustomer("+263770000111");
+        Voucher expired = voucherAssignedByPhone(HOLDER_PHONE);
+        expired.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        Voucher spent = voucherAssignedByPhone(HOLDER_PHONE);
+        spent.setUsesRemaining(0);
+        Voucher revoked = voucherAssignedByPhone(HOLDER_PHONE);
+        revoked.setStatus(Voucher.Status.REVOKED);
+        Voucher elsewhere = voucherAssignedByPhone(HOLDER_PHONE);
+        elsewhere.setMerchantId(UUID.randomUUID());
+
+        for (Voucher v : List.of(expired, spent, revoked, elsewhere)) {
+            when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+            assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                    .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class,
+                            e -> assertThat(e.getCode()).isEqualTo("NOT_VOUCHER_OWNER"));
+        }
+        // A non-holder's refusal must not act on someone else's voucher either:
+        // no EXPIRED flip is requested for it.
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(events, org.mockito.Mockito.atLeast(0)).publishEvent(published.capture());
+        assertThat(published.getAllValues())
+                .noneMatch(e -> e instanceof VoucherRedemptionRejectedEvent r && r.markExpired());
+    }
+
+    @Test
+    void theHolder_stillGetsTheSpecificReason() {
+        asCustomer(HOLDER_PHONE);
+        Voucher expired = voucherAssignedByPhone(HOLDER_PHONE);
+        expired.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        when(vouchers.lockByCode(expired.getCode())).thenReturn(Optional.of(expired));
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(expired, null)))
+                .isInstanceOfSatisfying(LoyaltyException.class, e -> {
+                    assertThat(e).isNotInstanceOf(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class);
+                    assertThat(e.getCode()).isEqualTo("EXPIRED");
+                });
+    }
 }

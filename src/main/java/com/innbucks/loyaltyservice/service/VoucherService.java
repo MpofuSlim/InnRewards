@@ -520,16 +520,25 @@ public class VoucherService {
         return v;
     }
 
-    public void markViewed(String code) {
-        findByTypedCode(code).ifPresent(v -> {
+    /**
+     * Records that the voucher's holder opened it. An unknown code is a silent
+     * no-op for the caller (a best-effort read receipt has no 404).
+     *
+     * @return whether a voucher with this code exists — the redeem lockout
+     *         counts a customer's unknown code as a miss, since answering one
+     *         unknown code for free is what would make this an oracle
+     */
+    public boolean markViewed(String code) {
+        Optional<Voucher> found = findByTypedCode(code);
+        found.ifPresent(v -> {
             // Only the voucher's owner (assignee) — or issuing/merchant staff — may
             // record a VIEW. Without this any authenticated principal could mark an
             // arbitrary code viewed and pollute issue→view analytics.
             //
-            // The refusal is a counted guess for the redeem lockout: an unknown
-            // code is a silent 200 here but a real one is a 403, so without
-            // counting it this endpoint would be a free, unlimited oracle for
-            // which codes exist.
+            // The refusal is a counted guess for the redeem lockout, and so is
+            // an unknown code (counted by the controller from the return value):
+            // a real code answers 403 here where an unknown one answers 200, so
+            // this endpoint is an oracle for which codes exist unless BOTH count.
             try {
                 requireCallerMayViewVoucher(v);
             } catch (LoyaltyException notTheHolder) {
@@ -545,6 +554,7 @@ public class VoucherService {
                 }
             }
         });
+        return found.isPresent();
     }
 
     private void requireCallerMayViewVoucher(Voucher v) {
@@ -636,6 +646,48 @@ public class VoucherService {
             throw LoyaltyException.forbidden("BAD_SIGNATURE", "This voucher couldn't be verified — its signature is invalid.");
         }
 
+        // A genuine CUSTOMER caller may only redeem a voucher assigned to THEM.
+        // Without this a customer who knows (or guesses) a code — e.g. one they
+        // transferred away, whose old code they still remember — could redeem it
+        // straight from their own app, the redeem-side twin of the transfer
+        // rotation above. The check is scoped to real customers: staff / cashier
+        // roles (SHOP_USER, SHOP_ADMIN, MERCHANT_ADMIN, SUPER_ADMIN) present the
+        // code at the counter on the holder's behalf and carry no phone claim.
+        //
+        // Checked FIRST after the signature, ahead of the expiry / status /
+        // merchant refusals, and that order is load-bearing for the redeem
+        // lockout: those refusals are honest answers about a REAL code and are
+        // not counted, so a non-holder reaching them learned that someone else's
+        // code exists — spent, expired, or live at another shop (a customer
+        // names the merchant in the body, so a random one turned every live hit
+        // into an uncounted WRONG_MERCHANT). A non-holder now always gets the
+        // counted NOT_VOUCHER_OWNER; the holder still gets the specific reason.
+        //
+        // Compared against the RESOLVED holder (holderPhone), not the raw
+        // assigneePhone column: a voucher issued by assignedUserId alone has a
+        // null column, and comparing a live phone claim against null refused the
+        // voucher to the very customer it had just been delivered to.
+        boolean staffCaller = CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
+                "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER");
+        if (CallerDetails.hasAnyRole("ROLE_CUSTOMER") && !staffCaller) {
+            String callerPhone = CallerDetails.currentPhoneNumber();
+            String holder = holderPhone(v);
+            // A voucher with NO holder (bulk stock) refuses a customer bearer too,
+            // via equals(null) being false — resolving the holder must not turn
+            // "nobody owns this" into "everybody owns this". Do NOT rewrite this
+            // as Objects.equals(callerPhone, holder): that is TRUE for two nulls
+            // and would hand unassigned stock to any caller with no phone claim.
+            if (callerPhone == null || !callerPhone.equals(holder)) {
+                rejectRedemption(v, merchantId, req, "not voucher assignee");
+                recordAttempt(tenantId, req, merchantId, v.getCode(),
+                        FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher");
+                // Someone else's code: a counted guess for the redeem lockout.
+                // Same status, code and message as before.
+                throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                        "This voucher isn't assigned to you."));
+            }
+        }
+
         if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
             // The EXPIRED status flip used to be set on the managed entity right
             // here, and was then discarded by the throw below along with the
@@ -675,39 +727,6 @@ public class VoucherService {
                     FraudAttempt.Reason.WRONG_MERCHANT,
                     "expected " + v.getMerchantId() + " got " + merchantId);
             throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher can't be redeemed at this shop.");
-        }
-
-        // A genuine CUSTOMER caller may only redeem a voucher assigned to THEM.
-        // Without this a customer who knows (or guesses) a code — e.g. one they
-        // transferred away, whose old code they still remember — could redeem it
-        // straight from their own app, the redeem-side twin of the transfer
-        // rotation above. The check is scoped to real customers: staff / cashier
-        // roles (SHOP_USER, SHOP_ADMIN, MERCHANT_ADMIN, SUPER_ADMIN) present the
-        // code at the counter on the holder's behalf and carry no phone claim.
-        //
-        // Compared against the RESOLVED holder (holderPhone), not the raw
-        // assigneePhone column: a voucher issued by assignedUserId alone has a
-        // null column, and comparing a live phone claim against null refused the
-        // voucher to the very customer it had just been delivered to.
-        boolean staffCaller = CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN",
-                "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER");
-        if (CallerDetails.hasAnyRole("ROLE_CUSTOMER") && !staffCaller) {
-            String callerPhone = CallerDetails.currentPhoneNumber();
-            String holder = holderPhone(v);
-            // A voucher with NO holder (bulk stock) refuses a customer bearer too,
-            // via equals(null) being false — resolving the holder must not turn
-            // "nobody owns this" into "everybody owns this". Do NOT rewrite this
-            // as Objects.equals(callerPhone, holder): that is TRUE for two nulls
-            // and would hand unassigned stock to any caller with no phone claim.
-            if (callerPhone == null || !callerPhone.equals(holder)) {
-                rejectRedemption(v, merchantId, req, "not voucher assignee");
-                recordAttempt(tenantId, req, merchantId, v.getCode(),
-                        FraudAttempt.Reason.NOT_ASSIGNEE, "customer redeem of unassigned voucher");
-                // Someone else's LIVE code: a counted guess for the redeem
-                // lockout. Same status, code and message as before.
-                throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
-                        "This voucher isn't assigned to you."));
-            }
         }
 
         // The HOLDER's account state, resolved from the voucher — see

@@ -233,7 +233,42 @@ class VoucherRedeemLockoutTest {
     }
 
     @Test
-    void markViewed_unknownCodesAreASilent200_andNeverCount() throws Exception {
+    void markViewed_aCustomersUnknownCodes_countToo_soItIsNoOracle() throws Exception {
+        // An unknown code is still a silent 200 — but it costs a slot, or a
+        // customer could probe unknown codes for free and pay only for hits.
+        when(service.markViewed(anyString())).thenReturn(false);
+        for (int i = 0; i < 5; i++) {
+            mvc.perform(post("/loyalty/vouchers/codes/7183502649174053/viewed"))
+                    .andExpect(status().isOk());
+        }
+        mvc.perform(post("/loyalty/vouchers/codes/7183502649174053/viewed"))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
+    void markViewed_theHoldersOwnCode_neverCounts() throws Exception {
+        when(service.markViewed(anyString())).thenReturn(true);
+        for (int i = 0; i < 10; i++) {
+            mvc.perform(post("/loyalty/vouchers/codes/7183502649174053/viewed"))
+                    .andExpect(status().isOk());
+        }
+    }
+
+    @Test
+    void markViewed_aMistypedCode_neverCounts() throws Exception {
+        when(service.markViewed(anyString())).thenReturn(false);
+        for (int i = 0; i < 10; i++) {
+            mvc.perform(post("/loyalty/vouchers/codes/7183502649174054/viewed"))   // bad check digit
+                    .andExpect(status().isOk());
+        }
+    }
+
+    @Test
+    void markViewed_staffUnknownCodes_neverCount() throws Exception {
+        // Staff get a 200 for known and unknown codes alike, so there is
+        // nothing to learn and nothing to count.
+        when(service.markViewed(anyString())).thenReturn(false);
+        asStaff(UUID.randomUUID(), UUID.randomUUID());
         for (int i = 0; i < 10; i++) {
             mvc.perform(post("/loyalty/vouchers/codes/7183502649174053/viewed"))
                     .andExpect(status().isOk());

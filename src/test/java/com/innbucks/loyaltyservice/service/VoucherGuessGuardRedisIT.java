@@ -18,8 +18,15 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -28,10 +35,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * The two Lua scripts against a REAL Redis — Mockito cannot run Lua, so this is
- * the only test of what they actually do: the fifth miss locks, the window
- * slides, a lock is never extended, every key carries a TTL, and a lock that
- * somehow has none is repaired.
+ * The Lua scripts against a REAL Redis — Mockito cannot run Lua, so this is the
+ * only test of what they actually do: the fifth miss locks, the window slides,
+ * in-flight reservations use the budget, a lock is never extended, every key
+ * carries a TTL, and a lock that somehow has none is repaired.
  *
  * <p>Runs a {@code redis:7-alpine} container (the cell runs Redis 7). Set
  * {@code LOYALTY_TEST_REDIS_PORT} to use an already-running Redis on localhost
@@ -99,19 +106,33 @@ class VoucherGuessGuardRedisIT {
         return new VoucherGuessGuard.Identity("phone", "+26377" + UUID.randomUUID());
     }
 
+    private static void missOnce(VoucherGuessGuard g, VoucherGuessGuard.Identity who) {
+        g.miss(who, g.admit(who));
+    }
+
+    private static void tryOnce(VoucherGuessGuard g, VoucherGuessGuard.Identity who) {
+        g.release(who, g.admit(who));
+    }
+
+    private static long pttl(String key) {
+        return redis.getExpire(key, TimeUnit.MILLISECONDS);
+    }
+
     @Test
     void theFifthMissLocks_forTheFullDuration() {
         VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMinutes(30));
         var who = someone();
         for (int i = 0; i < 4; i++) {
-            g.recordFailure(Optional.of(who));
+            missOnce(g, who);
         }
-        assertThatCode(() -> g.checkNotLocked(Optional.of(who))).doesNotThrowAnyException();
+        assertThatCode(() -> tryOnce(g, who)).doesNotThrowAnyException();
         assertThat(redis.opsForZSet().zCard(VoucherGuessGuard.failuresKey(who))).isEqualTo(4);
+        assertThat(redis.opsForZSet().zCard(VoucherGuessGuard.inFlightKey(who)))
+                .as("the released attempt gave its slot back").isZero();
 
-        g.recordFailure(Optional.of(who));
+        missOnce(g, who);
 
-        assertThatThrownBy(() -> g.checkNotLocked(Optional.of(who)))
+        assertThatThrownBy(() -> g.admit(who))
                 .isInstanceOfSatisfying(VoucherAttemptsLockedException.class,
                         e -> assertThat(e.getRetryAfterSeconds()).isBetween(1795L, 1800L));
         assertThat(redis.hasKey(VoucherGuessGuard.failuresKey(who)))
@@ -122,31 +143,85 @@ class VoucherGuessGuardRedisIT {
     }
 
     @Test
-    void everyKeyCarriesATtl() {
+    void inFlightReservationsUseTheBudget_andAreRefusedOnlyUntilASlotFrees() {
         VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMinutes(30));
         var who = someone();
-        g.recordFailure(Optional.of(who));
-        assertThat(redis.getExpire(VoucherGuessGuard.failuresKey(who))).isBetween(1L, 60L);
-        for (int i = 0; i < 4; i++) {
-            g.recordFailure(Optional.of(who));
+        List<String> held = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            held.add(g.admit(who));
         }
-        assertThat(redis.getExpire(VoucherGuessGuard.lockKey(who))).isBetween(1795L, 1800L);
+        assertThatThrownBy(() -> g.admit(who))
+                .isInstanceOfSatisfying(VoucherAttemptsLockedException.class,
+                        e -> assertThat(e.getRetryAfterSeconds()).isBetween(58L, 60L));
+        assertThat(redis.hasKey(VoucherGuessGuard.lockKey(who))).as("busy is not a lock").isFalse();
+
+        g.release(who, held.get(0));
+        assertThatCode(() -> tryOnce(g, who)).doesNotThrowAnyException();
     }
 
     @Test
-    void missesWhileLocked_neverExtendTheLock_andAreNotLogged() throws InterruptedException {
+    void aConcurrentBurstOfGuesses_getsExactlyFiveThrough() throws Exception {
+        VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMinutes(30));
+        var who = someone();
+        int threads = 30;
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger admitted = new AtomicInteger();
+        AtomicInteger refused = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    go.await();
+                    try {
+                        String r = g.admit(who);
+                        admitted.incrementAndGet();
+                        g.miss(who, r);
+                    } catch (VoucherAttemptsLockedException e) {
+                        refused.incrementAndGet();
+                    }
+                    return null;
+                }));
+            }
+            go.countDown();
+            for (Future<?> f : futures) {
+                f.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(admitted.get()).isEqualTo(5);
+        assertThat(refused.get()).isEqualTo(threads - 5);
+        assertThat(pttl(VoucherGuessGuard.lockKey(who))).isGreaterThan(1_790_000L);
+    }
+
+    @Test
+    void everyKeyCarriesATtl() {
+        VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMinutes(30));
+        var who = someone();
+        String held = g.admit(who);
+        assertThat(pttl(VoucherGuessGuard.inFlightKey(who))).isBetween(1L, 60_000L);
+        g.miss(who, held);
+        assertThat(pttl(VoucherGuessGuard.failuresKey(who))).isBetween(1L, 60_000L);
+        for (int i = 0; i < 4; i++) {
+            missOnce(g, who);
+        }
+        assertThat(pttl(VoucherGuessGuard.lockKey(who))).isBetween(1_795_000L, 1_800_000L);
+    }
+
+    @Test
+    void aMissSettledWhileLocked_neverExtendsTheLock_andIsNotLogged() throws InterruptedException {
         VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofSeconds(30));
         var who = someone();
         for (int i = 0; i < 5; i++) {
-            g.recordFailure(Optional.of(who));
+            missOnce(g, who);
         }
-        long before = redis.getExpire(VoucherGuessGuard.lockKey(who), java.util.concurrent.TimeUnit.MILLISECONDS);
+        long before = pttl(VoucherGuessGuard.lockKey(who));
         Thread.sleep(300);
         for (int i = 0; i < 10; i++) {
-            g.recordFailure(Optional.of(who));
+            g.miss(who, "reserved-before-the-lock-" + i);
         }
-        long after = redis.getExpire(VoucherGuessGuard.lockKey(who), java.util.concurrent.TimeUnit.MILLISECONDS);
-        assertThat(after).isLessThan(before);
+        assertThat(pttl(VoucherGuessGuard.lockKey(who))).isLessThan(before);
         assertThat(redis.hasKey(VoucherGuessGuard.failuresKey(who))).isFalse();
         assertThat(registry.counter("loyalty.voucher.guard.locked", "kind", "phone").count()).isEqualTo(1);
     }
@@ -156,14 +231,26 @@ class VoucherGuessGuardRedisIT {
         VoucherGuessGuard g = guard(Duration.ofMillis(400), Duration.ofMinutes(30));
         var who = someone();
         for (int i = 0; i < 4; i++) {
-            g.recordFailure(Optional.of(who));
+            missOnce(g, who);
         }
         Thread.sleep(500);
-        g.recordFailure(Optional.of(who));
+        missOnce(g, who);
 
-        assertThatCode(() -> g.checkNotLocked(Optional.of(who))).doesNotThrowAnyException();
+        assertThatCode(() -> tryOnce(g, who)).doesNotThrowAnyException();
         assertThat(redis.opsForZSet().zCard(VoucherGuessGuard.failuresKey(who)))
                 .as("the four old misses were pruned").isEqualTo(1);
+    }
+
+    @Test
+    void aStuckReservation_agesOutWithTheWindow() throws InterruptedException {
+        VoucherGuessGuard g = guard(Duration.ofMillis(400), Duration.ofMinutes(30));
+        var who = someone();
+        for (int i = 0; i < 5; i++) {
+            g.admit(who);                                   // never settled
+        }
+        assertThatThrownBy(() -> g.admit(who)).isInstanceOf(VoucherAttemptsLockedException.class);
+        Thread.sleep(500);
+        assertThatCode(() -> tryOnce(g, who)).doesNotThrowAnyException();
     }
 
     @Test
@@ -171,23 +258,23 @@ class VoucherGuessGuardRedisIT {
         VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMillis(700));
         var who = someone();
         for (int i = 0; i < 5; i++) {
-            g.recordFailure(Optional.of(who));
+            missOnce(g, who);
         }
-        assertThatThrownBy(() -> g.checkNotLocked(Optional.of(who))).isInstanceOf(VoucherAttemptsLockedException.class);
+        assertThatThrownBy(() -> g.admit(who)).isInstanceOf(VoucherAttemptsLockedException.class);
         Thread.sleep(800);
         // The in-memory mirror of the Redis lock expires on the same schedule.
-        assertThatCode(() -> g.checkNotLocked(Optional.of(who))).doesNotThrowAnyException();
+        assertThatCode(() -> tryOnce(g, who)).doesNotThrowAnyException();
     }
 
     @Test
-    void aLockWithNoTtl_isRepairedByTheCheck_soItCanNeverBePermanent() {
+    void aLockWithNoTtl_isRepairedByTheAdmit_soItCanNeverBePermanent() {
         VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMinutes(30));
         var who = someone();
         redis.opsForValue().set(VoucherGuessGuard.lockKey(who), "1");      // no TTL
         assertThat(redis.getExpire(VoucherGuessGuard.lockKey(who))).isEqualTo(-1L);
 
-        assertThatThrownBy(() -> g.checkNotLocked(Optional.of(who))).isInstanceOf(VoucherAttemptsLockedException.class);
-        assertThat(redis.getExpire(VoucherGuessGuard.lockKey(who))).isBetween(1795L, 1800L);
+        assertThatThrownBy(() -> g.admit(who)).isInstanceOf(VoucherAttemptsLockedException.class);
+        assertThat(pttl(VoucherGuessGuard.lockKey(who))).isBetween(1_795_000L, 1_800_000L);
     }
 
     @Test
@@ -196,13 +283,13 @@ class VoucherGuessGuardRedisIT {
         VoucherGuessGuard g = guard(Duration.ofMinutes(1), Duration.ofMinutes(30));
         var who = someone();
         for (int i = 0; i < 5; i++) {
-            g.recordFailure(Optional.of(who));
+            missOnce(g, who);
         }
-        assertThatThrownBy(() -> g.checkNotLocked(Optional.of(who))).isInstanceOf(VoucherAttemptsLockedException.class);
+        assertThatThrownBy(() -> g.admit(who)).isInstanceOf(VoucherAttemptsLockedException.class);
 
-        redis.delete(VoucherGuessGuard.lockKey(who));
+        redis.delete(List.of(VoucherGuessGuard.lockKey(who), VoucherGuessGuard.failuresKey(who)));
 
-        assertThatCode(() -> g.checkNotLocked(Optional.of(who))).doesNotThrowAnyException();
+        assertThatCode(() -> tryOnce(g, who)).doesNotThrowAnyException();
     }
 
     @Test
@@ -211,8 +298,8 @@ class VoucherGuessGuardRedisIT {
         var a = someone();
         var b = someone();
         for (int i = 0; i < 5; i++) {
-            g.recordFailure(Optional.of(a));
+            missOnce(g, a);
         }
-        assertThatCode(() -> g.checkNotLocked(Optional.of(b))).doesNotThrowAnyException();
+        assertThatCode(() -> tryOnce(g, b)).doesNotThrowAnyException();
     }
 }

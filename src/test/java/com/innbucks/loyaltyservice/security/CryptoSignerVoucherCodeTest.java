@@ -8,7 +8,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the voucher code format: twelve digits, first never {@code 0}. The leading
+ * Pins the voucher code format: sixteen digits, first never {@code 0}. The leading
  * digit rule is the one a spreadsheet would otherwise break — an exported
  * {@code 0123456789} reopens as {@code 123456789}, a code that never redeems.
  */
@@ -17,9 +17,9 @@ class CryptoSignerVoucherCodeTest {
     private static final int SAMPLES = 20_000;
 
     @Test
-    void everyCodeIsTwelveDigits_neverStartingWithZero() {
+    void everyCodeIsSixteenDigits_neverStartingWithZero() {
         for (int i = 0; i < SAMPLES; i++) {
-            assertThat(CryptoSigner.randomNumericVoucherCode()).matches("[1-9][0-9]{11}");
+            assertThat(CryptoSigner.randomNumericVoucherCode()).matches("[1-9][0-9]{15}");
         }
     }
 
@@ -38,7 +38,7 @@ class CryptoSignerVoucherCodeTest {
         for (char d = '1'; d <= '9'; d++) {
             assertThat(seen).contains("0:" + d);
         }
-        assertThat(CryptoSigner.CODE_DIGITS).isEqualTo(12);
+        assertThat(CryptoSigner.CODE_DIGITS).isEqualTo(16);
         for (int pos = 1; pos < CryptoSigner.CODE_DIGITS; pos++) {
             for (char d = '0'; d <= '9'; d++) {
                 assertThat(seen).contains(pos + ":" + d);
@@ -48,8 +48,8 @@ class CryptoSignerVoucherCodeTest {
 
     @Test
     void codesDoNotRepeatInPractice() {
-        // 9×10¹¹ codes: 20k draws expect ~0.0002 collisions, so any meaningful
-        // number of repeats means the generator is not drawing from the full space.
+        // 9×10¹⁵ codes: 20k draws expect effectively no collisions, so any
+        // repeat beyond a handful means the generator is not drawing from the full space.
         Set<String> codes = new HashSet<>();
         for (int i = 0; i < SAMPLES; i++) {
             codes.add(CryptoSigner.randomNumericVoucherCode());

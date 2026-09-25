@@ -17,7 +17,7 @@ public final class CryptoSigner {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /** Length of a newly issued voucher code — see {@link #randomNumericVoucherCode()}. */
-    public static final int CODE_DIGITS = 12;
+    public static final int CODE_DIGITS = 16;
 
     private final byte[] key;
 
@@ -44,30 +44,28 @@ public final class CryptoSigner {
     }
 
     /**
-     * The voucher code issued since the switch to numeric codes: twelve digits,
-     * the first never {@code 0}. Easy to read aloud at a till and to type on a
-     * phone keypad, which the 12-character alphanumeric codes were not.
+     * The voucher code issued since the switch to numeric codes: sixteen
+     * digits, the first never {@code 0} — {@code 9087876598764567}. People see
+     * it GROUPED ({@code 9087 8765 9876 4567}, {@link
+     * com.innbucks.loyaltyservice.util.VoucherCodes#display}) and may type it
+     * back grouped; lookups normalise first. It is stored and served raw.
      *
-     * <p><b>No leading zero, on purpose.</b> Vouchers are exported to CSV and
-     * opened in spreadsheets, which read {@code 0123456789} as the number
-     * {@code 123456789} and drop the zero — turning a valid code into one that
-     * never redeems, silently. First digit 1–9 leaves 9×10¹¹ codes.
+     * <p><b>Why sixteen.</b> 9×10¹⁵ codes (~53 bits), against ~33 for ten
+     * digits and ~40 for twelve, and within a hundredfold of the old
+     * 12-character alphanumeric code's ~60. Grouping in fours is what makes the
+     * length readable. Guessing gains a CUSTOMER nothing — redemption is
+     * refused unless the voucher is assigned to their own phone — so the
+     * exposure is a staff till (which may redeem any of its merchant's codes
+     * and which the fraud velocity rule deliberately never auto-blocks) and the
+     * code-only public redeem wherever the public test surface is enabled. At
+     * that size neither is a realistic guessing target; every miss still lands
+     * in {@code fraud_attempts} as {@code INVALID_CODE}.
      *
-     * <p><b>Why twelve, not ten.</b> Ten digits (9×10⁹, ~33 bits) was the first
-     * cut; twelve buys a hundredfold more guesses per hit for two more keypresses.
-     * It is still ~40 bits against the old code's ~60 (12 symbols of 32).
-     * Guessing gains a CUSTOMER nothing — redemption is refused unless the
-     * voucher is assigned to their own phone — so the exposure is a staff till,
-     * which may redeem any of its merchant's codes and which the fraud velocity
-     * rule deliberately never auto-blocks, and the code-only public redeem
-     * wherever the public test surface is enabled. Every miss still lands in
-     * {@code fraud_attempts} as {@code INVALID_CODE}.
-     *
-     * <p><b>Spreadsheet display.</b> Twelve digits is past what a spreadsheet's
-     * General format shows whole: an exported {@code 482913760512} opens as
-     * {@code 4.82914E+11}. The value is intact (it is under 15 significant
-     * digits) and formatting the column as text or 0-decimal number shows it —
-     * a display quirk, unlike the leading zero above, which loses data.
+     * <p><b>No leading zero, on purpose.</b> A spreadsheet reads
+     * {@code 0123…} as a number and drops the zero, turning a valid code into
+     * one that never redeems. (Sixteen digits also exceeds a spreadsheet's 15
+     * significant digits, which corrupts the LAST digit of an ungrouped code —
+     * the reason exports carry the grouped form, which is text.)
      *
      * <p>Codes already issued in the old format stay valid: lookup is an exact
      * match on the stored string, and nothing re-codes existing rows.

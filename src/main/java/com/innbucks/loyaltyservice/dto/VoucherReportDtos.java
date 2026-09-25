@@ -47,7 +47,7 @@ public final class VoucherReportDtos {
                     + "merchant, shop and template names.")
     public record VoucherDetail(
             @Schema(example = "d2c8f0a1-0123-4567-1234-567890123456") UUID id,
-            @Schema(example = "482913760512") String code,
+            @Schema(example = "4829137605128364") String code,
             @Schema(example = "REDEEMED",
                     description = "ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED or REVOKED.") String status,
 

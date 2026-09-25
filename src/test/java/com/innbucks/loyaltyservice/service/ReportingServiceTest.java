@@ -363,4 +363,26 @@ class ReportingServiceTest {
         assertEquals("SUCCESS", d.redemptions().get(0).result());
         assertEquals("WESTGATE-TILL-3", d.redemptions().get(0).outletCode());
     }
+
+    @Test
+    void voucherCsv_writesTheCodeGroupedWithHyphens_whileJsonDetailStaysRaw() {
+        // A raw 16-digit code opened in a spreadsheet loses its last digit
+        // (15 significant digits) and never redeems; the hyphen-grouped form is
+        // text, and redeem accepts it. The JSON detail must stay raw.
+        UUID vid = UUID.randomUUID();
+        Voucher v = new Voucher();
+        v.setId(vid);
+        v.setTenantId(TENANT_A);
+        v.setCode("9087876598764566");
+        v.setStatus(Voucher.Status.ISSUED);
+        when(vouchers.findAll(any(Specification.class), any(PageRequest.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(v)));
+        when(vouchers.findById(vid)).thenReturn(Optional.of(v));
+
+        String csv = reporting.voucherCsv("OPERATOR", null, null, null, null, null);
+
+        String row = csv.lines().skip(1).findFirst().orElseThrow();
+        assertEquals("9087-8765-9876-4566", row.split(",")[1]);
+        assertEquals("9087876598764566", reporting.voucherDetail(TENANT_A, vid).code());
+    }
 }

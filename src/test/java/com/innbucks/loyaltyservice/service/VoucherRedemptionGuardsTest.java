@@ -25,6 +25,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -627,5 +628,74 @@ class VoucherRedemptionGuardsTest {
         assertThat(resp.status()).isEqualTo(Voucher.Status.REDEEMED.name());
         verify(merchantAuthz, never()).requireCallerAdministersMerchant(any(), any());
         verify(merchants).requireMerchant(TENANT, MERCHANT);
+    }
+
+    // ------------------------------------------------------------------
+    // codes are TYPED by people: grouped, hyphenated, lower-case
+    // ------------------------------------------------------------------
+
+    /** A real 16-digit code (check digit valid), as issued and stored. */
+    private static final String NUMERIC_CODE = "9087876598764566";
+
+    private Voucher withCode(Voucher v, String code) {
+        v.setCode(code);
+        v.setSignature(signer.sign(TENANT + ":-:" + code));
+        return v;
+    }
+
+    @Test
+    void aCodeTypedGroupedAsItWasDisplayed_redeems() {
+        Voucher v = withCode(bulkStock(), NUMERIC_CODE);
+        when(vouchers.lockByCode(NUMERIC_CODE)).thenReturn(Optional.of(v));
+        asCashier();
+
+        Dtos.RedemptionResponse resp = service.redeem(TENANT, MERCHANT,
+                new Dtos.RedeemVoucherRequest(MERCHANT, "9087 8765 9876 4566", null, "WESTGATE", "device-1", "10.0.0.1"));
+
+        assertThat(resp.status()).isEqualTo(Voucher.Status.REDEEMED.name());
+        // Looked up by the canonical form, not by what was typed.
+        verify(vouchers).lockByCode(NUMERIC_CODE);
+    }
+
+    @Test
+    void aMissIsRecordedUnderTheCanonicalCode_howeverItWasTyped() {
+        asCashier();
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT,
+                new Dtos.RedeemVoucherRequest(MERCHANT, "9087-8765-9876-4566", null, null, null, null)))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        // One guessed code is ONE fraud_attempts value, so misses correlate.
+        verify(fraud).record(eq(TENANT), any(), eq(MERCHANT), eq(NUMERIC_CODE),
+                eq(FraudAttempt.Reason.INVALID_CODE), anyString(), any(), any());
+    }
+
+    @Test
+    void aStoredCodeInAShapeThisServiceNeverMinted_isStillRedeemedAsTyped() {
+        // Pre-extraction or hand-made rows may carry a hyphen. Normalising alone
+        // would make them unredeemable; the exact-as-typed fallback keeps them.
+        Voucher v = withCode(bulkStock(), "VCH-AB12");
+        when(vouchers.lockByCode("VCH-AB12")).thenReturn(Optional.of(v));
+        asCashier();
+
+        Dtos.RedemptionResponse resp = service.redeem(TENANT, MERCHANT,
+                new Dtos.RedeemVoucherRequest(MERCHANT, "VCH-AB12", null, null, null, null));
+
+        assertThat(resp.status()).isEqualTo(Voucher.Status.REDEEMED.name());
+        verify(vouchers).lockByCode("VCHAB12");   // canonical probe first
+        verify(vouchers).lockByCode("VCH-AB12");  // then exactly as typed
+    }
+
+    @Test
+    void aViewCanBeRecordedWithTheGroupedCode() {
+        Voucher v = withCode(voucherAssignedByPhone(HOLDER_PHONE), NUMERIC_CODE);
+        when(vouchers.findByCode(NUMERIC_CODE)).thenReturn(Optional.of(v));
+        asCustomer(HOLDER_PHONE);
+
+        service.markViewed("9087 8765 9876 4566");
+
+        assertThat(v.getViewedAt()).isNotNull();
+        assertThat(v.getStatus()).isEqualTo(Voucher.Status.VIEWED);
     }
 }

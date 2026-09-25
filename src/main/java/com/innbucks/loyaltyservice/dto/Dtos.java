@@ -806,7 +806,14 @@ public class Dtos {
      * audit fact). A cashier keying in a gift between two customers appears
      * only as the issuer.
      */
-    public record VoucherResponse(UUID id, String code, String status,
+    public record VoucherResponse(UUID id,
+                                  @Schema(example = "4829137605128368", description = "The redeemable code, RAW "
+                                          + "and as a STRING — never parse it as a number (16 digits exceed "
+                                          + "JavaScript's exact-integer range). Show it to people grouped in "
+                                          + "fours: 4829 1376 0512 8368. Legacy vouchers carry a 12-character "
+                                          + "uppercase code instead; group those the same way.")
+                                  String code,
+                                  String status,
                                   // SINGLE_USE or MULTI_USE (V45). Null only on legacy rows the
                                   // migration backfill could not resolve.
                                   String voucherType,
@@ -888,15 +895,16 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Merchant performing the redemption. Required for MERCHANT_ADMIN.")
             UUID merchantId,
-            @Schema(example = "4829137605128364",
-                    description = "Voucher redemption code from the customer. New vouchers carry 16 digits, "
-                            + "never starting with 0 (e.g. 4829137605128364), shown to people grouped in fours "
-                            + "(4829 1376 0512 8364); vouchers issued before that change keep their 12-character "
-                            + "uppercase code and stay valid, so accept both. Send it as typed — spaces and "
-                            + "hyphens are ignored and letters are upper-cased before lookup. Do NOT validate for a "
-                            + "`VCH-` prefix, which is the format of a voucher PURCHASE ORDER reference, a "
-                            + "different identifier.")
-            @NotBlank String code,
+            @Schema(example = "4829137605128368", maxLength = 64,
+                    description = "Voucher redemption code from the customer, as a STRING. New vouchers carry "
+                            + "16 digits, never starting with 0 (e.g. 4829137605128368), shown to people "
+                            + "grouped in fours (4829 1376 0512 8368); vouchers issued before that change keep "
+                            + "their 12-character uppercase code and stay valid, so accept both. Send it as typed "
+                            + "— spaces and hyphens are ignored and letters are upper-cased before lookup. Never "
+                            + "parse it as a number: 16 digits exceed JavaScript's exact-integer range. Do NOT "
+                            + "validate for a `VCH-` prefix, which is the format of a voucher PURCHASE ORDER "
+                            + "reference, a different identifier.")
+            @NotBlank @Size(max = 64, message = "code must be at most 64 characters") String code,
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
                     description = "Optional, and recorded as a CLAIM only. The account whose status is "
                             + "checked (blocked / registration) is resolved from the voucher's own holder, "

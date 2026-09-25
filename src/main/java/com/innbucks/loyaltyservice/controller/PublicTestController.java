@@ -520,9 +520,15 @@ public class PublicTestController {
     public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeemVoucher(
             @Valid @RequestBody PublicRedeemVoucherRequest body) {
         requireEnabled();
-        Voucher v = vouchers.findByCode(body.code())
+        // Typed-code lookup (grouped / hyphenated / lower-case forgiven) — this
+        // 404s BEFORE voucherService.redeem runs, so normalising only there
+        // would still refuse every grouped code on this path.
+        Voucher v = voucherService.findByTypedCode(body.code())
                 .orElseThrow(() -> LoyaltyException.notFound("voucher"));
-        log.warn("PUBLIC TEST voucher redeem code={} voucherId={}", body.code(), v.getId());
+        // voucherId only: the code is a bearer credential, and WARN lines leave
+        // the process (Sentry breadcrumbs), which is why NotificationGateway
+        // never logs one either.
+        log.warn("PUBLIC TEST voucher redeem voucherId={}", v.getId());
 
         UUID merchantId = body.merchantId() != null
                 ? body.merchantId()
@@ -531,7 +537,7 @@ public class PublicTestController {
         LoyaltyUser holder = holderOf(v);
         Dtos.RedemptionResponse data = asCustomer(holder, () -> voucherService.redeem(
                 v.getTenantId(), merchantId,
-                new Dtos.RedeemVoucherRequest(merchantId, body.code(),
+                new Dtos.RedeemVoucherRequest(merchantId, v.getCode(),
                         holder == null ? null : holder.getId(), null, null, null)));
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
@@ -753,8 +759,13 @@ public class PublicTestController {
             @jakarta.validation.constraints.Size(max = 200) String note) {}
 
     public record PublicRedeemVoucherRequest(
-            @io.swagger.v3.oas.annotations.media.Schema(example = "4829137605128364")
-            @jakarta.validation.constraints.NotBlank String code,
+            @io.swagger.v3.oas.annotations.media.Schema(example = "4829137605128368", maxLength = 64,
+                    description = "The voucher code as the customer has it: 16 digits "
+                            + "(4829137605128368), or a legacy 12-character code. Grouped input "
+                            + "(4829 1376 0512 8368), hyphens and lower case are all accepted.")
+            @jakarta.validation.constraints.NotBlank
+            @jakarta.validation.constraints.Size(max = 64, message = "code must be at most 64 characters")
+            String code,
             @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
                     description = "Optional when the voucher already names a merchant.")
             UUID merchantId) {}

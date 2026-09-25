@@ -81,7 +81,7 @@ public class VoucherController {
                                       "message": "Voucher issued successfully",
                                       "data": {
                                         "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                        "code": "4829137605128364",
+                                        "code": "4829137605128368",
                                         "status": "ISSUED",
                                         "voucherType": "SINGLE_USE",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -206,7 +206,7 @@ public class VoucherController {
                                       "data": [
                                         {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "4829137605128364",
+                                          "code": "4829137605128368",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -236,7 +236,7 @@ public class VoucherController {
                                         },
                                         {
                                           "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                                          "code": "H4NX8W2VQ7RJ",
+                                          "code": "7183502649174053",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -693,7 +693,12 @@ public class VoucherController {
             )
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Void>> markViewed(@PathVariable String code) {
+    public ResponseEntity<ApiResult<Void>> markViewed(
+            @io.swagger.v3.oas.annotations.Parameter(example = "4829137605128368",
+                    description = "The voucher code — send the raw value from the API. Grouped input is "
+                            + "accepted if its spaces are URL-encoded as %20 (a '+' in a path is a literal "
+                            + "plus, not a space, and will not match).")
+            @PathVariable String code) {
         voucherService.markViewed(code);
         return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
     }
@@ -723,7 +728,7 @@ public class VoucherController {
                                         "content": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "4829137605128364",
+                                            "code": "4829137605128368",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -856,7 +861,7 @@ public class VoucherController {
                                         "content": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "4829137605128364",
+                                            "code": "4829137605128368",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -886,7 +891,7 @@ public class VoucherController {
                                           },
                                           {
                                             "id": "f4eab2c3-2345-6789-3456-789012345678",
-                                            "code": "T6YB3ZPD9KMF",
+                                            "code": "5630219487361501",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",

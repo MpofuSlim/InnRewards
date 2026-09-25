@@ -384,6 +384,43 @@ class PublicTestControllerTest {
         verify(transfers, never()).transfer(any(), any());
     }
 
+    // ---- voucher codes are typed by people ----
+
+    @Test
+    void redeemVoucher_acceptsTheCodeGrouped_andRedeemsTheStoredCode() {
+        UUID tenant = UUID.randomUUID();
+        UUID merchant = UUID.randomUUID();
+        com.innbucks.loyaltyservice.entity.Voucher v = new com.innbucks.loyaltyservice.entity.Voucher();
+        v.setId(UUID.randomUUID());
+        v.setTenantId(tenant);
+        v.setMerchantId(merchant);
+        v.setCode("9087876598764566");
+        // This lookup runs BEFORE voucherService.redeem and 404s on a miss, so it
+        // must be the typed-code lookup, not an exact repository match.
+        when(voucherService.findByTypedCode("9087 8765 9876 4566")).thenReturn(java.util.Optional.of(v));
+
+        controller(true).redeemVoucher(
+                new PublicTestController.PublicRedeemVoucherRequest("9087 8765 9876 4566", null));
+
+        org.mockito.ArgumentCaptor<com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest> req =
+                org.mockito.ArgumentCaptor.forClass(com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest.class);
+        verify(voucherService).redeem(eq(tenant), eq(merchant), req.capture());
+        assertThat(req.getValue().code()).isEqualTo("9087876598764566");
+        verify(vouchers, never()).findByCode(any());
+    }
+
+    @Test
+    void redeemVoucher_unknownCode_is404() {
+        when(voucherService.findByTypedCode(any())).thenReturn(java.util.Optional.empty());
+
+        assertThatThrownBy(() -> controller(true).redeemVoucher(
+                new PublicTestController.PublicRedeemVoucherRequest("1234 5678 9012 3456", null)))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getStatus())
+                        .isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND));
+        verify(voucherService, never()).redeem(any(), any(), any());
+    }
+
     private static LoyaltyUser user(UUID id) {
         LoyaltyUser u = new LoyaltyUser();
         u.setId(id);

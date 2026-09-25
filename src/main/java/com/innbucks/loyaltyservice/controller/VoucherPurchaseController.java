@@ -174,7 +174,7 @@ public class VoucherPurchaseController {
                                         "paidAt": "2026-09-17T19:52:10Z",
                                         "voucher": {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "K7M2PQ9XR4TB",
+                                          "code": "4829137605128368",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -253,7 +253,7 @@ public class VoucherPurchaseController {
                                         "paidAt": "2026-09-17T19:55:00Z",
                                         "voucher": {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "K7M2PQ9XR4TB",
+                                          "code": "4829137605128368",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",

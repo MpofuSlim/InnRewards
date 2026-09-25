@@ -20,6 +20,7 @@ import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
+import com.innbucks.loyaltyservice.util.VoucherCodes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -31,6 +32,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -469,7 +471,7 @@ public class VoucherService {
 
     private String uniqueCode() {
         for (int i = 0; i < 8; i++) {
-            String code = CryptoSigner.randomVoucherCode(12);
+            String code = CryptoSigner.randomNumericVoucherCode();
             if (vouchers.findByCode(code).isEmpty()) return code;
         }
         throw new IllegalStateException("Failed to allocate unique voucher code");
@@ -481,8 +483,41 @@ public class VoucherService {
     // that status could only ever report an intention. The dispatch instant is
     // stamped once, in finishIssue, onto Voucher.deliveredAt.
 
+    /**
+     * Finds a voucher by a code a PERSON typed or pasted: the normalised form
+     * first ({@link VoucherCodes#normalize} — spaces, dashes and case
+     * forgiven), then the input exactly as typed.
+     *
+     * <p>The second probe is not redundant. Stored codes are matched EXACTLY,
+     * and this service has only ever minted upper-case alphanumerics or
+     * digits, which normalise to themselves — but rows written before this
+     * repo's history (the pre-extraction loyalty-service shared the database)
+     * or inserted by hand could carry a hyphen or lower case. Normalising alone
+     * would make such a voucher unredeemable the moment this shipped; the
+     * exact probe keeps it working at the cost of one indexed miss, and only
+     * when the input was not already canonical.
+     */
+    public Optional<Voucher> findByTypedCode(String typed) {
+        String canonical = VoucherCodes.normalize(typed);
+        Optional<Voucher> v = vouchers.findByCode(canonical);
+        if (v.isEmpty() && typed != null && !typed.strip().equals(canonical)) {
+            v = vouchers.findByCode(typed.strip());
+        }
+        return v;
+    }
+
+    /** {@link #findByTypedCode}, taking the row lock redemption needs. */
+    private Optional<Voucher> lockByTypedCode(String typed) {
+        String canonical = VoucherCodes.normalize(typed);
+        Optional<Voucher> v = vouchers.lockByCode(canonical);
+        if (v.isEmpty() && typed != null && !typed.strip().equals(canonical)) {
+            v = vouchers.lockByCode(typed.strip());
+        }
+        return v;
+    }
+
     public void markViewed(String code) {
-        vouchers.findByCode(code).ifPresent(v -> {
+        findByTypedCode(code).ifPresent(v -> {
             // Only the voucher's owner (assignee) — or issuing/merchant staff — may
             // record a VIEW. Without this any authenticated principal could mark an
             // arbitrary code viewed and pollute issue→view analytics.
@@ -538,9 +573,13 @@ public class VoucherService {
     }
 
     private Dtos.RedemptionResponse doRedeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
-        Voucher v = vouchers.lockByCode(req.code()).orElse(null);
+        Voucher v = lockByTypedCode(req.code()).orElse(null);
         if (v == null || !v.getTenantId().equals(tenantId)) {
-            fraud.record(tenantId, req.userId(), merchantId, req.code(),
+            // The CANONICAL spelling, so one guessed code is one fraud_attempts
+            // value however it was typed. Never longer than the input (see
+            // VoucherCodes.normalize), so the request's @Size keeps it inside
+            // the VARCHAR(64) column.
+            fraud.record(tenantId, req.userId(), merchantId, VoucherCodes.normalize(req.code()),
                     FraudAttempt.Reason.INVALID_CODE, "voucher not found",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.notFound("voucher");
@@ -548,7 +587,7 @@ public class VoucherService {
 
         String expectedSig = signer.sign(signPayload(tenantId, v.getTemplateId(), v.getCode()));
         if (!expectedSig.equals(v.getSignature())) {
-            fraud.record(tenantId, req.userId(), merchantId, req.code(),
+            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.forbidden("BAD_SIGNATURE", "This voucher couldn't be verified — its signature is invalid.");

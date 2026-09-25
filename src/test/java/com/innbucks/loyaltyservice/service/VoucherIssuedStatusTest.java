@@ -165,6 +165,25 @@ class VoucherIssuedStatusTest {
     }
 
     @Test
+    void anIssuedCode_isSixteenDigits_neverLeadingZero() {
+        // Readable at a till and typeable on a keypad; no leading zero so a
+        // CSV opened in a spreadsheet cannot turn a valid code into a dead one.
+        service.issue(TENANT, request(Voucher.DeliveryChannel.NONE));
+        assertThat(saved().getCode()).matches("[1-9][0-9]{15}");
+    }
+
+    @Test
+    void bulkStockCodes_areSixteenDigits_neverLeadingZero() {
+        service.issueBulk(TENANT, new Dtos.BulkIssueRequest(MERCHANT, null,
+                new BigDecimal("5.00"), "USD", null, 3, "CAMPAIGN",
+                Voucher.DeliveryChannel.NONE));
+        ArgumentCaptor<Voucher> cap = ArgumentCaptor.forClass(Voucher.class);
+        verify(vouchers, times(3)).save(cap.capture());
+        assertThat(cap.getAllValues()).allSatisfy(v ->
+                assertThat(v.getCode()).matches("[1-9][0-9]{15}"));
+    }
+
+    @Test
     void bulkStock_withNoChannelAtAll_isStillUndispatched() {
         // Bulk has no assignee, so there is nobody to send to — and that, not
         // the channel, is what stops it. Proving it with the channel OMITTED

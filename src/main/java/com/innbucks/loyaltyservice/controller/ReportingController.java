@@ -431,7 +431,7 @@ public class ReportingController {
                                         "activeVouchers": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "K7M2PQ9XR4TB",
+                                            "code": "4829137605",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -995,7 +995,7 @@ public class ReportingController {
                                               "currency": "USD",
                                               "pointsAwarded": -500.0000,
                                               "direction": "REDEEM",
-                                              "reference": "K7M2PQ9XR4TB",
+                                              "reference": "4829137605",
                                               "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                               "ruleId": null,
                                               "campaignId": null
@@ -1119,7 +1119,7 @@ public class ReportingController {
                                         "content": [
                                           {
                                             "id": "fa1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
-                                            "voucherCode": "K7M2PQ9XR4TB",
+                                            "voucherCode": "4829137605",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "reason": "WRONG_MERCHANT",
                                             "detail": "voucher scoped to merchant c5d1e3f4 but presented at b4c0d2e3",
@@ -1178,7 +1178,7 @@ public class ReportingController {
                             examples = @ExampleObject(name = "CSV", value = """
                                     id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber
                                     11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001,INV-1746355200000-4821
-                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:K7M2PQ9XR4TB,INV-1746355200000-4821
+                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:4829137605,INV-1746355200000-4821
                                     33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit,
                                     """)
                     )
@@ -1237,7 +1237,7 @@ public class ReportingController {
                   "content": [
                     {
                       "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                      "code": "K7M2PQ9XR4TB",
+                      "code": "4829137605",
                       "status": "REDEEMED",
                       "tenantId": "11111111-1111-1111-1111-111111111111",
                       "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -1407,7 +1407,7 @@ public class ReportingController {
                                       "message": "Voucher detail retrieved successfully",
                                       "data": {
                                         "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                                        "code": "K7M2PQ9XR4TB",
+                                        "code": "4829137605",
                                         "status": "REDEEMED",
                                         "tenantId": "11111111-1111-1111-1111-111111111111",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -1482,7 +1482,7 @@ public class ReportingController {
                     + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
                     + "redeemedAt,expiresAt,expired,redemptionCount,"
                     + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"
-                    + "d2c8f0a1-0123-4567-1234-567890123456,K7M2PQ9XR4TB,REDEEMED,11111111-1111-1111-1111-111111111111,"
+                    + "d2c8f0a1-0123-4567-1234-567890123456,4829137605,REDEEMED,11111111-1111-1111-1111-111111111111,"
                     + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
                     + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
                     + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"

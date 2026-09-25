@@ -888,10 +888,13 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Merchant performing the redemption. Required for MERCHANT_ADMIN.")
             UUID merchantId,
-            @Schema(example = "K7M2PQ9XR4TB",
-                    description = "Voucher redemption code from the customer. 12 characters, uppercase, "
-                            + "with no prefix and no I/O/0/1 — do NOT validate for a `VCH-` prefix, which "
-                            + "is the format of a voucher PURCHASE ORDER reference, a different identifier.")
+            @Schema(example = "4829137605",
+                    description = "Voucher redemption code from the customer. New vouchers carry 10 digits, "
+                            + "never starting with 0 (e.g. 4829137605); vouchers issued before that change "
+                            + "keep their 12-character uppercase code and stay valid, so accept both — send "
+                            + "the code exactly as issued, digits only, no spaces. Do NOT validate for a "
+                            + "`VCH-` prefix, which is the format of a voucher PURCHASE ORDER reference, a "
+                            + "different identifier.")
             @NotBlank String code,
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
                     description = "Optional, and recorded as a CLAIM only. The account whose status is "

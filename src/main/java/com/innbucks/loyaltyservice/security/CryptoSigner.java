@@ -15,8 +15,6 @@ import java.util.HexFormat;
 public final class CryptoSigner {
 
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final char[] CODE_ALPHABET =
-            "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
 
     private final byte[] key;
 
@@ -42,11 +40,31 @@ public final class CryptoSigner {
                 signature.getBytes(StandardCharsets.UTF_8));
     }
 
-    public static String randomVoucherCode(int length) {
-        if (length < 8) length = 8;
-        StringBuilder sb = new StringBuilder(length);
-        for (int i = 0; i < length; i++) {
-            sb.append(CODE_ALPHABET[RANDOM.nextInt(CODE_ALPHABET.length)]);
+    /**
+     * The voucher code issued since the switch to numeric codes: ten digits, the
+     * first never {@code 0}. Easy to read aloud at a till and to type on a phone
+     * keypad, which the 12-character alphanumeric codes were not.
+     *
+     * <p><b>No leading zero, on purpose.</b> Vouchers are exported to CSV and
+     * opened in spreadsheets, which read {@code 0123456789} as the number
+     * {@code 123456789} and drop the zero — turning a valid code into one that
+     * never redeems, silently. First digit 1–9 leaves 9×10⁹ codes.
+     *
+     * <p><b>The trade-off.</b> That is ~33 bits against the old code's ~60
+     * (12 symbols of 32). Guessing gains a CUSTOMER nothing — redemption is
+     * refused unless the voucher is assigned to their own phone — so the
+     * exposure is a staff till, which may redeem any of its merchant's codes and
+     * which the fraud velocity rule deliberately never auto-blocks. Every miss
+     * still lands in {@code fraud_attempts} as {@code INVALID_CODE}.
+     *
+     * <p>Codes already issued in the old format stay valid: lookup is an exact
+     * match on the stored string, and nothing re-codes existing rows.
+     */
+    public static String randomNumericVoucherCode() {
+        StringBuilder sb = new StringBuilder(10);
+        sb.append((char) ('1' + RANDOM.nextInt(9)));
+        for (int i = 1; i < 10; i++) {
+            sb.append((char) ('0' + RANDOM.nextInt(10)));
         }
         return sb.toString();
     }

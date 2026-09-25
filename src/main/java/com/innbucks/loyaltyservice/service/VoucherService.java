@@ -469,7 +469,7 @@ public class VoucherService {
 
     private String uniqueCode() {
         for (int i = 0; i < 8; i++) {
-            String code = CryptoSigner.randomVoucherCode(12);
+            String code = CryptoSigner.randomNumericVoucherCode();
             if (vouchers.findByCode(code).isEmpty()) return code;
         }
         throw new IllegalStateException("Failed to allocate unique voucher code");

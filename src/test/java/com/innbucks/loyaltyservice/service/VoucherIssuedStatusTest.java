@@ -165,22 +165,22 @@ class VoucherIssuedStatusTest {
     }
 
     @Test
-    void anIssuedCode_isTenDigits_neverLeadingZero() {
+    void anIssuedCode_isTwelveDigits_neverLeadingZero() {
         // Readable at a till and typeable on a keypad; no leading zero so a
         // CSV opened in a spreadsheet cannot turn a valid code into a dead one.
         service.issue(TENANT, request(Voucher.DeliveryChannel.NONE));
-        assertThat(saved().getCode()).matches("[1-9][0-9]{9}");
+        assertThat(saved().getCode()).matches("[1-9][0-9]{11}");
     }
 
     @Test
-    void bulkStockCodes_areTenDigits_neverLeadingZero() {
+    void bulkStockCodes_areTwelveDigits_neverLeadingZero() {
         service.issueBulk(TENANT, new Dtos.BulkIssueRequest(MERCHANT, null,
                 new BigDecimal("5.00"), "USD", null, 3, "CAMPAIGN",
                 Voucher.DeliveryChannel.NONE));
         ArgumentCaptor<Voucher> cap = ArgumentCaptor.forClass(Voucher.class);
         verify(vouchers, times(3)).save(cap.capture());
         assertThat(cap.getAllValues()).allSatisfy(v ->
-                assertThat(v.getCode()).matches("[1-9][0-9]{9}"));
+                assertThat(v.getCode()).matches("[1-9][0-9]{11}"));
     }
 
     @Test

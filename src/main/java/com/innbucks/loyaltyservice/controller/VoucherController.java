@@ -81,7 +81,7 @@ public class VoucherController {
                                       "message": "Voucher issued successfully",
                                       "data": {
                                         "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                        "code": "4829137605",
+                                        "code": "482913760512",
                                         "status": "ISSUED",
                                         "voucherType": "SINGLE_USE",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -206,7 +206,7 @@ public class VoucherController {
                                       "data": [
                                         {
                                           "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                          "code": "4829137605",
+                                          "code": "482913760512",
                                           "status": "ISSUED",
                                           "voucherType": "SINGLE_USE",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -723,7 +723,7 @@ public class VoucherController {
                                         "content": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "4829137605",
+                                            "code": "482913760512",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -856,7 +856,7 @@ public class VoucherController {
                                         "content": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "4829137605",
+                                            "code": "482913760512",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",

@@ -753,7 +753,7 @@ public class PublicTestController {
             @jakarta.validation.constraints.Size(max = 200) String note) {}
 
     public record PublicRedeemVoucherRequest(
-            @io.swagger.v3.oas.annotations.media.Schema(example = "4829137605")
+            @io.swagger.v3.oas.annotations.media.Schema(example = "482913760512")
             @jakarta.validation.constraints.NotBlank String code,
             @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
                     description = "Optional when the voucher already names a merchant.")

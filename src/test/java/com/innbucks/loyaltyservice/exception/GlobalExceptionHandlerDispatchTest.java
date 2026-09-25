@@ -66,6 +66,16 @@ class GlobalExceptionHandlerDispatchTest {
         String required(@RequestParam("since") String since) {
             return since;
         }
+
+        @GetMapping("/probe/locked")
+        String locked() {
+            throw new VoucherAttemptsLockedException(1800);
+        }
+
+        @GetMapping("/probe/unknown-voucher")
+        String unknownVoucher() {
+            throw VoucherCodeGuessException.unknownCode();
+        }
     }
 
     private MockMvc mvc;
@@ -173,5 +183,28 @@ class GlobalExceptionHandlerDispatchTest {
         mvc.perform(get("/probe/vouchers/not-a-uuid"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Invalid value for 'id'."));
+    }
+
+    @Test
+    void theRedeemLockout_is429_withRetryAfter_noStore_andTheSecondsInTheBody() throws Exception {
+        // Picked over the generic LoyaltyException handler because it is more
+        // specific — which is the whole thing this asserts: through that one it
+        // would still be a 429 but with no Retry-After and data: null.
+        mvc.perform(get("/probe/locked"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "1800"))
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.code").value("VOUCHER_ATTEMPTS_LOCKED"))
+                .andExpect(jsonPath("$.message").value(VoucherAttemptsLockedException.MESSAGE))
+                .andExpect(jsonPath("$.data.retryAfterSeconds").value(1800));
+    }
+
+    @Test
+    void aCountedUnknownCode_isStillTheSame404OnTheWire() throws Exception {
+        mvc.perform(get("/probe/unknown-voucher"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("404 NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("voucher not found"))
+                .andExpect(jsonPath("$.data").doesNotExist());
     }
 }

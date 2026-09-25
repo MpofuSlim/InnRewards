@@ -4,6 +4,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-@EnableConfigurationProperties(LoyaltyProperties.class)
+@EnableConfigurationProperties({LoyaltyProperties.class, VoucherGuardProperties.class})
 public class LoyaltyConfig {
 }

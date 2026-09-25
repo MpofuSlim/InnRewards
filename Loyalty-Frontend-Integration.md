@@ -381,6 +381,39 @@ auto-block the account. Without a fingerprint that protection can't run.
 Check `usesRemaining` in the response: a multi-use voucher returns
 `PARTIALLY_USED` with a remaining count rather than `REDEEMED`.
 
+### Mistyped codes and the guessing lockout
+
+| `code` | Status | Meaning | What to show |
+|---|---|---|---|
+| `VOUCHER_CODE_MISTYPED` | 400 | The check digit shows a wrong, swapped, missing or extra digit. Worked out from the code alone; **never counts** toward the lockout. | "That code doesn't look right — check it and try again." |
+| `404 NOT_FOUND` | 404 | No such voucher. **Counts.** | "We couldn't find that voucher." |
+| `NOT_VOUCHER_OWNER` | 403 | A real voucher, but not this customer's. **Counts.** | the `message` |
+| `VOUCHER_ATTEMPTS_LOCKED` | 429 | 5 counted misses within a minute: this caller is locked out of voucher redemption for **30 minutes**. | "Too many incorrect codes. Try again in N minutes." |
+
+```json
+{
+  "code": "VOUCHER_ATTEMPTS_LOCKED",
+  "message": "Too many incorrect voucher codes were tried. Please wait and try again later.",
+  "data": { "retryAfterSeconds": 1800 }
+}
+```
+
+- **Read the wait from `data.retryAfterSeconds`** (also sent as the
+  `Retry-After` header, which a browser may not expose to your code). Show a
+  countdown; don't auto-retry — every call during the lock is refused, **even
+  with the correct code**, and the lock is never shortened or extended by more
+  attempts.
+- **Who is locked:** a customer by their phone, a cashier by their own staff
+  account. One cashier being locked does not affect the other tills at the
+  shop — another staff login can carry on.
+- **What never counts:** a mistyped code (the 400 above), an expired, revoked
+  or already-used voucher, a voucher for another shop, or a holder-account
+  problem. Only unknown codes and other people's codes do.
+- **A successful redemption does not reset the count.**
+- `POST /loyalty/vouchers/codes/{code}/viewed` shares the same lock: its
+  `NOT_VOUCHER_OWNER` 403 counts, and it answers 429 while the caller is locked.
+- The staging-only `/loyalty/public/vouchers/redeem` is **not** locked.
+
 ---
 
 ## 9. QR

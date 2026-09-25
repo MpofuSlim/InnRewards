@@ -6,6 +6,8 @@ import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
+import com.innbucks.loyaltyservice.exception.VoucherCodeGuessException;
+import com.innbucks.loyaltyservice.service.VoucherGuessGuard;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -39,11 +42,14 @@ public class VoucherController {
 
     private final VoucherService voucherService;
     private final TenantContext tenantContext;
+    private final VoucherGuessGuard guessGuard;
 
     public VoucherController(VoucherService voucherService,
-                             TenantContext tenantContext) {
+                             TenantContext tenantContext,
+                             VoucherGuessGuard guessGuard) {
         this.voucherService = voucherService;
         this.tenantContext = tenantContext;
+        this.guessGuard = guessGuard;
     }
 
     @PostMapping("/issue")
@@ -316,7 +322,14 @@ public class VoucherController {
                           "never the `userId` sent in the body, which is recorded as a claim only. A " +
                           "staff-operated or service-to-service call blocks nobody: the velocity signal is " +
                           "keyed by device, and at a till the device is the shop's while the person " +
-                          "presenting codes is a customer.")
+                          "presenting codes is a customer.\n\n" +
+                          "**Guessing lockout:** 5 unknown codes (404) or someone else's live code " +
+                          "(403 `NOT_VOUCHER_OWNER`) within one minute locks the caller out of voucher " +
+                          "redemption for 30 minutes (429 `VOUCHER_ATTEMPTS_LOCKED`). Keyed on the " +
+                          "caller's own token — a customer's phone, a staff member's account — so one " +
+                          "cashier's lock never blocks another till. A mistyped code (400 " +
+                          "`VOUCHER_CODE_MISTYPED`), an expired, revoked or spent voucher, or a voucher " +
+                          "at the wrong shop never counts. A successful redemption does not reset the count.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -342,7 +355,11 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error, or EXPIRED — past the voucher's expiresAt. Bean "
+                    description = "Validation error; VOUCHER_CODE_MISTYPED — the code's check digit shows "
+                            + "a wrong, swapped, missing or extra digit (worked out from the code alone, so it "
+                            + "says nothing about which vouchers exist, and it never counts toward the "
+                            + "lockout: ask the customer to read it again); or EXPIRED — past the voucher's "
+                            + "expiresAt. Bean "
                             + "validation always answers `Validation failed` with the offending fields "
                             + "in `data`; the field name is never in `message`. On EXPIRED the voucher "
                             + "is also moved to the EXPIRED status, and that lands BEFORE this response "
@@ -362,6 +379,13 @@ public class VoucherController {
                                               "data": { "code": "must not be blank" }
                                             }
                                             """),
+                                    @ExampleObject(name = "Mistyped code", value = """
+                                            {
+                                              "code": "VOUCHER_CODE_MISTYPED",
+                                              "message": "That voucher code doesn't look right. Please check it and try again.",
+                                              "data": null
+                                            }
+                                            """),
                                     @ExampleObject(name = "Expired", value = """
                                             {
                                               "code": "EXPIRED",
@@ -373,7 +397,8 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
-                    description = "Voucher code not found",
+                    description = "No voucher with this code in the tenant. Counts toward the guessing "
+                            + "lockout.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -395,7 +420,8 @@ public class VoucherController {
                             * `WRONG_MERCHANT` — not valid at this merchant.
                             * `NOT_VOUCHER_OWNER` — a customer bearer redeeming a voucher that is not \
                             theirs. The most likely 403 an app sees, and never returned to a staff \
-                            caller, who presents the code on the holder's behalf.
+                            caller, who presents the code on the holder's behalf. Counts toward the \
+                            guessing lockout, like an unknown code.
                             * `NOT_MERCHANT_OWNER` — the caller does not administer the merchant it \
                             named. Only reachable for a caller whose token carries no `merchantId` \
                             claim; a claim-pinned caller cannot name another merchant at all.
@@ -431,13 +457,49 @@ public class VoucherController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "VOUCHER_ATTEMPTS_LOCKED — this caller presented 5 unknown or not-theirs "
+                            + "codes within a minute and is locked out of voucher redemption. The lock lasts "
+                            + "30 minutes from the attempt that tripped it and is never extended by attempts "
+                            + "made while locked. A CORRECT code is refused too until it ends. `Retry-After` "
+                            + "(seconds) and `data.retryAfterSeconds` both say how long is left.",
+                    headers = @io.swagger.v3.oas.annotations.headers.Header(name = "Retry-After",
+                            description = "Seconds until the caller may try again",
+                            schema = @Schema(type = "integer", example = "1800")),
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Locked out", value = """
+                                    {
+                                      "code": "VOUCHER_ATTEMPTS_LOCKED",
+                                      "message": "Too many incorrect voucher codes were tried. Please wait and try again later.",
+                                      "data": { "retryAfterSeconds": 1800 }
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
-        Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(),
-                CallerDetails.resolveMerchantId(req.merchantId()), req);
-        return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
+        // The lock check runs FIRST — before tenant resolution, the lookup and
+        // the transaction — so a locked caller learns nothing and holds no row
+        // lock. The miss is counted AFTER the service call: VoucherService is
+        // @Transactional, so by the time the exception reaches here the
+        // transaction has rolled back and released its row lock, and a slow
+        // Redis cannot lengthen it. The attempt that trips the lock keeps its
+        // own 404/403; the next one gets the 429.
+        Optional<VoucherGuessGuard.Identity> caller = guessGuard.callerIdentity();
+        guessGuard.checkNotLocked(caller);
+        try {
+            Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(),
+                    CallerDetails.resolveMerchantId(req.merchantId()), req);
+            return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
+        } catch (VoucherCodeGuessException guess) {
+            guessGuard.recordFailure(caller);
+            throw guess;
+        }
     }
 
     @PostMapping("/{id}/transfer")
@@ -678,7 +740,9 @@ public class VoucherController {
                     description = "The caller is neither the voucher's holder nor merchant/issuing staff. "
                             + "There is deliberately NO 404: an unknown code is a silent 200, because this "
                             + "is a best-effort read receipt (VoucherService.markViewed uses "
-                            + "findByCode().ifPresent).",
+                            + "findByTypedCode().ifPresent). Because a real code answers 403 where an "
+                            + "unknown one answers 200, this refusal counts toward the voucher guessing "
+                            + "lockout shared with /redeem.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -687,6 +751,28 @@ public class VoucherController {
                                       "code": "NOT_VOUCHER_OWNER",
                                       "message": "you can only act on your own vouchers",
                                       "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "VOUCHER_ATTEMPTS_LOCKED — this caller presented 5 unknown or not-theirs "
+                            + "codes within a minute (on /redeem or here) and is locked out of voucher redemption and of this endpoint. The lock lasts "
+                            + "30 minutes from the attempt that tripped it and is never extended by attempts "
+                            + "made while locked. A CORRECT code is refused too until it ends. `Retry-After` "
+                            + "(seconds) and `data.retryAfterSeconds` both say how long is left.",
+                    headers = @io.swagger.v3.oas.annotations.headers.Header(name = "Retry-After",
+                            description = "Seconds until the caller may try again",
+                            schema = @Schema(type = "integer", example = "1800")),
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Locked out", value = """
+                                    {
+                                      "code": "VOUCHER_ATTEMPTS_LOCKED",
+                                      "message": "Too many incorrect voucher codes were tried. Please wait and try again later.",
+                                      "data": { "retryAfterSeconds": 1800 }
                                     }
                                     """)
                     )
@@ -699,7 +785,17 @@ public class VoucherController {
                             + "accepted if its spaces are URL-encoded as %20 (a '+' in a path is a literal "
                             + "plus, not a space, and will not match).")
             @PathVariable String code) {
-        voucherService.markViewed(code);
+        // Shares the redeem lockout: a real code someone else holds is a 403
+        // here while an unknown one is a silent 200, so this endpoint is an
+        // oracle for which codes exist unless its refusals count too.
+        Optional<VoucherGuessGuard.Identity> caller = guessGuard.callerIdentity();
+        guessGuard.checkNotLocked(caller);
+        try {
+            voucherService.markViewed(code);
+        } catch (VoucherCodeGuessException guess) {
+            guessGuard.recordFailure(caller);
+            throw guess;
+        }
         return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
     }
 

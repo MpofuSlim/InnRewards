@@ -40,7 +40,7 @@
         <!-- See the httpcore5 dependencyManagement entries below: two HIGH DoS
              CVEs in 5.4.2, which reaches the service image transitively via
              httpclient5 and failed the Release Trivy gate before any push. -->
-        <httpcore5.version>5.4.3</httpcore5.version>
+        <httpcore5.version>5.4.4</httpcore5.version>
         <!-- postgres JDBC 42.7.10 (pinned by Boot 4.0.6's BOM) has CVE-2026-42198
              (HIGH): client-side DoS via malicious SCRAM-SHA-256 response. 42.7.11
              fixes it. Drop on Boot upgrade once BOM catches up. -->

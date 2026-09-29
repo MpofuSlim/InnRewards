@@ -2,7 +2,8 @@
 
 Everything a customer-facing frontend needs to integrate with loyalty-service:
 points wallet, points statement, points transfer and redemption, vouchers by
-phone, voucher transfer and voucher redemption.
+phone, voucher transfer and voucher redemption — plus the rules the till app
+(`SHOP_USER`) has to respect (§10).
 
 Pairs with the Swagger UI, which is the authority on every field. This doc
 covers the cross-cutting rules that don't live on any single endpoint — the
@@ -30,13 +31,84 @@ Authorization: Bearer <jwt>
 X-Tenant-Id: <tenant-uuid>
 ```
 
-**The tenant header is not optional.** Every endpoint in this doc is
+**The tenant header is not optional.** Nearly every endpoint in this doc is
 tenant-scoped, and a request without a valid `X-Tenant-Id` (or `X-Tenant-Code:
-<slug>` as an alternative) is rejected before the controller runs. This is the
+<slug>` as an alternative) is rejected before the controller runs. The only
+exceptions are the caller-scoped ones — `GET /loyalty/users/me`,
+`GET /loyalty/users/me/wallet`, `/loyalty/session/**` — and the staging-only
+`/loyalty/public/**`, which need no tenant header. This is the
 single most common reason a correct-looking call fails during first
 integration.
 
-The JWT comes from user-service login. loyalty-service only verifies it.
+The JWT comes from user-service login (staff) or ticketing's OTP verify
+(customers, the `loyaltyToken`). loyalty-service verifies both.
+
+### Keeping a customer signed in — `/loyalty/session`
+
+The OTP-minted `loyaltyToken` lives 12 hours. Don't send a second SMS when it
+runs out; trade it once for a renewable chain:
+
+| Call | Credential | Body |
+|---|---|---|
+| `POST /loyalty/session/exchange` | `Authorization: Bearer <loyaltyToken>` | none — call ONCE, right after OTP verify |
+| `POST /loyalty/session/refresh` | the refresh token, **in the body** (no bearer needed) | `{ "refreshToken": "LRT-…" }` |
+| `POST /loyalty/session/logout` | same | `{ "refreshToken": "LRT-…" }` |
+
+`exchange` (`"Session established"`) and `refresh` (`"Session refreshed"`) both
+return:
+
+```json
+{
+  "code": "200 OK",
+  "message": "Session refreshed",
+  "data": {
+    "phoneNumber": "+263771234567",
+    "loyaltyToken": "eyJhbGciOiJIUzI1NiJ9…",
+    "expiresInSeconds": 43200,
+    "refreshToken": "LRT-9tR2xQ1sK4mZ7pC0aB6vN3jH8dL5fG2yW1eU4oI0sA",
+    "refreshExpiresInSeconds": 7776000
+  }
+}
+```
+
+- **Every refresh returns a NEW refresh token — store it and throw the old one
+  away.** Presenting a used one is treated as theft: the whole chain is revoked,
+  this device included, and the customer must verify by OTP again.
+- Every refusal is one `401 SESSION_REFRESH_REJECTED`. The fix is always the
+  same: send the customer back through OTP.
+- `logout` is always `200`, even for an unknown token.
+- The refresh window slides (90 days): an app in regular use never has to
+  re-verify.
+
+### Finding your loyalty ids — `GET /loyalty/users/me`
+
+No path, no body; the phone comes from the token. One row per tenant the
+customer has transacted with:
+
+```json
+{
+  "code": "200 OK",
+  "message": "Accounts retrieved",
+  "data": {
+    "phoneNumber": "+263771234567",
+    "accounts": [
+      {
+        "userId": "11111111-2222-3333-4444-555555555555",
+        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+        "status": "ACTIVE"
+      }
+    ]
+  }
+}
+```
+
+`userId` is the **loyalty user id** the spend endpoints want (§4, §5) and
+`tenantId` is what goes in `X-Tenant-Id`. `PENDING` rows are returned on
+purpose — that status is why a spend would be refused, so show it rather than
+hide the account. An empty `accounts` list is a normal `200` (never
+transacted); the wallet (§2) may still hold points. A staff token gets
+`400 NO_PHONE_CLAIM`.
 
 ### The identity model — read this once, it will save you a day
 
@@ -53,7 +125,8 @@ That means:
 
 Practically: prefer the phone-keyed and `/me` endpoints, which resolve identity
 for you. Only use the `{id}` endpoints with an id you were handed by a previous
-loyalty response.
+loyalty response — `GET /loyalty/users/me` (above) is where a customer app gets
+them.
 
 ### Response envelope
 
@@ -140,7 +213,9 @@ Paginated ledger for one loyalty user, newest first.
   "channel": "CHECKOUT_S2S",
   "reference": "ORDER-4471",
   "createdAt": "2026-08-24T09:15:00Z",
-  "invoiceId": null
+  "invoiceId": null,
+  "currency": "USD",
+  "baseAmount": 100.00
 }
 ```
 
@@ -157,6 +232,13 @@ Field notes that will otherwise confuse you:
   invoice is never raised. A period with points but no billable voucher
   activity produces no invoice at all. Render it as "not invoiced", never as a
   gap.
+- **`amount` is in `currency` — always render the two together.** Points are
+  earned on `baseAmount`, the USD value frozen when the row was written. A
+  `null` `baseAmount` means "not known in USD" (an old non-USD row), never zero.
+- **`channel`** says how an earn arrived: `TYPED_PHONE` (staff keyed the phone,
+  including the till's guest checkout), `QR_PRESENCE` (the customer scanned a
+  merchant QR) or `CHECKOUT_S2S` (a server-side flow such as a shop payment).
+  `null` on non-earn rows.
 - **A `pointsDelta` of `0` on a `PURCHASE` is not a bug.** A transaction below
   the merchant's earning floor completes normally and earns nothing.
 
@@ -196,6 +278,7 @@ Returns the sender's new balance.
 | `RECIPIENT_REQUIRED` | neither or both recipient fields |
 | `SELF_TRANSFER` | recipient resolves to the sender's own wallet |
 | `INSUFFICIENT_FUNDS` | not enough points |
+| `USER_PENDING` / `USER_INACTIVE` / `USER_BLOCKED` | 403 — the sender's account can't spend yet (or at all); show the `message` |
 
 > **Note on `SELF_TRANSFER`:** wallets are global per phone, so two loyalty user
 > ids belonging to the same phone resolve to one wallet. Transferring between
@@ -220,6 +303,15 @@ Returns the sender's new balance.
 `merchantId` is ignored when the JWT already carries one (shop staff tokens do);
 it is required for `MERCHANT_ADMIN`.
 
+You can send `amount` (+ optional `currency`, default the merchant's) instead of
+`points`: the server works out the points from the platform redemption rate.
+Prefer it — it lets the platform, not the app, decide what a point is worth.
+Sending both is allowed only if they agree at the current rate
+(`RATE_MISMATCH` otherwise).
+
+A caller can only redeem from their own account (admins may act on behalf).
+The same `USER_PENDING` / `USER_INACTIVE` / `USER_BLOCKED` refusals as §4 apply.
+
 **`reference` is an idempotency key.** A repeat redeem with the same
 `(merchant, reference)` replays the original response instead of debiting the
 wallet again. Use the order/booking id. Generate it when the user taps
@@ -240,30 +332,52 @@ Paginated. Returns vouchers in an active state — `ISSUED`, `VIEWED`,
   "id": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
   "code": "7183502649174053",
   "status": "VIEWED",
-  "templateId": "4d3c2b1a-9876-5432-10fe-dcba98765432",
+  "voucherType": "SINGLE_USE",
+  "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+  "shopId": null,
+  "batchId": null,
+  "campaignSource": null,
   "assignedUserId": "66666666-7777-8888-9999-000000000000",
   "assigneePhone": "+263771234567",
+  "assigneeName": "Sedrick Nyanyiwa",
+  "senderName": "Tawanda Mpofu",
+  "senderPhone": "+263782608767",
+  "issuerUserId": "77777777-7777-7777-7777-777777777777",
+  "issuerPhone": "+263772000111",
+  "issuerEmail": "shopadmin@westgate.co.zw",
   "usesRemaining": 1,
-  "valueType": "PERCENT",
   "value": 10.0000,
   "currency": "USD",
+  "baseValue": 10.0000,
   "issuedAt": "2026-08-20T09:00:00Z",
-  "expiresAt": "2027-08-20T09:00:00Z"
+  "deliveredAt": "2026-08-20T09:00:05Z",
+  "viewedAt": "2026-08-21T09:00:00Z",
+  "redeemedAt": null,
+  "transferredAt": null,
+  "expiresAt": "2027-08-20T09:00:00Z",
+  "transferredFromUserId": null,
+  "transferredFromPhone": null
 }
 ```
 
-**`valueType` drives rendering** and has four values:
+**A voucher is a money amount.** Render `value` currency-formatted in
+`currency`. There are no voucher templates and no `valueType` any more (both
+fields are gone from the response), and `voucherType` is always `SINGLE_USE`:
+a voucher is worth its face value **once**.
 
-| `valueType` | Render `value` as |
-|---|---|
-| `AMOUNT` | currency-formatted, using `currency` |
-| `PERCENT` | "10% off" |
-| `FREE_ITEM` | ignore `value` — it may be null |
-| `COMBO` | ignore `value` — it may be null |
+- `baseValue` is the USD worth frozen when the voucher was issued. It is `null`
+  on a few very old vouchers — never read that as zero.
+- **Three different people can appear on one voucher — don't mix them up.**
+  The **holder** (`assignee*`) owns it; the **sender** (`sender*`) gifted it and
+  is who the "from" line should name; the **issuer** (`issuer*`) is the staff
+  member who keyed it in. At a till all three are different people.
+- `status` is one of `ISSUED`, `VIEWED`, `PARTIALLY_USED`, `REDEEMED`,
+  `EXPIRED`, `REVOKED`. There is no `DELIVERED`: a voucher is `ISSUED` until it
+  is used. `deliveredAt` only means a WhatsApp/SMS send was *attempted*.
 
-`value` and `currency` are a **snapshot frozen at issuance**. A merchant editing
-the template later does not change already-issued vouchers, so always render
-what the voucher carries, never re-derive from the template.
+**Who sees `code` on this endpoint:** the phone's owner and admin roles.
+A till (`SHOP_USER`) looking up someone else's phone gets every `code` as
+`null` — see §10.
 
 **The voucher code is a 16-digit STRING — never parse it as a number.**
 `7183502649174053` is above JavaScript's `Number.MAX_SAFE_INTEGER` (2^53), so
@@ -299,7 +413,8 @@ all — don't reuse one expiry UI for both.
 
 Marks a voucher `VIEWED`. Call it when the customer actually opens the voucher
 detail. Only the assignee (or staff) may call it. Put the raw `code` in the path
-(as returned, no spaces).
+(as returned, no spaces). It shares the voucher guessing lockout (§8), so only
+call it for a voucher from the customer's own list.
 
 ---
 
@@ -330,8 +445,12 @@ Rules:
   someone who hasn't signed up.
 - **Only an unused, live voucher moves**: `ISSUED`, `VIEWED`.
   A `PARTIALLY_USED` voucher is refused along with the terminal states.
-- The caller must be the **current holder**.
-- Returns the updated voucher — the response shows the **new** assignee.
+- The caller must be the **current holder**. An admin of the voucher's own
+  merchant may transfer for a customer (support), but never to their own phone.
+  A till (`SHOP_USER`) cannot transfer at all.
+- Returns the updated voucher, showing the **new** assignee — with `code: null`.
+  The transfer **rotates the code**: the sender's old code stops working the
+  moment it succeeds, and the caller never sees the new one.
 
 | Code | HTTP | Meaning |
 |---|---|---|
@@ -341,9 +460,14 @@ Rules:
 | `SELF_TRANSFER` | 400 | recipient is the caller |
 | `RECIPIENT_REQUIRED` | 400 | neither or both recipient fields |
 | `NOT_VOUCHER_OWNER` | 403 | caller isn't the holder |
+| `NOT_MERCHANT_OWNER` | 403 | an admin of a different merchant |
+| `STAFF_RECIPIENT` | 403 | an admin tried to send it to their own phone |
+| `403 FORBIDDEN` | 403 | the token's role can't transfer (a till token) |
 
-**The recipient is not notified.** There is no push/SMS on transfer today, so if
-your UX depends on the recipient finding out, the sender has to tell them.
+**Both sides are notified** (WhatsApp first, SMS fallback): the recipient gets a
+"you received a voucher" message **and the new code**, the sender gets a
+confirmation (without a code). The recipient also sees it in their own voucher
+list. Tell the sender their copy of the code no longer works.
 
 ---
 
@@ -368,18 +492,26 @@ your UX depends on the recipient finding out, the sender has to tell them.
   "message": "Voucher redeemed successfully",
   "data": {
     "redemptionId": "…", "voucherId": "…", "status": "REDEEMED",
-    "usesRemaining": 0, "value": 10.0000, "valueType": "PERCENT",
+    "usesRemaining": 0, "value": 10.0000,
     "redeemedAt": "2026-08-25T14:02:00Z"
   }
 }
 ```
 
-**Send `deviceFingerprint` if you can.** Failed redemption attempts are recorded
-as fraud attempts, and repeated failures from one device inside the fraud window
-auto-block the account. Without a fingerprint that protection can't run.
+`value` is the money the voucher is worth, in the voucher's `currency` (from
+your voucher list). A voucher is used **once**: a successful redeem is
+`REDEEMED` with `usesRemaining: 0`. Multi-use vouchers are retired.
 
-Check `usesRemaining` in the response: a multi-use voucher returns
-`PARTIALLY_USED` with a remaining count rather than `REDEEMED`.
+**Send `deviceFingerprint` if you can.** Failed attempts are recorded as fraud
+evidence keyed by device; repeated failures from one device can block a
+customer's own account. At a till nobody is blocked (the device is the shop's)
+— the guessing lockout below is what protects a till.
+
+`outletCode` ≤ 80, `deviceFingerprint` ≤ 128 and `ipAddress` ≤ 64 characters;
+longer is a `400` naming the field.
+
+Who can redeem: the voucher's **holder** (customer app), or **staff of the
+voucher's merchant** at a till, with the code the customer presents.
 
 ### Mistyped codes and the guessing lockout
 
@@ -431,9 +563,14 @@ Check `usesRemaining` in the response: a multi-use voucher returns
 
 ### `POST /loyalty/qr/issue` → `POST /loyalty/qr/consume`
 
-`issue` mints a signed, short-lived token (default TTL **300s**) for either a
-merchant (`sourceType: MERCHANT` — customer scans to earn) or a user
-(`sourceType: USER` — merchant scans to receive a P2P transfer).
+`issue` mints a signed, short-lived, single-use token (default TTL **300s**).
+`consume` **always credits the caller**: the scanning customer's own
+`userId` goes in the body.
+
+| `sourceType` | Who issues | Who scans (consumes) | Effect |
+|---|---|---|---|
+| `MERCHANT` | merchant admin / shop admin, for their own merchant | the **customer** | the customer earns points on `amount` |
+| `USER` | a customer, from their own account | the **recipient** customer | points move from the issuer to the scanner (P2P) |
 
 `consume` takes the `token` + `signature` straight from the scanned payload plus
 the scanning `userId`. Pass both through verbatim — never re-sign or reconstruct
@@ -441,14 +578,63 @@ them client-side.
 
 Tokens are single-use and expire fast. Regenerate on display, don't cache.
 
+A merchant QR can't be scanned by that merchant's own staff:
+
+| `code` | HTTP | Meaning |
+|---|---|---|
+| `SELF_EARN` | 403 | the scanner's token is staff of the QR's merchant |
+| `STAFF_RECIPIENT` | 403 | the scanning phone belongs to staff of that merchant (any login) |
+| `QR_REUSED` | 409 | already consumed |
+| `QR_EXPIRED` | 400 | past its TTL |
+| `BAD_SIGNATURE` | 403 | token/signature don't match |
+
+A refused staff scan does **not** use the QR up — the customer can still scan
+it. A till token (`SHOP_USER`) cannot call `consume` at all.
+
 ---
 
-## 10. TEST-ONLY endpoints
+## 10. The till app (`SHOP_USER`)
+
+A cashier serves customers; they can never take from one. Build the till
+around these rules:
+
+- **Vouchers by phone come back without codes.** For a phone that isn't the
+  cashier's own, every `code` is `null`. Show that the customer has a voucher
+  (value, expiry, sender) and **ask the customer for the code** from their
+  WhatsApp/SMS/app, then redeem it (§8). Don't build "tap a voucher to redeem".
+- **No voucher transfer, no QR consume.** Both answer `403 FORBIDDEN`
+  (`"You don't have permission to do that."`). Hide the actions.
+- **Guest checkout** (`POST /loyalty/shops/{shopId}/guest-checkout`,
+  body `{ "phoneNumber": "+263771234567", "cashAmount": 10.00 }`) refuses:
+
+  | `code` | Meaning |
+  |---|---|
+  | `SELF_EARN` | the phone is the cashier's own |
+  | `STAFF_RECIPIENT` | the phone belongs to any staff member of this merchant |
+  | `NOT_SHOP_MEMBER` | `{shopId}` isn't the shop on the cashier's token |
+  | `SHOP_NOT_OWNED` | the shop belongs to another merchant |
+
+  Always send the cashier's own `shopId`; no shop picker. Show the `message`
+  and let them fix the number — retrying the same phone never works.
+- **Issuing a gift at the till** is an admin action (`SHOP_ADMIN` and up). The
+  customer sending it and the friend receiving it **both** get the code.
+- **Guessing lockout is per cashier account** (§8): one locked cashier doesn't
+  block the other tills.
+
+---
+
+## 11. TEST-ONLY endpoints
 
 ### `GET /loyalty/public/customers/{phoneNumber}/transactions`
 
 **No JWT. No tenant header. No role.** Exists so you can build screens against
 real data before your auth flow is wired up.
+
+Where a cell configures a key, every `/loyalty/public/**` call must send
+`x-api-key: <key>` (the app reads it from Firebase Remote Config); a missing or
+wrong key is an opaque `401`. On a cell with no key configured the header is
+ignored. The key identifies the app, not the customer — it does not make
+these endpoints safe.
 
 Returns the same paginated statement as §3, collapsed across every tenant the
 phone belongs to.
@@ -465,7 +651,7 @@ scaffolding.
 
 ---
 
-## 11. Not implemented — don't build against it
+## 12. Not implemented — don't build against it
 
 **`POST /loyalty/convert-to-airtime`** returns `200` with a feature-flag payload
 saying *"M-Pesa / airtime conversion is not enabled in this build."* It is a
@@ -473,7 +659,7 @@ stub. There is no airtime conversion.
 
 ---
 
-## 12. Integration checklist
+## 13. Integration checklist
 
 - [ ] `X-Tenant-Id` on every call — this is the #1 first-day failure
 - [ ] `Authorization: Bearer <jwt>` from user-service login
@@ -483,9 +669,15 @@ stub. There is no airtime conversion.
 - [ ] Unwrap paginated payloads twice: `data.content`
 - [ ] `pointsDelta` is signed; `balanceAfter` is always null on the statement
 - [ ] `invoiceId: null` renders as "not invoiced", not as an error
-- [ ] Render vouchers by `valueType`; `value` may be null for `FREE_ITEM`/`COMBO`
+- [ ] Render a voucher's `value` as money in its `currency` — there is no `valueType`
+- [ ] Keep voucher `code` a string; show it in groups of four; send it back as typed
+- [ ] Holder, sender and issuer are three different people on a voucher
+- [ ] Store the NEW refresh token on every `/loyalty/session/refresh`
+- [ ] Get loyalty user ids and tenant ids from `GET /loyalty/users/me`
 - [ ] Vouchers expire, points do not
 - [ ] Disable *Send* on an already-transferred voucher — one hop only
 - [ ] Idempotency `reference` generated on user intent, not per retry
 - [ ] Send `deviceFingerprint` on voucher redemption
-- [ ] Nothing in §10 or §11 is in the production build
+- [ ] Till app: no codes from the by-phone list, no transfer, no QR consume,
+      guest checkout on the cashier's own shop only (§10)
+- [ ] Nothing in §11 or §12 is in the production build

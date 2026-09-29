@@ -2,6 +2,8 @@ package com.innbucks.loyaltyservice.exception;
 
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -47,6 +49,29 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResult<Void>> handle(AuthenticationException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Please sign in to continue."));
+    }
+
+    /**
+     * The voucher redeem lockout. More specific than the {@link LoyaltyException}
+     * handler below, so Spring picks this one. {@code Retry-After} is the header
+     * clients and proxies honour; {@code data.retryAfterSeconds} carries the same
+     * number for a browser client whose CORS config does not expose the header.
+     * {@code no-store} so no cache ever replays a lockout after it has ended.
+     */
+    @ExceptionHandler(VoucherAttemptsLockedException.class)
+    public ResponseEntity<ApiResult<RetryAfterDetail>> handle(VoucherAttemptsLockedException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(ex.getRetryAfterSeconds()))
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResult.<RetryAfterDetail>builder()
+                        .code(ex.getCode())
+                        .message(ex.getMessage())
+                        .data(new RetryAfterDetail(ex.getRetryAfterSeconds()))
+                        .build());
+    }
+
+    /** {@code data} of a 429: how long until the caller may try again. */
+    public record RetryAfterDetail(long retryAfterSeconds) {
     }
 
     @ExceptionHandler(LoyaltyException.class)

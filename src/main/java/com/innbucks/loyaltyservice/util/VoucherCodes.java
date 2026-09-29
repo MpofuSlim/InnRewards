@@ -177,6 +177,35 @@ public final class VoucherCodes {
     }
 
     /**
+     * True for input that cannot be any code this service issues and is
+     * recognisably a mistyped one: all digits, one digit short of, exactly, or
+     * one digit longer than {@link #NUMERIC_LENGTH}, and not
+     * {@linkplain #isWellFormedNumeric well-formed}. That covers a wrong digit, a
+     * swapped pair (bar 09/90), a dropped digit and a doubled one.
+     *
+     * <p>Computed from the code ALONE, so answering "mistyped" reveals nothing
+     * about which vouchers exist — which is why a mistyped code is refused
+     * without counting toward the redeem lockout. Only meaningful AFTER the
+     * lookup has missed: a hand-made row whose code happens to look mistyped
+     * must still be found. A legacy 12-character code is never reported
+     * mistyped.
+     */
+    public static boolean isMistypedNumeric(String canonical) {
+        if (canonical == null
+                || canonical.length() < NUMERIC_LENGTH - 1
+                || canonical.length() > NUMERIC_LENGTH + 1) {
+            return false;
+        }
+        for (int i = 0; i < canonical.length(); i++) {
+            char c = canonical.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return !isWellFormedNumeric(canonical);
+    }
+
+    /**
      * True for a 16-digit numeric code whose check digit is right — i.e. one
      * this service could have issued. Says nothing about whether the voucher
      * EXISTS. Legacy alphanumeric codes are not numeric codes and return false;

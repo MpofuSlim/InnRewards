@@ -13,6 +13,13 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      # Bounded, because Redis sits on request paths that must not hang: the
+      # voucher lockout check on every redeem, and JwtFilter's denylist reads.
+      # Lettuce's default is 60 s; each of those callers falls back (the lockout
+      # to its in-memory store, the denylist fails open) — but only once the
+      # command gives up.
+      timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       repositories:
         enabled: false
   datasource:
@@ -373,6 +380,17 @@ loyalty:
     purchase-order-ttl: ${LOYALTY_VOUCHER_ORDER_TTL:PT30M}
     fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
     fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
+    # Voucher guessing lockout (VoucherGuessGuard): this many unknown or
+    # not-theirs codes within `window` locks the caller out of voucher
+    # redemption for `lock-duration`. Keyed on the caller's token (a customer's
+    # phone, a staff member's account) — never an IP, which loyalty cannot see.
+    redeem-guard:
+      enabled: ${LOYALTY_VOUCHER_GUARD_ENABLED:true}
+      max-failures: ${LOYALTY_VOUCHER_GUARD_MAX_FAILURES:5}
+      window: ${LOYALTY_VOUCHER_GUARD_WINDOW:PT1M}
+      lock-duration: ${LOYALTY_VOUCHER_GUARD_LOCK_DURATION:PT30M}
+      # Bound on the in-memory store used only while Redis is unavailable.
+      fallback-max-entries: ${LOYALTY_VOUCHER_GUARD_FALLBACK_MAX_ENTRIES:100000}
   qr:
     secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
     ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}

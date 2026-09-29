@@ -698,4 +698,184 @@ class VoucherRedemptionGuardsTest {
         assertThat(v.getViewedAt()).isNotNull();
         assertThat(v.getStatus()).isEqualTo(Voucher.Status.VIEWED);
     }
+
+    // ------------------------------------------------------------------
+    // which refusals count toward the redeem lockout
+    // ------------------------------------------------------------------
+
+    private static Dtos.RedeemVoucherRequest typed(String code) {
+        return new Dtos.RedeemVoucherRequest(MERCHANT, code, null, "WESTGATE", "device-1", "10.0.0.1");
+    }
+
+    @Test
+    void anUnknownCode_isACountedGuess_withTheSameWireResponseAsBefore() {
+        asCashier();
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, typed("7183502649174053")))
+                .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
+                    assertThat(e.getCode()).isEqualTo("404 NOT_FOUND");
+                    assertThat(e.getMessage()).isEqualTo("voucher not found");
+                });
+        verify(fraud).record(eq(TENANT), any(), eq(MERCHANT), eq("7183502649174053"),
+                eq(FraudAttempt.Reason.INVALID_CODE), anyString(), any(), any());
+    }
+
+    @Test
+    void aCodeInAnotherTenant_isACountedGuessToo() {
+        Voucher v = voucherAssignedByPhone(HOLDER_PHONE);
+        v.setTenantId(UUID.randomUUID());
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        asCashier();
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                .isInstanceOf(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class);
+    }
+
+    @Test
+    void aMistypedCode_isA400_neitherRecordedAsFraudNorCounted() {
+        // 7183502649174053 with its last digit wrong, a digit dropped, and a
+        // digit doubled — each caught by the check digit alone.
+        asCashier();
+        for (String typo : List.of("7183 5026 4917 4054", "718350264917405", "71835026491740533")) {
+            assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, typed(typo)))
+                    .as(typo)
+                    .isInstanceOfSatisfying(LoyaltyException.class, e -> {
+                        assertThat(e).isNotInstanceOf(
+                                com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class);
+                        assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST);
+                        assertThat(e.getCode()).isEqualTo(VoucherService.MISTYPED_CODE);
+                    });
+        }
+        verify(fraud, never()).record(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aStoredRowThatLooksMistyped_isStillFound() {
+        // The mistyped answer is only given AFTER the lookup misses.
+        Voucher v = bulkStock();
+        String odd = "7183502649174054";                      // fails the check digit
+        v.setCode(odd);
+        v.setSignature(signer.sign(TENANT + ":-:" + odd));
+        when(vouchers.lockByCode(odd)).thenReturn(Optional.of(v));
+        asCashier();
+
+        assertThat(service.redeem(TENANT, MERCHANT, typed(odd)).status()).isEqualTo("REDEEMED");
+    }
+
+    @Test
+    void aLegacyAlphanumericCodeIsNeverCalledMistyped() {
+        asCashier();
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, typed("K7M2PQ9XR4TB")))
+                .isInstanceOf(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class);
+    }
+
+    @Test
+    void someoneElsesLiveCode_isACountedGuess_withTheSameWireResponseAsBefore() {
+        Voucher v = voucherAssignedByPhone(HOLDER_PHONE);
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        asCustomer("+263770000111");
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                    assertThat(e.getCode()).isEqualTo("NOT_VOUCHER_OWNER");
+                    assertThat(e.getMessage()).isEqualTo("This voucher isn't assigned to you.");
+                });
+    }
+
+    @Test
+    void honestRefusalsOfARealCode_areNotGuesses() {
+        asCashier();
+
+        Voucher expired = voucherAssignedByPhone(HOLDER_PHONE);
+        expired.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        Voucher spent = voucherAssignedByPhone(HOLDER_PHONE);
+        spent.setUsesRemaining(0);
+        Voucher revoked = voucherAssignedByPhone(HOLDER_PHONE);
+        revoked.setStatus(Voucher.Status.REVOKED);
+        Voucher elsewhere = voucherAssignedByPhone(HOLDER_PHONE);
+        elsewhere.setMerchantId(UUID.randomUUID());
+        Voucher tampered = voucherAssignedByPhone(HOLDER_PHONE);
+        tampered.setSignature("forged");
+
+        for (Voucher v : List.of(expired, spent, revoked, elsewhere, tampered)) {
+            when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+            assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                    .isInstanceOf(LoyaltyException.class)
+                    .isNotInstanceOf(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class);
+        }
+    }
+
+    @Test
+    void aFailedEvidenceInsert_neverReplacesTheRefusal() {
+        // V17's CHECK once rejected NOT_ASSIGNEE: the insert threw, and the
+        // client got a 409 instead of its 403 — which the lockout never saw.
+        Voucher v = voucherAssignedByPhone(HOLDER_PHONE);
+        when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+        when(fraud.record(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("chk_fraud_attempts_reason"));
+        asCustomer("+263770000111");
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("NOT_VOUCHER_OWNER"));
+    }
+
+    @Test
+    void markViewed_byANonHolder_isACountedGuess_withTheSameWireResponse() {
+        Voucher v = voucherAssignedByPhone(HOLDER_PHONE);
+        when(vouchers.findByCode(v.getCode())).thenReturn(Optional.of(v));
+        asCustomer("+263770000111");
+
+        assertThatThrownBy(() -> service.markViewed(v.getCode()))
+                .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo("NOT_VOUCHER_OWNER");
+                    assertThat(e.getMessage()).isEqualTo("you can only act on your own vouchers");
+                });
+    }
+
+    @Test
+    void aNonHolder_alwaysGetsTheCountedRefusal_neverAnHonestAnswerAboutSomeoneElsesCode() {
+        // Expired, spent, revoked, or live at a merchant the customer named at
+        // random in the body: each used to answer with its own uncounted
+        // reason, telling a guesser the code exists. The owner check now runs
+        // first.
+        asCustomer("+263770000111");
+        Voucher expired = voucherAssignedByPhone(HOLDER_PHONE);
+        expired.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        Voucher spent = voucherAssignedByPhone(HOLDER_PHONE);
+        spent.setUsesRemaining(0);
+        Voucher revoked = voucherAssignedByPhone(HOLDER_PHONE);
+        revoked.setStatus(Voucher.Status.REVOKED);
+        Voucher elsewhere = voucherAssignedByPhone(HOLDER_PHONE);
+        elsewhere.setMerchantId(UUID.randomUUID());
+
+        for (Voucher v : List.of(expired, spent, revoked, elsewhere)) {
+            when(vouchers.lockByCode(v.getCode())).thenReturn(Optional.of(v));
+            assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(v, null)))
+                    .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class,
+                            e -> assertThat(e.getCode()).isEqualTo("NOT_VOUCHER_OWNER"));
+        }
+        // A non-holder's refusal must not act on someone else's voucher either:
+        // no EXPIRED flip is requested for it.
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(events, org.mockito.Mockito.atLeast(0)).publishEvent(published.capture());
+        assertThat(published.getAllValues())
+                .noneMatch(e -> e instanceof VoucherRedemptionRejectedEvent r && r.markExpired());
+    }
+
+    @Test
+    void theHolder_stillGetsTheSpecificReason() {
+        asCustomer(HOLDER_PHONE);
+        Voucher expired = voucherAssignedByPhone(HOLDER_PHONE);
+        expired.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        when(vouchers.lockByCode(expired.getCode())).thenReturn(Optional.of(expired));
+
+        assertThatThrownBy(() -> service.redeem(TENANT, MERCHANT, request(expired, null)))
+                .isInstanceOfSatisfying(LoyaltyException.class, e -> {
+                    assertThat(e).isNotInstanceOf(com.innbucks.loyaltyservice.exception.VoucherCodeGuessException.class);
+                    assertThat(e.getCode()).isEqualTo("EXPIRED");
+                });
+    }
 }

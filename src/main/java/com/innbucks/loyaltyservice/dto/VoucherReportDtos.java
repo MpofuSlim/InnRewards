@@ -47,7 +47,9 @@ public final class VoucherReportDtos {
                     + "merchant, shop and template names.")
     public record VoucherDetail(
             @Schema(example = "d2c8f0a1-0123-4567-1234-567890123456") UUID id,
-            @Schema(example = "K7M2PQ9XR4TB") String code,
+            @Schema(example = "7183502649174053", description = "Raw code (a STRING). "
+                    + "The CSV export writes it grouped in fours with hyphens (7183-5026-4917-4053) so a "
+                    + "spreadsheet keeps it as text; JSON always carries it raw.") String code,
             @Schema(example = "REDEEMED",
                     description = "ISSUED, VIEWED, REDEEMED, PARTIALLY_USED, EXPIRED or REVOKED.") String status,
 

@@ -205,4 +205,41 @@ class NotificationGatewayTest {
         assertThatCode(() -> gateway.deliverSenderCopy(v, v.getSenderPhone()))
                 .doesNotThrowAnyException();
     }
+
+    // ------------------------------------------------------------------
+    // a 16-digit code is shown GROUPED to the person reading it
+    // ------------------------------------------------------------------
+
+    private Voucher numericGift() {
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        v.setCode("9087876598764566");
+        return v;
+    }
+
+    @Test
+    void recipientMessage_showsANumericCodeGroupedInFours() {
+        gateway.deliver(numericGift(), PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("Code 9087 8765 9876 4566"));
+        verify(whatsApp, never()).sendCustomNotification(anyString(), contains("9087876598764566"));
+    }
+
+    @Test
+    void senderCopy_showsANumericCodeGroupedInFours() {
+        Voucher v = numericGift();
+        gateway.deliverSenderCopy(v, v.getSenderPhone());
+
+        verify(whatsApp).sendCustomNotification(eq(v.getSenderPhone()), contains("Code 9087 8765 9876 4566"));
+    }
+
+    @Test
+    void smsFallback_keepsTheGrouping() {
+        // SmsTextSanitizer collapses runs of spaces; single ASCII spaces survive.
+        doThrow(new RuntimeException("wa down"))
+                .when(whatsApp).sendCustomNotification(anyString(), anyString());
+
+        gateway.deliver(numericGift(), PHONE);
+
+        verify(sms).sendSms(eq(PHONE), contains("9087 8765 9876 4566"), startsWith("VOUCHER-"));
+    }
 }

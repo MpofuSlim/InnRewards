@@ -431,7 +431,7 @@ public class ReportingController {
                                         "activeVouchers": [
                                           {
                                             "id": "c1b7e9f0-9012-3456-0123-456789012345",
-                                            "code": "K7M2PQ9XR4TB",
+                                            "code": "4829137605128368",
                                             "status": "ISSUED",
                                             "voucherType": "SINGLE_USE",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -995,7 +995,7 @@ public class ReportingController {
                                               "currency": "USD",
                                               "pointsAwarded": -500.0000,
                                               "direction": "REDEEM",
-                                              "reference": "K7M2PQ9XR4TB",
+                                              "reference": "POS-20260504-0002",
                                               "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                               "ruleId": null,
                                               "campaignId": null
@@ -1119,7 +1119,7 @@ public class ReportingController {
                                         "content": [
                                           {
                                             "id": "fa1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
-                                            "voucherCode": "K7M2PQ9XR4TB",
+                                            "voucherCode": "4829137605128368",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "reason": "WRONG_MERCHANT",
                                             "detail": "voucher scoped to merchant c5d1e3f4 but presented at b4c0d2e3",
@@ -1128,7 +1128,7 @@ public class ReportingController {
                                           },
                                           {
                                             "id": "fa2c3d4e-5f60-7182-93a4-b5c6d7e8f900",
-                                            "voucherCode": "H4NX8W2VQ7RJ",
+                                            "voucherCode": "6142073958204719",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "reason": "VELOCITY_BLOCKED",
                                             "detail": "5 redemptions from device fp-cafebabe-0009 in 60s",
@@ -1178,7 +1178,7 @@ public class ReportingController {
                             examples = @ExampleObject(name = "CSV", value = """
                                     id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber
                                     11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001,INV-1746355200000-4821
-                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:K7M2PQ9XR4TB,INV-1746355200000-4821
+                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:4829137605128368,INV-1746355200000-4821
                                     33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit,
                                     """)
                     )
@@ -1237,7 +1237,7 @@ public class ReportingController {
                   "content": [
                     {
                       "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                      "code": "K7M2PQ9XR4TB",
+                      "code": "7183502649174053",
                       "status": "REDEEMED",
                       "tenantId": "11111111-1111-1111-1111-111111111111",
                       "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -1407,7 +1407,7 @@ public class ReportingController {
                                       "message": "Voucher detail retrieved successfully",
                                       "data": {
                                         "id": "d2c8f0a1-0123-4567-1234-567890123456",
-                                        "code": "K7M2PQ9XR4TB",
+                                        "code": "7183502649174053",
                                         "status": "REDEEMED",
                                         "tenantId": "11111111-1111-1111-1111-111111111111",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -1474,7 +1474,10 @@ public class ReportingController {
     @Operation(summary = "Voucher CSV export — tenant / merchant / shop",
             description = "One fully-detailed row per voucher for the current tenant. Pass merchantId to scope to a " +
                           "merchant, or shopId to scope to an outlet (shopId wins). Same columns as VoucherDetail. " +
-                          "Returns Content-Disposition: attachment; filename=vouchers.csv.")
+                          "The code column is grouped in fours with hyphens (7183-5026-4917-4053) — a raw " +
+                          "16-digit number opened in a spreadsheet loses its last digit (15 significant digits) " +
+                          "and would never redeem; hyphens keep the cell as text, and redeem accepts the code " +
+                          "with them. Returns Content-Disposition: attachment; filename=vouchers.csv.")
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
             content = @Content(mediaType = "text/csv", examples = @ExampleObject(name = "CSV", value =
                     "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
@@ -1482,7 +1485,7 @@ public class ReportingController {
                     + "faceValue,currency,usesRemaining,deliveryChannel,campaignSource,issuedAt,deliveredAt,viewedAt,"
                     + "redeemedAt,expiresAt,expired,redemptionCount,"
                     + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"
-                    + "d2c8f0a1-0123-4567-1234-567890123456,K7M2PQ9XR4TB,REDEEMED,11111111-1111-1111-1111-111111111111,"
+                    + "d2c8f0a1-0123-4567-1234-567890123456,7183-5026-4917-4053,REDEEMED,11111111-1111-1111-1111-111111111111,"
                     + "b4c0d2e3-2345-6789-abcd-ef0123456789,Innbucks Westgate,c5d1e3f4-3456-7890-abcd-ef0123456789,"
                     + "Westgate Branch,a1a1a1a1-1111-2222-3333-444444444444,Coffee Combo,,77777777-7777-7777-7777-777777777777,"
                     + "+263772000111,shopadmin@westgate.co.zw,33333333-3333-3333-3333-333333333333,+263771234567,Jane Moyo,"

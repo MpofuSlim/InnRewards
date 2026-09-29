@@ -56,6 +56,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.util.VoucherCodes;
 import org.springframework.data.domain.PageRequest;
 
 @Service
@@ -904,7 +905,10 @@ public class ReportingService {
                     PageRequest.of(pageNum, pageSize, Sort.by(Sort.Direction.DESC, "issuedAt")));
             for (VoucherDetail d : enrich(page).getContent()) {
                 sb.append(csvField(d.id())).append(',')
-                        .append(csvField(d.code())).append(',')
+                        // Grouped with hyphens HERE only — never in toDetail, which also
+                        // feeds the JSON report, where the code must stay raw. A raw
+                        // 16-digit code opened in a spreadsheet loses its last digit.
+                        .append(csvField(VoucherCodes.forExport(d.code()))).append(',')
                         .append(csvField(d.status())).append(',')
                         .append(csvField(d.tenantId())).append(',')
                         .append(csvField(d.merchantId())).append(',')

@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.integration;
 
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
+import com.innbucks.loyaltyservice.util.VoucherCodes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -175,7 +176,9 @@ public class NotificationGateway {
         } else {
             sb.append("your InnBucks voucher is ready. Code ");
         }
-        sb.append(voucher.getCode());
+        // Grouped in fours for the person reading it — "9087 8765 9876 4566". The
+        // till accepts it typed back with the spaces (VoucherCodes.normalize).
+        sb.append(VoucherCodes.display(voucher.getCode()));
         String worth = describeValue(voucher);
         if (worth != null) {
             sb.append(" (").append(worth).append(")");
@@ -190,7 +193,7 @@ public class NotificationGateway {
 
     /**
      * "Hi Tawanda Mpofu, your InnBucks voucher for Sedrick Nyanyiwa
-     * (+263786546765) has been sent. Code ABC123 (USD 5 off). Valid until
+     * (+263786546765) has been sent. Code 9087 8765 9876 4566 (USD 5 off). Valid until
      * 17 Sep 2027." The recipient's full number is fine in the MESSAGE — the
      * sender typed it — but never in logs, which stay masked.
      */
@@ -212,7 +215,7 @@ public class NotificationGateway {
                 sb.append(voucher.getAssigneePhone());
             }
         }
-        sb.append(" has been sent. Code ").append(voucher.getCode());
+        sb.append(" has been sent. Code ").append(VoucherCodes.display(voucher.getCode()));
         String worth = describeValue(voucher);
         if (worth != null) {
             sb.append(" (").append(worth).append(")");

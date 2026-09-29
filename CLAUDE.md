@@ -1529,7 +1529,10 @@ promises.
 
 `outletCode`, `deviceFingerprint` and `ipAddress` on `RedeemVoucherRequest` are
 written verbatim into `VARCHAR(80)` / `(128)` / `(64)` and carried **no
-`@Size`**. An over-long value was caught nowhere until the INSERT, so a
+`@Size`**. (`code` joined them with `@Size(max = 64)`: an unknown code is
+recorded — normalised — in `fraud_attempts.voucher_code VARCHAR(64)`, and
+`VoucherCodes.normalize` never lengthens its input, which is what makes the
+bound hold after normalisation.) An over-long value was caught nowhere until the INSERT, so a
 **legitimate** redemption became a `500` with the burn rolled back — the client
 told the server had broken when its own request was at fault, and invited to
 retry something that could never succeed. It is now a `400` naming the field.
@@ -1549,6 +1552,58 @@ billed a redeem-side fee and never counted as redeemed. The false javadoc that
 claimed otherwise (`sumRedeemedValueByMerchantId`, `Dtos.VoucherSummary`) is
 corrected. The other half of that pair — the full face value returned on every
 use — was decided and is below.
+
+## Voucher codes: 16 digits, a check digit, raw everywhere a machine reads
+
+**Owner decision (2026-09-25): a voucher code is 16 digits, shown to people in
+groups of four** (`9087 8765 9876 4566`), replacing the 12-character
+alphanumeric. All the rules live in `util/VoucherCodes`; nothing else may
+invent its own.
+
+- **Format.** First digit 1–9 (a spreadsheet drops a leading zero), fourteen
+  random digits, then a check digit = (Luhn digit + 5) mod 10 —
+  `CryptoSigner.randomNumericVoucherCode`. 9×10¹⁴ codes. The check digit
+  catches every single mistyped digit and every adjacent swap except 09↔90.
+  **The +5 offset is load-bearing, not decoration:** it guarantees no code
+  ever passes the plain Luhn test, because a Luhn-valid 16-digit number is,
+  to every PCI/DLP scanner in mail, file shares and messaging gateways, a live
+  card number — exports get quarantined and codes masked in WhatsApp. About
+  2.3% of unconstrained random codes did. **Never change `LUHN_OFFSET`**: it
+  invalidates the check digit of every issued code.
+- **RAW at rest and on every machine surface.** The column, the API JSON, the
+  HMAC signature payload (`signPayload`) and S2S bodies all carry the code
+  exactly as stored. **Grouping is for text a PERSON reads, and only
+  that**: `display()` (spaces) in WhatsApp/SMS copy, `forExport()` (hyphens)
+  in the CSV. Putting a grouped code in a signature payload or an API field
+  would break verification or every client's lookup.
+- **Why the CSV uses hyphens, not spaces or raw.** Spreadsheets hold 15
+  significant digits, so a raw 16-digit code opened from a CSV silently loses
+  its last digit and never redeems. Spaces are a digit-grouping symbol in
+  some locales (en-ZA, fr-FR), so a lenient parse can still read a
+  space-grouped code as a number. No locale groups with a hyphen.
+- **Every lookup by a typed code goes through `VoucherService.findByTypedCode` /
+  `lockByTypedCode`**: the normalised form first, then the input exactly as
+  typed (stripped). `normalize()` removes whitespace of every kind (including
+  NBSP, which `isWhitespace` misses), dashes of every kind plus U+2212, and
+  invisible format characters, and upper-cases **ASCII only** — full Unicode
+  case mapping lengthens `ß`→`SS`, which would overflow the fraud column. The
+  exact-as-typed second probe exists for rows whose stored code is not in
+  canonical form (hand-made or pre-extraction rows with a hyphen or lower
+  case); without it they could never be redeemed again.
+- **Never run any of this on another identifier.** A tenant code, a `VCH-`
+  purchase-order reference and a QR token are different things; normalising
+  or grouping them breaks them. `display()`/`forExport()` also return any
+  stored code that is not plain `[A-Z0-9]+` UNCHANGED, so a legacy
+  non-canonical code prints as stored instead of as something that matches
+  no row.
+- **Legacy 12-character codes stay valid forever** — they are rows, not a
+  format we can migrate (the code is inside the HMAC signature). They group
+  and normalise the same way; they simply have no check digit, so
+  `isWellFormedNumeric` returns false for them and that must never be read as
+  "typo".
+- **Never log a voucher code.** It is a bearer credential. Log the voucher id.
+- **JavaScript clients must keep `code` a string** — 16 digits exceed 2^53.
+  The Swagger descriptions and the FE guide both say so.
 
 ## A voucher is worth its face value, ONCE — MULTI_USE is retired
 

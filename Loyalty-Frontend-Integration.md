@@ -238,7 +238,7 @@ Paginated. Returns vouchers in an active state — `ISSUED`, `VIEWED`,
 ```json
 {
   "id": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
-  "code": "VCH-AB12CD34",
+  "code": "7183502649174053",
   "status": "VIEWED",
   "templateId": "4d3c2b1a-9876-5432-10fe-dcba98765432",
   "assignedUserId": "66666666-7777-8888-9999-000000000000",
@@ -265,13 +265,41 @@ Paginated. Returns vouchers in an active state — `ISSUED`, `VIEWED`,
 the template later does not change already-issued vouchers, so always render
 what the voucher carries, never re-derive from the template.
 
+**The voucher code is a 16-digit STRING — never parse it as a number.**
+`7183502649174053` is above JavaScript's `Number.MAX_SAFE_INTEGER` (2^53), so
+`Number(code)`, `parseInt(code)` or a numeric JSON decoder silently changes the
+last digits and the code never redeems. Keep it a string end to end.
+
+- **Show it in groups of four**: `7183 5026 4917 4053`. The API always sends
+  it raw (no spaces); the grouping is display only. Older vouchers issued before
+  the switch carry a 12-character alphanumeric code (`K7M2PQ9XR4TB`) — group
+  those the same way (`K7M2 PQ9X R4TB`).
+- **Send it back however the user typed it.** The backend ignores spaces,
+  dashes (any kind, including the ones a phone keyboard substitutes) and
+  invisible characters, and upper-cases letters, so `7183 5026 4917 4053`,
+  `7183-5026-4917-4053` and the raw form all redeem the same voucher. Don't
+  build your own stripping — just trim and send.
+- **The last digit is a check digit.** A code with one digit mistyped, or two
+  neighbouring digits swapped, can never belong to a real voucher, so an input
+  field may validate locally before sending (optional — the backend is the
+  authority): strip spaces/dashes, require `^[1-9][0-9]{15}$`, then check
+  `(luhnCheckDigit(first15) + 5) % 10 === lastDigit`. A code failing that is a
+  typo; say "check the code" rather than "no such voucher". Legacy
+  alphanumeric codes skip this check.
+- **Use a numeric keypad that still allows spaces** — `inputmode="numeric"` on
+  a text input, NOT `type="number"`, which refuses the spaces and dashes people
+  type and hands frameworks a rounded number. Don't block pasting.
+- **Spreadsheet exports carry hyphens** (`7183-5026-4917-4053`) so Excel keeps
+  the cell as text; a code copied out of one redeems as-is.
+
 **Vouchers do still expire** (365 days by default). Points no longer expire at
 all — don't reuse one expiry UI for both.
 
 ### `POST /loyalty/vouchers/codes/{code}/viewed`
 
 Marks a voucher `VIEWED`. Call it when the customer actually opens the voucher
-detail. Only the assignee (or staff) may call it.
+detail. Only the assignee (or staff) may call it. Put the raw `code` in the path
+(as returned, no spaces).
 
 ---
 
@@ -326,7 +354,7 @@ your UX depends on the recipient finding out, the sender has to tell them.
 ```json
 {
   "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-  "code": "VCH-AB12CD34",
+  "code": "7183 5026 4917 4053",
   "userId": "11111111-2222-3333-4444-555555555555",
   "outletCode": "WESTGATE",
   "deviceFingerprint": "abc123def456",

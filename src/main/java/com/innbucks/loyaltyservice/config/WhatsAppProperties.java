@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Config for the external WhatsApp notification gateway used to deliver the
  * guest-checkout congratulations message (SMS primary, WhatsApp fallback).
- * Third-party service (not in Eureka), so consumed via a plain RestClient with
+ * Third-party service (not in the discovery map), so consumed via a plain RestClient with
  * an explicit {@code base-url}. Same env-var convention ({@code WHATSAPP_*}) as
  * booking-service / payment-service so every service reads the same values from
  * the deployment env.

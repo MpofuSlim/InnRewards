@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -196,8 +197,38 @@ class VoucherSenderIdentityTest {
     }
 
     @Test
-    void selfSend_sameSenderAndRecipientPhone_getsOneMessageNotTwo() {
-        service.issue(TENANT, request("Tawanda Mpofu", RECIPIENT_PHONE, RECIPIENT_PHONE));
+    void selfSend_sameSenderAndRecipientPhone_isRefused() {
+        // "Hi Tawanda, Tawanda Mpofu sent you a voucher" — the till put the
+        // customer's own number in both fields. A gift needs two people; a
+        // voucher for the customer themselves leaves the sender blank.
+        assertThatThrownBy(() -> service.issue(TENANT,
+                request("Tawanda Mpofu", RECIPIENT_PHONE, RECIPIENT_PHONE)))
+                .isInstanceOf(com.innbucks.loyaltyservice.exception.LoyaltyException.class)
+                .extracting(e -> ((com.innbucks.loyaltyservice.exception.LoyaltyException) e).getCode())
+                .isEqualTo("SENDER_IS_RECIPIENT");
+
+        verify(vouchers, never()).save(any(Voucher.class));
+        verify(notifications, never()).deliver(any(), anyString());
+        verify(notifications, never()).deliverSenderCopy(any(), anyString());
+    }
+
+    @Test
+    void selfSend_isCaughtAcrossSpellingsOfTheSameNumber() {
+        // "0786546765" and "+263786546765" are the same person.
+        when(userService.normalizePhone("0786546765")).thenReturn(RECIPIENT_PHONE);
+        when(userService.normalizePhone(RECIPIENT_PHONE)).thenReturn(RECIPIENT_PHONE);
+
+        assertThatThrownBy(() -> service.issue(TENANT,
+                request("Tawanda Mpofu", "0786546765", RECIPIENT_PHONE)))
+                .isInstanceOf(com.innbucks.loyaltyservice.exception.LoyaltyException.class)
+                .extracting(e -> ((com.innbucks.loyaltyservice.exception.LoyaltyException) e).getCode())
+                .isEqualTo("SENDER_IS_RECIPIENT");
+        verify(vouchers, never()).save(any(Voucher.class));
+    }
+
+    @Test
+    void aVoucherForTheCustomerThemselves_leavesTheSenderBlank_andIssues() {
+        service.issue(TENANT, request(null, null, RECIPIENT_PHONE));
 
         verify(notifications).deliver(any(), eq(RECIPIENT_PHONE));
         verify(notifications, never()).deliverSenderCopy(any(), anyString());

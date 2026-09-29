@@ -1,6 +1,8 @@
 package com.innbucks.loyaltyservice.integration;
 
+import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Voucher;
+import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.util.VoucherCodes;
 import lombok.extern.slf4j.Slf4j;
@@ -33,10 +35,38 @@ public class NotificationGateway {
 
     private final SmsNotificationClient sms;
     private final WhatsAppNotificationClient whatsApp;
+    private final MerchantRepository merchants;
 
-    public NotificationGateway(SmsNotificationClient sms, WhatsAppNotificationClient whatsApp) {
+    public NotificationGateway(SmsNotificationClient sms, WhatsAppNotificationClient whatsApp,
+                               MerchantRepository merchants) {
         this.sms = sms;
         this.whatsApp = whatsApp;
+        this.merchants = merchants;
+    }
+
+    /**
+     * The name of the merchant the voucher is redeemable at, or null. Every
+     * message used to say only "show this code at checkout", which tells the
+     * holder nothing about WHERE — and a voucher is refused at any other
+     * merchant (WRONG_MERCHANT). Redemption is merchant-wide, not shop-bound,
+     * so "any Pizza Inn" is accurate. Best-effort: a failed lookup costs the
+     * name, never the message.
+     */
+    private String merchantName(Voucher voucher) {
+        if (voucher.getMerchantId() == null || merchants == null) {
+            return null;
+        }
+        try {
+            return merchants.findById(voucher.getMerchantId())
+                    .map(Merchant::getName)
+                    .map(String::trim)
+                    .filter(n -> !n.isEmpty())
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} merchant name lookup failed; message sent without it: {}",
+                    voucher.getId(), e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -101,10 +131,13 @@ public class NotificationGateway {
             return;
         }
         String worth = describeValue(voucher);
+        String merchant = merchantName(voucher);
         String message = "Reminder: your InnBucks voucher"
+                + (merchant == null ? "" : " for " + merchant)
                 + (worth == null ? "" : " (" + worth + ")")
                 + " expires on " + expiresOn
-                + ". Redeem it before then so it does not go to waste.";
+                + ". Redeem it" + (merchant == null ? "" : " at any " + merchant)
+                + " before then so it does not go to waste.";
         String ref = "VOUCHER-EXPIRY-" + voucher.getId();
         try {
             whatsApp.sendCustomNotification(recipientPhone, message);
@@ -168,13 +201,16 @@ public class NotificationGateway {
     private String buildMessage(Voucher voucher) {
         String name = (voucher.getAssigneeName() != null && !voucher.getAssigneeName().isBlank())
                 ? voucher.getAssigneeName() : "there";
+        String merchant = merchantName(voucher);
+        String forMerchant = merchant == null ? "" : " for " + merchant;
         StringBuilder sb = new StringBuilder("Hi ").append(name).append(", ");
         // A named sender turns the platform's notification into a personal
-        // gift: "Tawanda Mpofu sent you an InnBucks voucher" (V46).
+        // gift: "Tawanda Mpofu sent you an InnBucks voucher for Pizza Inn" (V46).
         if (voucher.getSenderName() != null && !voucher.getSenderName().isBlank()) {
-            sb.append(voucher.getSenderName()).append(" sent you an InnBucks voucher. Code ");
+            sb.append(voucher.getSenderName()).append(" sent you an InnBucks voucher")
+                    .append(forMerchant).append(". Code ");
         } else {
-            sb.append("your InnBucks voucher is ready. Code ");
+            sb.append("your InnBucks voucher").append(forMerchant).append(" is ready. Code ");
         }
         // Grouped in fours for the person reading it — "9087 8765 9876 4566". The
         // till accepts it typed back with the spaces (VoucherCodes.normalize).
@@ -187,14 +223,16 @@ public class NotificationGateway {
         if (voucher.getExpiresAt() != null) {
             sb.append(" Valid until ").append(EXPIRY_FMT.format(voucher.getExpiresAt())).append(".");
         }
-        sb.append(" Show this code at checkout to redeem.");
+        sb.append(merchant == null
+                ? " Show this code at checkout to redeem."
+                : " Show this code at any " + merchant + " checkout to redeem.");
         return sb.toString();
     }
 
     /**
      * "Hi Tawanda Mpofu, your InnBucks voucher for Sedrick Nyanyiwa
      * (+263786546765) has been sent. Code 9087 8765 9876 4566 (USD 5 off). Valid until
-     * 17 Sep 2027." The recipient's full number is fine in the MESSAGE — the
+     * 17 Sep 2027. It can be redeemed at any Pizza Inn." The recipient's full number is fine in the MESSAGE — the
      * sender typed it — but never in logs, which stay masked.
      */
     private String buildSenderCopyMessage(Voucher voucher) {
@@ -223,6 +261,10 @@ public class NotificationGateway {
         sb.append(".");
         if (voucher.getExpiresAt() != null) {
             sb.append(" Valid until ").append(EXPIRY_FMT.format(voucher.getExpiresAt())).append(".");
+        }
+        String merchant = merchantName(voucher);
+        if (merchant != null) {
+            sb.append(" It can be redeemed at any ").append(merchant).append(".");
         }
         return sb.toString();
     }

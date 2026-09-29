@@ -138,7 +138,64 @@ public class VoucherService {
                 req.senderName(), req.senderPhone(),
                 req.deliveryChannel(), req.campaignSource(), req.value(), req.currency(),
                 voucherTypeOrDefault(req.voucherType()), usageLimit);
+        // Checked against the RESOLVED holder (createVoucher canonicalised the
+        // phone, or took it from assignedUserId), before anything is saved —
+        // the throw rolls back any PENDING enrolment createVoucher just made.
+        requireSenderIsNotRecipient(v.getSenderPhone(), holderPhone(v));
         return finishIssue(v);
+    }
+
+    /**
+     * A gift has two people. When the sender phone IS the recipient phone the
+     * recipient's message reads "Hi Tawanda, Tawanda Mpofu sent you a
+     * voucher" — which is what the till produced when the cashier put the
+     * customer's own number in both fields. Refused, so the operator either
+     * fixes the recipient or leaves the sender blank for a voucher the
+     * customer is buying for themselves (which then reads "your voucher is
+     * ready"). Phones are compared canonicalised, so "0782…" and "+263782…"
+     * are the same person. No sender, or no recipient phone: nothing to
+     * compare, allowed.
+     *
+     * <p>Not applied to {@link #issueFromOrder}: an order is checked when it
+     * is CREATED, and refusing at confirmation would strand money a customer
+     * has already paid. {@code finishIssue} still sends one message, not two,
+     * for any such legacy order.
+     */
+    public void requireSenderIsNotRecipient(String senderPhone, String recipientPhone) {
+        String sender = comparablePhone(senderPhone);
+        if (sender != null && sender.equals(comparablePhone(recipientPhone))) {
+            throw LoyaltyException.badRequest("SENDER_IS_RECIPIENT",
+                    "The sender and the recipient can't be the same phone number. Enter the "
+                            + "recipient's number, or leave the sender blank if the voucher is for "
+                            + "the customer themselves.");
+        }
+    }
+
+    /** {@link #requireSenderIsNotRecipient(String, String)} for a request that
+     *  may name the recipient by loyalty user id instead of phone. */
+    public void requireSenderIsNotRecipient(String senderPhone, String assigneePhone, UUID assignedUserId) {
+        String recipient = assigneePhone;
+        if ((recipient == null || recipient.isBlank()) && assignedUserId != null) {
+            recipient = users.findById(assignedUserId).map(LoyaltyUser::getPhoneNumber).orElse(null);
+        }
+        requireSenderIsNotRecipient(senderPhone, recipient);
+    }
+
+    /** Canonical E.164 when the number parses, else the digits as typed (a
+     *  sender phone was never validated, so it may not). Null for blank. */
+    private String comparablePhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            String normalized = userService.normalizePhone(raw);
+            if (normalized != null) {
+                return normalized;
+            }
+        } catch (RuntimeException notAPhone) {
+            // fall through to the literal comparison
+        }
+        return raw.replaceAll("[^0-9+]", "");
     }
 
     /**

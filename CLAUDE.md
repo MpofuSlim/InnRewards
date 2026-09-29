@@ -1145,8 +1145,17 @@ path back.**
   API response). **Issue-path ONLY, never transfer** — transfer rotates the
   code away from the sender by design, and a sender copy there would hand the
   rotation right back; transfer keeps its code-less `notifyVoucherSent`.
-  Skipped when sender == recipient phone (one message, not two). Pinned by
-  `VoucherSenderIdentityTest` + the sender cases in `NotificationGatewayTest`.
+  **A sender phone equal to the recipient's is REFUSED** (`400
+  SENDER_IS_RECIPIENT`, owner decision 2026-09-29) on `/issue` and at
+  purchase-order CREATE, compared canonicalised (`0782…` = `+263782…`). It used
+  to issue and read "Hi Tawanda, Tawanda Mpofu sent you a voucher"; a voucher
+  the customer buys for themselves leaves the sender blank instead. Not applied
+  at order CONFIRM — the customer has already paid — where `finishIssue` still
+  sends one message, not two. Every voucher message also **names the merchant**
+  ("…a voucher for Pizza Inn… Show this code at any Pizza Inn checkout"), since
+  redemption is merchant-wide and refused anywhere else; a failed name lookup
+  costs the name, never the message. Pinned by `VoucherSenderIdentityTest` +
+  the sender and merchant cases in `NotificationGatewayTest`.
 
 ### The voucher list row carries all three people — including the cashier
 

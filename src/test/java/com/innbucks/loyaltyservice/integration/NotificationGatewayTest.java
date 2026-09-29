@@ -25,6 +25,7 @@ class NotificationGatewayTest {
     private SmsNotificationClient sms;
     private WhatsAppNotificationClient whatsApp;
     private NotificationGateway gateway;
+    private com.innbucks.loyaltyservice.repository.MerchantRepository merchants;
 
     private static final String PHONE = "+263771234567";
 
@@ -32,7 +33,8 @@ class NotificationGatewayTest {
     void setUp() {
         sms = mock(SmsNotificationClient.class);
         whatsApp = mock(WhatsAppNotificationClient.class);
-        gateway = new NotificationGateway(sms, whatsApp);
+        merchants = mock(com.innbucks.loyaltyservice.repository.MerchantRepository.class);
+        gateway = new NotificationGateway(sms, whatsApp, merchants);
     }
 
     private Voucher voucher(Voucher.DeliveryChannel channel) {
@@ -152,6 +154,62 @@ class NotificationGatewayTest {
 
         verify(whatsApp).sendCustomNotification(eq(PHONE),
                 contains("Tawanda Mpofu sent you an InnBucks voucher"));
+    }
+
+    // ---- where the voucher can be used ----
+    // "Show this code at checkout" told the holder nothing about WHERE, and a
+    // voucher is refused at any other merchant. Every message now names it.
+
+    private Voucher pizzaInnVoucher() {
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        java.util.UUID merchantId = java.util.UUID.randomUUID();
+        v.setMerchantId(merchantId);
+        com.innbucks.loyaltyservice.entity.Merchant m = new com.innbucks.loyaltyservice.entity.Merchant();
+        m.setId(merchantId);
+        m.setName("Pizza Inn");
+        org.mockito.Mockito.when(merchants.findById(merchantId)).thenReturn(java.util.Optional.of(m));
+        return v;
+    }
+
+    @Test
+    void recipientMessage_namesTheMerchantItCanBeUsedAt() {
+        gateway.deliver(pizzaInnVoucher(), PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("Tawanda Mpofu sent you an InnBucks voucher for Pizza Inn. Code "));
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("Show this code at any Pizza Inn checkout to redeem."));
+    }
+
+    @Test
+    void senderCopy_namesTheMerchantToo() {
+        Voucher v = pizzaInnVoucher();
+        gateway.deliverSenderCopy(v, v.getSenderPhone());
+
+        verify(whatsApp).sendCustomNotification(eq("+263782608767"),
+                contains("It can be redeemed at any Pizza Inn."));
+    }
+
+    @Test
+    void expiryWarning_namesTheMerchant() {
+        gateway.warnExpiring(pizzaInnVoucher(), PHONE, java.time.LocalDate.of(2027, 9, 29));
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("your InnBucks voucher for Pizza Inn (USD 5 off) expires on 2027-09-29. "
+                        + "Redeem it at any Pizza Inn before then"));
+    }
+
+    @Test
+    void aFailedMerchantLookup_costsTheName_notTheMessage() {
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        v.setMerchantId(java.util.UUID.randomUUID());
+        org.mockito.Mockito.when(merchants.findById(v.getMerchantId()))
+                .thenThrow(new RuntimeException("db down"));
+
+        gateway.deliver(v, PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("Show this code at checkout to redeem."));
     }
 
     @Test

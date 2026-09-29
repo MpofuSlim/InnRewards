@@ -119,6 +119,9 @@ public class VoucherPurchaseService {
         // customer's gift. The cashier's identity is recorded separately, as
         // issuer_* and cash_confirmed_by.
         String senderPhone = firstNonBlank(req.senderPhone());
+        // Same rule as a direct issue, and checked HERE, on the staff caller:
+        // refusing at confirmation would strand money the customer has paid.
+        voucherService.requireSenderIsNotRecipient(senderPhone, req.assigneePhone(), req.assignedUserId());
         // The payer: explicit, else the sender (the person gifting is usually
         // the person paying), else the recipient. EcoCash pushes its PIN prompt
         // to THIS number, so an order with no phone at all is not payable

@@ -99,6 +99,19 @@ public class ShopController {
                                     """)
                     )
             ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "The caller does not administer this merchant (NOT_MERCHANT_OWNER): a SHOP_ADMIN may add shops only to the merchant on its token, a MERCHANT_ADMIN only to its own organization's merchants. SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN may use any merchant in the tenant.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Not your merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "Merchant not found in this tenant"
@@ -190,6 +203,19 @@ public class ShopController {
                                     """)
                     )
             ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "The caller does not administer this merchant (NOT_MERCHANT_OWNER): a SHOP_ADMIN may add shops only to the merchant on its token, a MERCHANT_ADMIN only to its own organization's merchants. SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN may use any merchant in the tenant.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Not your merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "merchantId does not resolve to a merchant in this tenant.",
@@ -384,7 +410,25 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role is not permitted to update shops"),
+                    description = "The caller may not change this shop: a SHOP_ADMIN may change only the shop on its token (NOT_SHOP_MEMBER), a MERCHANT_ADMIN only its own organization's merchants' shops (NOT_MERCHANT_OWNER). SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN may change any shop in the tenant.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Not your shop", value = """
+                                            {
+                                              "code": "NOT_SHOP_MEMBER",
+                                              "message": "You can only access shops you are assigned to.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not your merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No shop with that id in this tenant")
     })
@@ -422,7 +466,25 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role is not permitted to activate shops"),
+                    description = "The caller may not change this shop: a SHOP_ADMIN may change only the shop on its token (NOT_SHOP_MEMBER), a MERCHANT_ADMIN only its own organization's merchants' shops (NOT_MERCHANT_OWNER). SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN may change any shop in the tenant.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Not your shop", value = """
+                                            {
+                                              "code": "NOT_SHOP_MEMBER",
+                                              "message": "You can only access shops you are assigned to.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not your merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No shop with that id in this tenant")
     })
@@ -460,7 +522,25 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role is not permitted to deactivate shops"),
+                    description = "The caller may not change this shop: a SHOP_ADMIN may change only the shop on its token (NOT_SHOP_MEMBER), a MERCHANT_ADMIN only its own organization's merchants' shops (NOT_MERCHANT_OWNER). SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN may change any shop in the tenant.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Not your shop", value = """
+                                            {
+                                              "code": "NOT_SHOP_MEMBER",
+                                              "message": "You can only access shops you are assigned to.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not your merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No shop with that id in this tenant")
     })

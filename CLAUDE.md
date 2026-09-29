@@ -1815,8 +1815,18 @@ to the token's shop, else to its merchant; SUPER_ADMIN and claim-less callers
 and `GET /{id}`. **`ShopService.get` stays unscoped on purpose** — guest checkout
 reads through it and applies its own `SHOP_NOT_OWNED` / `NOT_SHOP_MEMBER`
 checks, whose codes a scoped read would change. Pinned by `ShopCallerScopeTest`.
-The shop WRITES (create / update / activate / deactivate) still check tenant
-only — a known follow-up.
+**The shop WRITES are gated the same way** (create, bulk-upload, update,
+activate, deactivate). They used to check the tenant only, so any SHOP_ADMIN or
+MERCHANT_ADMIN could add outlets to, rename, or switch off another merchant's
+shop — and an inactive shop refuses guest checkout. `ShopService` now uses
+`RuleAdminService`'s tier: SUPER_ADMIN / PLATFORM_ADMIN / TENANT_ADMIN keep
+tenant-wide reach; everyone else goes through `MerchantAuthz`
+(`requireCallerAdministersMerchant` for the merchant-keyed writes,
+`requireCallerAccessesShop` for the shop-keyed ones), so a SHOP_ADMIN is pinned
+to its token's merchant and shop and a MERCHANT_ADMIN to its organization's
+merchants. **Don't delegate to MerchantAuthz wholesale**: it exempts only
+SUPER_ADMIN and would 403 a TENANT_ADMIN in their own tenant. Pinned by
+`ShopWriteAuthzTest`.
 
 **Still open, deliberately:**
 - A cashier can still ring a fake cash sale up to an ACCOMPLICE's phone who is

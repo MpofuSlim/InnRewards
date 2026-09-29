@@ -45,7 +45,8 @@ class ShopCallerScopeTest {
 
     private final ShopRepository shops = mock(ShopRepository.class);
     private final MerchantService merchants = mock(MerchantService.class);
-    private final ShopService service = new ShopService(shops, merchants, mock(PlatformTransactionManager.class));
+    private final ShopService service = new ShopService(shops, merchants,
+            mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class), mock(PlatformTransactionManager.class));
 
     private final Shop own = shop(MERCHANT, "Pizza Inn Avondale");
     private final Shop sibling = shop(MERCHANT, "Pizza Inn Borrowdale");

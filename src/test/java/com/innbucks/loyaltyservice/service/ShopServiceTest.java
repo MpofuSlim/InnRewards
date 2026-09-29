@@ -37,7 +37,24 @@ class ShopServiceTest {
     }
 
     private static ShopService newService(ShopRepository shops, MerchantService merchants) {
-        return new ShopService(shops, merchants, mock(PlatformTransactionManager.class));
+        return new ShopService(shops, merchants,
+                mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class), mock(PlatformTransactionManager.class));
+    }
+
+    // These cases are about the duplicate-name guard, not about who may write,
+    // so they run as a tenant-level caller (the merchant is resolved through
+    // MerchantService.requireMerchant). Write authorization is ShopWriteAuthzTest.
+    @org.junit.jupiter.api.BeforeEach
+    void asTenantAdmin() {
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                "admin@test.local", null,
+                java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearAuth() {
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
     }
 
     // --- Single create --------------------------------------------------------

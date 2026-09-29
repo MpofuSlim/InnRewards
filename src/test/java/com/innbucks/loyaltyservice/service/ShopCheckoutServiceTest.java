@@ -99,6 +99,46 @@ class ShopCheckoutServiceTest {
      * from the earn leg's raw reference.
      */
     @Test
+    void checkout_atTheTill_postsTheEarnAsTypedPhone_soTheStaffGuardsRun() {
+        // The till's guest checkout is a cashier typing a phone number. Posting
+        // it as CHECKOUT_S2S exempted it from SELF_EARN / STAFF_RECIPIENT, so a
+        // cashier could earn every unclaimed sale to their own phone. The channel
+        // the caller passes is the channel the earn is posted with.
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        String phone = "+263782606983";
+
+        Shop shop = new Shop();
+        shop.setId(shopId);
+        shop.setTenantId(tenantId);
+        shop.setMerchantId(merchantId);
+        when(shops.findById(shopId)).thenReturn(Optional.of(shop));
+        Merchant merchant = new Merchant();
+        merchant.setId(merchantId);
+        merchant.setTenantId(tenantId);
+        merchant.setCurrency("USD");
+        when(merchants.requireMerchant(tenantId, merchantId)).thenReturn(merchant);
+        LoyaltyUser user = new LoyaltyUser();
+        user.setId(UUID.randomUUID());
+        when(users.findOrCreatePending(tenantId, phone, merchantId)).thenReturn(user);
+        when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId),
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE)))
+                .thenReturn(new Dtos.TransactionResponse(
+                        UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("5"),
+                        new BigDecimal("5"), new BigDecimal("20"), null, null, shopId,
+                        null, com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE, "SHOP-1", null,
+                        null, "USD", new BigDecimal("5")));
+
+        service.checkout(shopId, phone, new BigDecimal("5"), BigDecimal.ZERO, "SHOP-1",
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
+
+        verify(transactionService).post(eq(tenantId), eq(merchantId),
+                any(Dtos.TransactionRequest.class), eq(shopId),
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE));
+    }
+
+    @Test
     void checkout_mixedCashAndPoints_burnUsesDistinctRedeemReference() {
         UUID tenantId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();

@@ -27,6 +27,12 @@ public class QrService {
     private final FraudService fraud;
     private final UserService userService;
     private final MerchantAuthz merchantAuthz;
+    private final StaffRegistry staffRegistry;
+    // The same operator switches as the typed-phone earn guards
+    // (EARN_SELF_BLOCK / EARN_STAFF_RECIPIENT_BLOCK), so one flag turns a guard
+    // off everywhere it runs. Absent earn config reads as ON: fail closed.
+    private final boolean selfBlock;
+    private final boolean staffRecipientBlock;
     private final CryptoSigner signer;
     private final int defaultTtl;
 
@@ -39,6 +45,7 @@ public class QrService {
     public QrService(QrTokenRepository qrs, TransactionService transactionService,
                      TransferService transferService, FraudService fraud,
                      UserService userService, MerchantAuthz merchantAuthz,
+                     StaffRegistry staffRegistry,
                      LoyaltyProperties props,
                      com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies) {
         this.qrs = qrs;
@@ -47,6 +54,9 @@ public class QrService {
         this.fraud = fraud;
         this.userService = userService;
         this.merchantAuthz = merchantAuthz;
+        this.staffRegistry = staffRegistry;
+        this.selfBlock = props.earn() == null || props.earn().selfBlock();
+        this.staffRecipientBlock = props.earn() == null || props.earn().staffRecipientBlock();
         this.signer = new CryptoSigner(props.qr().secret());
         this.defaultTtl = props.qr().ttlSeconds();
         this.supportedCurrencies = supportedCurrencies;
@@ -102,6 +112,47 @@ public class QrService {
                 + "|" + q.getExpiresAt().toEpochMilli();
     }
 
+    /**
+     * A merchant QR is the till's "scan to earn" code, shown on the counter for
+     * the CUSTOMER to scan. The staff behind that counter can scan it too, and
+     * {@code requireCallerOwns} is satisfied because they are crediting their
+     * own account — so without this, the cashier earns on every sale a customer
+     * does not claim. {@code QR_PRESENCE} is exempt from the typed-phone guards
+     * precisely because the scanner is the customer; this is where that
+     * assumption is checked instead of assumed.
+     *
+     * <ul>
+     *   <li>{@code SELF_EARN} — the caller's token is scoped to this merchant
+     *       (a SHOP_USER / SHOP_ADMIN of the QR's merchant).</li>
+     *   <li>{@code STAFF_RECIPIENT} — the credited phone belongs to a staff
+     *       member of this merchant. Catches the same person scanning with a
+     *       plain customer token, which carries no merchant claim at all.
+     *       {@link StaffRegistry} fails open when user-service is unreachable,
+     *       the same trade the typed-phone guard makes.</li>
+     * </ul>
+     *
+     * Both run before the token is marked used, so a refusal leaves it
+     * consumable by the customer it was shown to (the throw rolls back; the
+     * fraud row is written REQUIRES_NEW and survives).
+     */
+    private void requireNotStaffOfIssuingMerchant(UUID tenantId, UUID merchantId, LoyaltyUser recipient) {
+        UUID callerMerchant = com.innbucks.loyaltyservice.security.CallerDetails.currentMerchantId();
+        if (selfBlock && callerMerchant != null && callerMerchant.equals(merchantId)) {
+            fraud.record(tenantId, recipient.getId(), merchantId, null,
+                    FraudAttempt.Reason.SELF_EARN, "merchant QR consumed by the merchant's own staff token",
+                    null, null);
+            throw LoyaltyException.forbidden("SELF_EARN",
+                    "You can't award points to your own account.");
+        }
+        if (staffRecipientBlock && staffRegistry.isStaffPhone(merchantId, recipient.getPhoneNumber())) {
+            fraud.record(tenantId, recipient.getId(), merchantId, null,
+                    FraudAttempt.Reason.STAFF_RECIPIENT, "merchant QR consumed by a staff member's phone",
+                    null, null);
+            throw LoyaltyException.forbidden("STAFF_RECIPIENT",
+                    "Points can't be awarded to a staff account of this merchant.");
+        }
+    }
+
     public Dtos.TransactionResponse consume(UUID tenantId, Dtos.QrConsumeRequest req) {
         // --- Authorization: the credited/receiving user MUST be the caller. ---
         // consume() awards points (merchant QR) or receives a transfer (P2P QR)
@@ -137,6 +188,9 @@ public class QrService {
             fraud.record(tenantId, req.userId(), null, null,
                     FraudAttempt.Reason.QR_EXPIRED, "qr expired", null, null);
             throw LoyaltyException.badRequest("QR_EXPIRED", "This QR code has expired.");
+        }
+        if (q.getSourceType() == QrToken.SourceType.MERCHANT) {
+            requireNotStaffOfIssuingMerchant(tenantId, q.getSourceId(), recipient);
         }
         q.setUsedAt(Instant.now());
 

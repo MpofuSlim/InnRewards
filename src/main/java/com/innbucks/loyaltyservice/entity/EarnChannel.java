@@ -19,11 +19,15 @@ public enum EarnChannel {
     TYPED_PHONE,
 
     /** The customer scanned a merchant QR; {@code QrService.consume} credits
-     *  only the authenticated scanner. Presence-proof by construction. */
+     *  only the authenticated scanner. Presence-proof by construction — which
+     *  is only true when the scanner is not the merchant's own staff, so
+     *  consume refuses them itself (SELF_EARN / STAFF_RECIPIENT). */
     QR_PRESENCE,
 
     /** Server-side flow with no staff discretion over the recipient:
-     *  guest / shop checkout and the ticketing accrual integration. */
+     *  payment-service's shop checkout and the ticketing accrual integration.
+     *  NOT the till's guest checkout — a cashier types that phone, so it posts
+     *  as {@link #TYPED_PHONE}. */
     CHECKOUT_S2S,
 
     /** Reserved for phase 3 (receipt-claim earns: the POS posts the sale with

@@ -215,17 +215,37 @@ public class QrController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "BAD_SIGNATURE (the token failed HMAC verification) or CROSS_TENANT.",
+                    description = "BAD_SIGNATURE (the token failed HMAC verification), CROSS_TENANT, or a "
+                            + "MERCHANT QR scanned by that merchant's own staff: SELF_EARN when the caller's "
+                            + "token is scoped to the QR's merchant, STAFF_RECIPIENT when the credited phone "
+                            + "belongs to one of its staff (whatever token they scan with). A refused scan "
+                            + "leaves the QR unused, so the customer it was shown to can still scan it.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Bad signature", value = """
-                                    {
-                                      "code": "BAD_SIGNATURE",
-                                      "message": "This QR code couldn't be verified.",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Bad signature", value = """
+                                            {
+                                              "code": "BAD_SIGNATURE",
+                                              "message": "This QR code couldn't be verified.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff scanned their own till's QR", value = """
+                                            {
+                                              "code": "SELF_EARN",
+                                              "message": "You can't award points to your own account.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Credited phone is merchant staff", value = """
+                                            {
+                                              "code": "STAFF_RECIPIENT",
+                                              "message": "Points can't be awarded to a staff account of this merchant.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -244,7 +264,10 @@ public class QrController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    // No SHOP_USER: consume credits the CALLER, and a till token has no reason
+    // to credit itself. The service still refuses a merchant's own staff
+    // scanning its QR under any other role (SELF_EARN / STAFF_RECIPIENT).
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> consume(@Valid @RequestBody Dtos.QrConsumeRequest req) {
         Dtos.TransactionResponse data = qrService.consume(tenantContext.requireTenantId(), req);
         return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));

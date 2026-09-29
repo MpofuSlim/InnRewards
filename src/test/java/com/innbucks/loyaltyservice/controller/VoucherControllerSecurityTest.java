@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -196,7 +197,8 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
 
     // --- SHOP_USER — till-operations role ---
     // SHOP_USER does the daily voucher ops at the till (list / redeem / mark-viewed)
-    // but cannot issue vouchers or revoke. These pin both sides.
+    // but cannot issue, revoke or transfer vouchers, and its list never carries
+    // a customer's codes. These pin both sides.
 
     private static final String VALID_REDEEM_BODY = """
             {"code":"VCH-AB12-CD34-EF56"}
@@ -226,25 +228,104 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void shop_user_can_list_active_vouchers_by_phone() throws Exception {
+    void shop_user_lists_a_customers_active_vouchers_WITHOUT_their_codes() throws Exception {
+        // A cashier sees that the customer holds a voucher and what it is worth,
+        // never the code that spends it: redeem accepts a code from any till of
+        // the merchant, so a code the cashier can read is a voucher the cashier
+        // can spend with the customer nowhere near the shop.
+        stubActiveVouchers("4829137605128368");
+
+        UUID tenant = newTenant("vch-shopuser-byphone");
+        joinTenant(tenant, "till-user@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
+                .builder("till-user@test.local").role("SHOP_USER")
+                .merchantId(UUID.randomUUID()).shopId(UUID.randomUUID())
+                .phoneNumber("+263770000555").sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000900")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].value").exists())
+                .andExpect(jsonPath("$.data.content[0].code").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    void shop_user_looking_up_their_OWN_phone_sees_their_own_codes() throws Exception {
+        stubActiveVouchers("4829137605128368");
+
+        UUID tenant = newTenant("vch-shopuser-own");
+        joinTenant(tenant, "till-user@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
+                .builder("till-user@test.local").role("SHOP_USER")
+                .merchantId(UUID.randomUUID()).shopId(UUID.randomUUID())
+                .phoneNumber("+263770000555").sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000555")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].code").value("4829137605128368"));
+    }
+
+    @Test
+    void shop_admin_still_sees_codes_on_the_by_phone_list() throws Exception {
+        stubActiveVouchers("4829137605128368");
+
+        UUID tenant = newTenant("vch-shopadmin-byphone");
+        joinTenant(tenant, "shop-admin@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopAdmin(
+                "shop-admin@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000900")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].code").value("4829137605128368"));
+    }
+
+    @Test
+    void shop_user_cannot_transfer_a_voucher() throws Exception {
+        // Transfer sends a fresh code to whatever phone the caller names. Refused
+        // by @PreAuthorize, before the service is ever asked.
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/{id}/transfer", UUID.randomUUID())
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toPhone\":\"+263770000777\"}"))
+                .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(voucherService);
+    }
+
+    @Test
+    void shop_user_cannot_consume_a_qr() throws Exception {
+        // Consume credits the CALLER; a till token has no reason to credit itself.
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/qr/consume")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"t\",\"signature\":\"s\",\"userId\":\""
+                                + UUID.randomUUID() + "\",\"reference\":\"r\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    private void stubActiveVouchers(String code) {
+        var voucher = new com.innbucks.loyaltyservice.dto.Dtos.VoucherResponse(
+                UUID.randomUUID(), code, "ISSUED", "SINGLE_USE",
+                UUID.randomUUID(), null, null, null,
+                UUID.randomUUID(), "+263770000900", "Sedrick Nyanyiwa",
+                null, null,
+                null, null, null,
+                1, new java.math.BigDecimal("5.00"), "USD", new java.math.BigDecimal("5.00"),
+                java.time.Instant.now(), null, null, null, null, null,
+                null, null);
         org.mockito.Mockito.when(voucherService.activeForPhone(
                 org.mockito.ArgumentMatchers.any(UUID.class),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(
-                        java.util.List.of(), org.springframework.data.domain.Pageable.unpaged(), 0));
-
-        // The by-phone endpoint is now tenant-scoped: the caller must send a
-        // valid X-Tenant-Id and be a member of it. The admin-role owner-check
-        // bypass still lets a shop user look up any phone WITHIN their tenant.
-        UUID tenant = newTenant("vch-shopuser-byphone");
-        joinTenant(tenant, "till-user@test.local");
-        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
-                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
-        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000900")
-                        .header("Authorization", bearer(token))
-                        .header("X-Tenant-Id", tenant.toString()))
-                .andExpect(status().isOk());
+                        java.util.List.of(voucher), org.springframework.data.domain.Pageable.unpaged(), 1));
     }
 
     @Test

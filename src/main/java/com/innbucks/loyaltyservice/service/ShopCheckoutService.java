@@ -50,17 +50,39 @@ public class ShopCheckoutService {
                          UUID purchaseTransactionId,
                          UUID redemptionTransactionId) {}
 
+    /** The payment-service S2S checkout: the customer's phone comes from their
+     *  own payment, so no staff member chose the recipient. */
     @Transactional
     public Result checkout(UUID shopId,
                            String phoneNumber,
                            BigDecimal cashAmount,
                            BigDecimal pointsAmount,
                            String reference) {
+        return checkout(shopId, phoneNumber, cashAmount, pointsAmount, reference,
+                com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
+    }
+
+    /**
+     * @param earnChannel how the recipient was chosen, and therefore which
+     *        earn-integrity guards apply. The till's guest checkout passes
+     *        {@code TYPED_PHONE}: a cashier keys in the phone, which is exactly
+     *        the shape {@code SELF_EARN} / {@code STAFF_RECIPIENT} exist for.
+     *        Labelling it {@code CHECKOUT_S2S} exempted it from both, so a
+     *        cashier could ring every unclaimed sale up to their own phone.
+     */
+    @Transactional
+    public Result checkout(UUID shopId,
+                           String phoneNumber,
+                           BigDecimal cashAmount,
+                           BigDecimal pointsAmount,
+                           String reference,
+                           com.innbucks.loyaltyservice.entity.EarnChannel earnChannel) {
         boolean hasCash = cashAmount != null && cashAmount.signum() > 0;
         boolean hasPoints = pointsAmount != null && pointsAmount.signum() > 0;
         String mode = hasCash && hasPoints ? "mixed" : hasCash ? "cash" : "points";
         try {
-            Result r = doCheckout(shopId, phoneNumber, cashAmount, pointsAmount, reference, hasCash, hasPoints);
+            Result r = doCheckout(shopId, phoneNumber, cashAmount, pointsAmount, reference, hasCash, hasPoints,
+                    earnChannel);
             metrics.incShopCheckout("success", mode);
             return r;
         } catch (LoyaltyException e) {
@@ -72,7 +94,8 @@ public class ShopCheckoutService {
 
     private Result doCheckout(UUID shopId, String phoneNumber, BigDecimal cashAmount,
                               BigDecimal pointsAmount, String reference,
-                              boolean hasCash, boolean hasPoints) {
+                              boolean hasCash, boolean hasPoints,
+                              com.innbucks.loyaltyservice.entity.EarnChannel earnChannel) {
         if (shopId == null) {
             throw LoyaltyException.badRequest("SHOP_REQUIRED", "Please select a shop.");
         }
@@ -113,7 +136,7 @@ public class ShopCheckoutService {
             // already resolved — otherwise the transaction lands with a null shop
             // and the per-shop points report shows nothing.
             Dtos.TransactionResponse earnResp = transactionService.post(tenantId, merchantId, earn, shopId,
-                    com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S);
+                    earnChannel);
             pointsEarned = earnResp.pointsDelta() == null ? BigDecimal.ZERO : earnResp.pointsDelta();
             purchaseTxnId = earnResp.id();
             balance = earnResp.balanceAfter() == null ? balance : earnResp.balanceAfter();

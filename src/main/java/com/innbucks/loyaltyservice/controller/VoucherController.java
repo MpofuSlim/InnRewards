@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -516,7 +517,9 @@ public class VoucherController {
                     redemption trail ambiguous. An expired voucher is refused too.
 
                     The **caller must be the current holder** (a CUSTOMER whose JWT phone matches the \
-                    assignee). Staff roles may transfer on a customer's behalf for support.
+                    assignee). SUPER_ADMIN, and a MERCHANT_ADMIN / SHOP_ADMIN of the voucher's own \
+                    merchant, may transfer on a customer's behalf for support — but never to their own \
+                    phone (`STAFF_RECIPIENT`). A SHOP_USER (cashier) cannot transfer at all.
 
                     Send exactly one of `toUserId` or `toPhone`. An unknown `toPhone` is auto-enrolled as a \
                     PENDING loyalty user, so you can pass a voucher to someone who hasn't signed up yet — \
@@ -609,18 +612,38 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "Caller is not the voucher's current holder (`NOT_VOUCHER_OWNER`) or the "
-                            + "voucher belongs to another tenant (`CROSS_TENANT`).",
+                    description = "Caller is not the voucher's current holder (`NOT_VOUCHER_OWNER`), the "
+                            + "voucher belongs to another tenant (`CROSS_TENANT`), an admin does not "
+                            + "administer the voucher's merchant (`NOT_MERCHANT_OWNER`), or an admin tried "
+                            + "to send a customer's voucher to their own phone (`STAFF_RECIPIENT`). A "
+                            + "SHOP_USER token is refused outright (Spring Security's plain 403) — a cashier "
+                            + "cannot move a customer's voucher.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not the holder", value = """
-                                    {
-                                      "code": "NOT_VOUCHER_OWNER",
-                                      "message": "you can only act on your own vouchers",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Not the holder", value = """
+                                            {
+                                              "code": "NOT_VOUCHER_OWNER",
+                                              "message": "you can only act on your own vouchers",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Admin of another merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff sending it to themselves", value = """
+                                            {
+                                              "code": "STAFF_RECIPIENT",
+                                              "message": "Staff can't transfer a customer's voucher to their own phone.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -639,7 +662,11 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    // No SHOP_USER, deliberately: transfer re-points a voucher's code at whoever
+    // the caller names, so a cashier holding it could send any customer's
+    // voucher in the tenant to an accomplice. The holder transfers their own
+    // (CUSTOMER), and an admin of the voucher's merchant may act for them.
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherResponse>> transfer(
             @PathVariable UUID id,
             @Valid @RequestBody Dtos.VoucherTransferRequest req) {
@@ -806,7 +833,11 @@ public class VoucherController {
                           "another tenant will never surface them here. " +
                           "CUSTOMER callers can only request their own phone (JWT phoneNumber claim must " +
                           "match the path); MERCHANT_ADMIN / SHOP_ADMIN / SUPER_ADMIN can look up any phone " +
-                          "for support, but only ever see their own tenant's vouchers.")
+                          "for support, but only ever see their own tenant's vouchers. A SHOP_USER (cashier) " +
+                          "can look up any phone in the tenant but gets every `code` as null: the till " +
+                          "sees that the customer holds a voucher, never the code that spends it. The " +
+                          "customer reads their code out from their own WhatsApp/SMS/app. A SHOP_USER " +
+                          "looking up their OWN phone sees their own codes.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -902,38 +933,51 @@ public class VoucherController {
         UUID tenantId = tenantContext.requireTenantId();
         // Gate 2 — identity. CUSTOMER may only ask for their own phone (matches
         // the wallet-owner pattern in /users/{id}/transactions and
-        // TransferService). Admin roles bypass this owner check for support /
+        // TransferService). Staff roles bypass this owner check for support /
         // ops, but stay bounded to their tenant by the scoped query above.
-        requireCallerOwnsPhoneOrIsAdmin(phoneNumber);
-        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
-                voucherService.activeForPhone(tenantId, phoneNumber, pageable));
+        PhoneVoucherView view = requireCallerMayListPhoneVouchers(phoneNumber);
+        Page<Dtos.VoucherResponse> page = voucherService.activeForPhone(tenantId, phoneNumber, pageable);
+        // Gate 3 — the CODE. A cashier sees that a customer holds a voucher, its
+        // value and its expiry, never the code that spends it. The code is a
+        // bearer credential and redeem accepts it from any till of the merchant,
+        // so a code a SHOP_USER can read is a voucher that SHOP_USER can spend
+        // without the customer present. At the till the customer supplies it
+        // from their own WhatsApp/SMS/app, which is the only proof they are there.
+        if (view == PhoneVoucherView.WITHOUT_CODES) {
+            page = page.map(Dtos.VoucherResponse::withoutCode);
+        }
+        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(page);
         return ResponseEntity.ok(ApiResult.ok("Active vouchers retrieved successfully", data));
     }
+
+    /** What a phone-keyed voucher read may show the caller. */
+    enum PhoneVoucherView { WITH_CODES, WITHOUT_CODES }
 
     /**
      * Authz gate for phone-keyed reads. Mirrors UserService.requireCallerOwnsOrIsAdmin
      * but works directly off a phone string (the phone-keyed wallet endpoints don't
      * have a LoyaltyUser handy at the call site).
+     *
+     * <p>Order matters. The phone's OWNER is checked first, so a cashier looking
+     * at their own vouchers sees their own codes. Admin roles see codes (they can
+     * list every code in the tenant through {@code GET /loyalty/vouchers} anyway).
+     * A SHOP_USER looking at someone else's phone gets the list with every code
+     * removed. Anyone else is refused.
      */
-    private void requireCallerOwnsPhoneOrIsAdmin(String phoneNumber) {
-        var auth = org.springframework.security.core.context.SecurityContextHolder
-                .getContext().getAuthentication();
-        if (auth != null) {
-            for (var ga : auth.getAuthorities()) {
-                String role = ga.getAuthority();
-                if ("ROLE_SUPER_ADMIN".equals(role)
-                        || "ROLE_MERCHANT_ADMIN".equals(role)
-                        || "ROLE_SHOP_ADMIN".equals(role)
-                        || "ROLE_SHOP_USER".equals(role)) {
-                    return;
-                }
-            }
+    static PhoneVoucherView requireCallerMayListPhoneVouchers(String phoneNumber) {
+        String callerPhone = CallerDetails.currentPhoneNumber();
+        if (callerPhone != null && callerPhone.equals(phoneNumber)) {
+            return PhoneVoucherView.WITH_CODES;
         }
-        String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
-        if (callerPhone == null || !callerPhone.equals(phoneNumber)) {
-            throw com.innbucks.loyaltyservice.exception.LoyaltyException.forbidden(
-                    "NOT_PHONE_OWNER", "you can only view vouchers for your own phone");
+        if (CallerDetails.hasAnyRole(
+                "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN", "ROLE_SHOP_ADMIN")) {
+            return PhoneVoucherView.WITH_CODES;
         }
+        if (CallerDetails.hasAnyRole("ROLE_SHOP_USER")) {
+            return PhoneVoucherView.WITHOUT_CODES;
+        }
+        throw com.innbucks.loyaltyservice.exception.LoyaltyException.forbidden(
+                "NOT_PHONE_OWNER", "you can only view vouchers for your own phone");
     }
 
     @GetMapping

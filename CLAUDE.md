@@ -42,9 +42,11 @@ loyalty-relevant subset of that monorepo's `CLAUDE.md`.
 ## Extraction context — what stayed behind in ticketing-system
 
 - **The API gateway route stays in `ticketing-system`.** The gateway routes
-  `/loyalty/**` → `lb://loyalty-service` **by Eureka service name**, so it keeps
-  working across repos as long as this service still registers as
-  `loyalty-service` on the **same** discovery-server. When you add a new HTTP
+  `/loyalty/**` → `lb://loyalty-service`, which resolves through the fleet's
+  static discovery map to this service's k8s `Service` (`loyalty-service:8086`,
+  in ticketing-system's `deploy/k8s/04-services.yaml`). Eureka is retired: keep
+  the Service name and port stable, because every fleet service's map names
+  them. When you add a new HTTP
   endpoint here, the gateway route in `ticketing-system`
   (`api-gateway/src/main/resources/application.yaml`) must be updated in
   lock-step — mirror the predicate prefix + rate limiter as the other routes.
@@ -58,6 +60,30 @@ loyalty-relevant subset of that monorepo's `CLAUDE.md`.
   future non-ticketing consumer will need these made pluggable (RS256/JWKS auth,
   a configurable contact provider, configurable sibling endpoints) — do that
   incrementally when the first real second-consumer lands, not upfront.
+
+## Service discovery — Kubernetes Service DNS (Eureka retired)
+
+Siblings are found by their **Kubernetes Service name**, through a static
+`spring.cloud.discovery.client.simple.instances` map at the end of
+`application.yaml` (plus a `local` profile mapping the same names to
+`localhost`). The `@LoadBalanced` builder in `LoadBalancedRestClientConfig` and
+`UserServiceClient`'s `http://user-service` are unchanged — only the resolver
+moved from the Eureka registry to that map.
+
+- **The map is the fleet map, identical in every service of both repos.**
+  ticketing-system's `FleetServiceMapTest` pins its six copies against its k8s
+  Services; this repo's `FleetServiceMapTest` pins this copy to the same
+  entries, and fails on any `http://<x>-service` address with no entry, on
+  leftover `eureka.*` config, or on YAML that does not bind into the real
+  `SimpleDiscoveryClient`. Change the fleet map in BOTH repos together.
+- `spring-cloud-starter-loadbalancer` **and Apache `httpclient5`** are declared
+  explicitly; both used to arrive only through `eureka-client`. Losing
+  `httpclient5` would silently move every `RestClient` that does not set a
+  request factory onto the JDK `HttpClient` (HTTP/2) — it broke ticketing's
+  notification contract tests exactly that way.
+- Replicas need nothing here: the Service balances across ready pods. Per-request
+  balancing and in-cluster mTLS are planned via the Linkerd mesh, again with no
+  change to the map. Do not reintroduce a registry.
 
 ## Internal endpoints — controller + SecurityConfig must agree (gateway lives in ticketing)
 

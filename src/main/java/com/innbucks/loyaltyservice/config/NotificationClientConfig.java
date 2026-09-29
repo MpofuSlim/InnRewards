@@ -13,7 +13,7 @@ import java.time.Duration;
  * public notification API (SMS, authed — X-Api-Key + bearer from
  * /auth/third-party, handled in {@code SmsNotificationClient}) and the WhatsApp
  * gateway. Both are external services reached by an
- * explicit {@code base-url} (not Eureka), with the same correlation-ID
+ * explicit {@code base-url} (not the discovery map), with the same correlation-ID
  * propagation booking-service uses so a checkout's traceId follows the
  * notification across the wire.
  */

@@ -42,7 +42,8 @@ public class UserServiceClient {
         factory.setConnectTimeout(connectTimeoutMs);
         factory.setReadTimeout(readTimeoutMs);
         // Clone the load-balanced builder so "user-service" resolves through
-        // Eureka; clone() preserves the LB interceptor alongside our per-client
+        // the discovery map (its k8s Service); clone() preserves the LB
+        // interceptor alongside our per-client
         // request factory and correlation-id interceptor.
         this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)

@@ -4,8 +4,8 @@ Multi-tenant loyalty, points, voucher and QR platform. Extracted from the
 `MpofuSlim/ticketing-system` monorepo into its own repository — loyalty is
 independent of ticketing and is meant to be reused across products.
 
-The service is unchanged by the extraction: it still registers with the same
-Eureka registry as **`loyalty-service`**, is routed by the ticketing API
+The service is unchanged by the extraction: it runs as the Kubernetes Service
+**`loyalty-service`** (port 8086), is routed by the ticketing API
 gateway at `/loyalty/**` **by service name** (not by repo), and still publishes
 the same container image **`ghcr.io/mpofuslim/loyalty-service`**. Front-end and
 gateway wiring are untouched.
@@ -15,8 +15,9 @@ gateway wiring are untouched.
 - **Spring Boot 4.1** (webmvc), Java 21.
 - **Postgres** owns the schema via **Flyway** migrations
   (`src/main/resources/db/migration`, V1–V27), `ddl-auto: validate`.
-- **Eureka client** for service discovery; siblings resolved by name via Spring
-  Cloud LoadBalancer.
+- **Service discovery by Kubernetes Service DNS**: siblings resolved by name via
+  Spring Cloud LoadBalancer through a static map in `application.yaml` (Eureka
+  retired).
 - **Redis** — read side of the shared cross-service logout-token denylist.
 - HTTP port **8086** (`SERVER_PORT`), actuator health at `/actuator/health`.
 - Timestamps are `Instant` (UTC-inherent); containers also pin

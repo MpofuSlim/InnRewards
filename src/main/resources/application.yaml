@@ -57,7 +57,7 @@ user-service:
 
 # External WhatsApp gateway — fallback channel for the guest-checkout
 # congratulations message (SMS primary). Same WHATSAPP_* env-var convention as
-# booking-service / payment-service; not in Eureka, reached by explicit base-url.
+# booking-service / payment-service; not in the discovery map, reached by explicit base-url.
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
@@ -477,15 +477,6 @@ server:
     include-message: never
     include-binding-errors: never
 
-eureka:
-  client:
-    service-url:
-      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
-  instance:
-    prefer-ip-address: true
-    instance-id: ${spring.application.name}:${random.uuid}
-
-
 # Static token the Prometheus scraper (in the ticketing cell's monitoring
 # stack) presents on X-Metrics-Token to read /actuator/prometheus (see
 # MetricsScrapeAuthFilter). Blank (the default) fail-closes: the endpoint
@@ -589,3 +580,51 @@ app:
     # Must be an SES-verified identity for the region or SES rejects the send.
     from: ${MAIL_FROM:banking@innbucks.co.zw}
     sender-name: ${MAIL_SENDER_NAME:Foundry}
+
+---
+# Service discovery: Kubernetes Service DNS. Eureka is retired.
+#
+# Every sibling resolves to its k8s ClusterIP Service (ticketing-system
+# deploy/k8s), which routes only to READY pods and balances across replicas,
+# so the @LoadBalanced RestClient's http://user-service keeps its name and
+# needs no code change. Under the planned Linkerd mesh the same Service names
+# get per-request balancing and mTLS with no change here either.
+#
+# This map is the FLEET map, identical in every service of both repos
+# (ticketing-system pins its copies with FleetServiceMapTest; this repo's
+# FleetServiceMapTest pins this one to the same entries). Ports must equal the
+# k8s Service ports. Add a service = one line in every copy + its k8s Service.
+spring:
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            user-service:        [{ uri: "http://user-service:8081" }]
+            event-service:       [{ uri: "http://event-service:8082" }]
+            seat-service:        [{ uri: "http://seat-service:8083" }]
+            booking-service:     [{ uri: "http://booking-service:8084" }]
+            payment-service:     [{ uri: "http://payment-service:8085" }]
+            loyalty-service:     [{ uri: "http://loyalty-service:8086" }]
+            marketplace-service: [{ uri: "http://marketplace-service:8087" }]
+
+---
+# Running the jar directly on one machine (no compose, no k8s): same names,
+# localhost. Activate with SPRING_PROFILES_ACTIVE=local (which
+# ProductionSecretsGuard already treats as a non-deployment profile).
+spring:
+  config:
+    activate:
+      on-profile: local
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            user-service:        [{ uri: "http://localhost:8081" }]
+            event-service:       [{ uri: "http://localhost:8082" }]
+            seat-service:        [{ uri: "http://localhost:8083" }]
+            booking-service:     [{ uri: "http://localhost:8084" }]
+            payment-service:     [{ uri: "http://localhost:8085" }]
+            loyalty-service:     [{ uri: "http://localhost:8086" }]
+            marketplace-service: [{ uri: "http://localhost:8087" }]

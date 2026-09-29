@@ -58,6 +58,9 @@
              fixes it. Property name matches Spring Boot's BOM key. Drop on the
              next Boot upgrade once the BOM catches up. -->
         <spring-kafka.version>4.1.1</spring-kafka.version>
+        <!-- CVE-2026-68497 — see the Jackson BOM imports below. -->
+        <jackson-bom.version>3.1.6</jackson-bom.version>
+        <jackson-2-bom.version>2.21.6</jackson-2-bom.version>
         <spring.cloud.version>2025.1.3</spring.cloud.version>
         <springdoc.version>3.1.1</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
@@ -170,6 +173,31 @@
                 <groupId>io.netty</groupId>
                 <artifactId>netty-bom</artifactId>
                 <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- CVE-2026-68497 (HIGH): jackson-databind DoS via unbounded
+                 numeric parsing. Boot 4.1.1's BOM ships tools.jackson 3.1.5 and
+                 com.fasterxml.jackson 2.21.5; the Release Trivy gate failed on
+                 both copies in app.jar (2026-09-29) BEFORE the push, so no image
+                 shipped. Fixed in 3.1.6 / 2.21.6. Both lines are live: Jackson 3
+                 is Boot 4's default, Jackson 2 comes in through
+                 spring-boot-jackson2 for jjwt-jackson. The BOMs are imported
+                 (not databind alone) so core/databind/datatype/dataformat move in
+                 lockstep — databind 2.21.6 on core 2.21.5 is a skew Jackson does
+                 not support. Declared before spring-boot-dependencies so they
+                 win. Drop on the next Boot upgrade once its BOM carries them. -->
+            <dependency>
+                <groupId>tools.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson-2-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

@@ -1804,6 +1804,20 @@ Each is now closed:
   reason to credit itself. Staff of a DIFFERENT merchant earn like anyone
   else. Pinned by `QrStaffSelfEarnTest`.
 
+**Shop reads are scoped to the token, too.** A staff account has exactly one
+shop (user-service `users.loyalty_shop_id` → the `shopId` claim) and one
+merchant (`merchantId`). `GET /loyalty/shops` used to return the whole tenant to
+a SHOP_ADMIN and 403 a SHOP_USER, so a till had no way to learn its own shop and
+an admin's picker offered other merchants' outlets that every shop-scoped write
+then refused. `ShopService.list` / `listForMerchant` / `getForCaller` now narrow
+to the token's shop, else to its merchant; SUPER_ADMIN and claim-less callers
+(MERCHANT_ADMIN, tenant roles) are unchanged, and SHOP_USER may call the list
+and `GET /{id}`. **`ShopService.get` stays unscoped on purpose** — guest checkout
+reads through it and applies its own `SHOP_NOT_OWNED` / `NOT_SHOP_MEMBER`
+checks, whose codes a scoped read would change. Pinned by `ShopCallerScopeTest`.
+The shop WRITES (create / update / activate / deactivate) still check tenant
+only — a known follow-up.
+
 **Still open, deliberately:**
 - A cashier can still ring a fake cash sale up to an ACCOMPLICE's phone who is
   not staff. That is inherent to a typed phone. The durable fix is

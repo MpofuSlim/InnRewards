@@ -604,6 +604,14 @@ around these rules:
   WhatsApp/SMS/app, then redeem it (§8). Don't build "tap a voucher to redeem".
 - **No voucher transfer, no QR consume.** Both answer `403 FORBIDDEN`
   (`"You don't have permission to do that."`). Hide the actions.
+- **The cashier's shop is on their login token.** Decode the JWT payload and
+  read `shopId` (a UUID string) and `merchantId`; a claim is omitted, not null,
+  when the account has none. A staff account has exactly **one** shop, so there
+  is never a choice to offer. It is not in the login response body. To show the
+  shop's name, call `GET /loyalty/shops` — for a token that names a shop it
+  returns exactly that one shop — or `GET /loyalty/shops/{shopId}`, which
+  answers `403 NOT_SHOP_MEMBER` for any other outlet. **Show a shop picker only
+  when the token has no `shopId`** (a merchant admin).
 - **Guest checkout** (`POST /loyalty/shops/{shopId}/guest-checkout`,
   body `{ "phoneNumber": "+263771234567", "cashAmount": 10.00 }`) refuses:
 
@@ -680,4 +688,5 @@ stub. There is no airtime conversion.
 - [ ] Send `deviceFingerprint` on voucher redemption
 - [ ] Till app: no codes from the by-phone list, no transfer, no QR consume,
       guest checkout on the cashier's own shop only (§10)
+- [ ] The cashier's shop is the token's `shopId` claim — no picker when it is present
 - [ ] Nothing in §11 or §12 is in the production build

@@ -119,6 +119,53 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    // --- A cashier reads their own shop --------------------------------------------
+    // SHOP_USER can list shops and read one by id; ShopService scopes both to the
+    // shop on the token (ShopCallerScopeTest), so the till gets its own outlet's
+    // name without a picker.
+
+    @Test
+    void shop_user_can_list_shops() throws Exception {
+        UUID tenantId = newTenant("shop-list-cashier");
+        joinTenant(tenantId, "cashier@test.local");
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        when(shopService.list(any(), any(), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(
+                        new Dtos.ShopResponse(shopId, tenantId, merchantId, "Pizza Inn Avondale", "addr",
+                                Shop.Status.ACTIVE, Instant.now())),
+                        org.springframework.data.domain.Pageable.unpaged(), 1));
+
+        String cashier = TestJwtFactory.shopUser("cashier@test.local", merchantId, shopId, jwtSecret);
+        mockMvc.perform(get("/loyalty/shops")
+                        .header("Authorization", bearer(cashier))
+                        .header("X-Tenant-Id", tenantId.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].id").value(shopId.toString()));
+    }
+
+    @Test
+    void shop_user_can_read_their_shop_by_id_through_the_scoped_read() throws Exception {
+        UUID tenantId = newTenant("shop-get-cashier");
+        joinTenant(tenantId, "cashier@test.local");
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        when(shopService.getForCaller(any(), eq(shopId)))
+                .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId, "Pizza Inn Avondale", "addr",
+                        Shop.Status.ACTIVE, Instant.now()));
+
+        String cashier = TestJwtFactory.shopUser("cashier@test.local", merchantId, shopId, jwtSecret);
+        mockMvc.perform(get("/loyalty/shops/{id}", shopId)
+                        .header("Authorization", bearer(cashier))
+                        .header("X-Tenant-Id", tenantId.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.name").value("Pizza Inn Avondale"));
+        // The endpoint must go through the caller-scoped read, never the
+        // unscoped one guest checkout uses.
+        verify(shopService).getForCaller(any(), eq(shopId));
+        org.mockito.Mockito.verify(shopService, org.mockito.Mockito.never()).get(any(), any());
+    }
+
     // --- Guest checkout (earn for an unregistered customer) ---------------------
 
     // A04/A01: guest-checkout is merchant-authenticated again. No bearer token -> 401.

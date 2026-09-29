@@ -14,6 +14,16 @@ package com.innbucks.loyaltyservice.integration;
  * falls back to a CSS-drawn four-dot roundel + wordmark so the header is still
  * branded without a hosted asset.
  *
+ * <p><b>The header row is brand NAVY, not white, and must stay that way.</b>
+ * The hosted logo asset ({@code NOTIFY_LOGO_URL}) is drawn for a dark ground:
+ * its "InnBucks" / "MicroBank Limited" lettering is WHITE, and only the four
+ * brand dots are coloured. On the white header this shell used to have, the
+ * lettering vanished and the email showed four floating dots (seen in Gmail on
+ * staging, 2026-09-29). The navy is set twice on the header cell on purpose:
+ * as the {@code bgcolor} attribute, which Outlook's Word engine honours, and as
+ * an inline {@code background}, which Gmail honours. It is the same
+ * {@link #NAVY} as the footer, so the message reads as one navy-framed card.
+ *
  * <p>The caller's body is plain text (the same string the plain-text path
  * sends), so it is HTML-escaped here and its blank-line-separated paragraphs
  * become {@code <p>} blocks — no HTML is ever taken from the message content,
@@ -26,6 +36,8 @@ public final class BrandedEmailRenderer {
 
     private static final String NAVY = "#0c2545";
     private static final String TEAL = "#17a98c";
+    /** Light slate that reads on {@link #NAVY}: the footer's body text colour. */
+    private static final String ON_NAVY_TEXT = "#b9c6d8";
 
     /**
      * Render {@code plainBody} into a full branded HTML document.
@@ -52,8 +64,10 @@ public final class BrandedEmailRenderer {
             + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
             +   "style=\"width:600px;max-width:100%;background:#ffffff;border-radius:12px;overflow:hidden;"
             +   "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">"
-            // header
-            + "<tr><td style=\"padding:26px 34px 20px;\">" + logo + "</td></tr>"
+            // header — navy, because the hosted logo's lettering is white (see
+            // class javadoc); bgcolor for Outlook, inline background for Gmail.
+            + "<tr><td bgcolor=\"" + NAVY + "\" style=\"background:" + NAVY
+            +   ";padding:26px 34px 20px;\">" + logo + "</td></tr>"
             // accent bar
             + "<tr><td style=\"font-size:0;line-height:0;\">"
             +   "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>"
@@ -66,7 +80,8 @@ public final class BrandedEmailRenderer {
             + "<tr><td style=\"padding:30px 34px 8px;color:#2b3a4b;font-size:15px;line-height:1.6;\">"
             +   paragraphs + "</td></tr>"
             // footer
-            + "<tr><td style=\"background:" + NAVY + ";padding:26px 34px;color:#b9c6d8;font-size:13px;"
+            + "<tr><td style=\"background:" + NAVY + ";padding:26px 34px;color:" + ON_NAVY_TEXT
+            +   ";font-size:13px;"
             +   "line-height:1.55;\">"
             +   "<div style=\"color:#ffffff;font-weight:700;font-size:15px;margin-bottom:8px;\">"
             +     "The InnBucks Team</div>"
@@ -85,10 +100,11 @@ public final class BrandedEmailRenderer {
 
     /**
      * CSS/table-drawn brand lockup — the four-dot roundel + "InnBucks" wordmark
-     * + "MicroBank Limited" tagline, all in solid brand colours. Used as the
-     * header when no hosted logo URL is set: it renders crisply in every client
-     * with no image to load (or wash out), unlike a hosted PNG that can proxy
-     * faintly on a white ground.
+     * + "MicroBank Limited" tagline. Used as the header when no hosted logo URL
+     * is set: it renders crisply in every client with no image to load (or be
+     * blocked). It sits on the NAVY header, so it matches the hosted asset: a
+     * white wordmark, a light-slate tagline, and the four dots in their brand
+     * colours.
      */
     private static String cssRoundel() {
         String dot = "width:16px;height:16px;border-radius:50%;font-size:0;line-height:0;"
@@ -102,9 +118,9 @@ public final class BrandedEmailRenderer {
             +   "<tr><td style=\"background:" + TEAL + ";" + dot + "\"></td>"
             +     "<td style=\"background:#e11b22;" + dot + "\"></td></tr></table></td>"
             + "<td style=\"vertical-align:middle;" + face + "\">"
-            +   "<div style=\"font-size:28px;font-weight:800;color:" + NAVY + ";letter-spacing:-.5px;"
+            +   "<div style=\"font-size:28px;font-weight:800;color:#ffffff;letter-spacing:-.5px;"
             +     "line-height:1;\">InnBucks</div>"
-            +   "<div style=\"font-size:12px;font-weight:600;color:#5d6b7b;letter-spacing:.4px;"
+            +   "<div style=\"font-size:12px;font-weight:600;color:" + ON_NAVY_TEXT + ";letter-spacing:.4px;"
             +     "margin-top:3px;\">MicroBank Limited</div>"
             + "</td></tr></table>";
     }

@@ -5,8 +5,10 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -70,24 +72,103 @@ public class ShopService {
         return toResponse(s);
     }
 
+    /**
+     * The shops the CALLER may see, not every shop in the tenant.
+     *
+     * <p>Shop staff carry the shop and merchant they belong to on their token
+     * ({@code shopId} / {@code merchantId}, one of each — user-service stores a
+     * single {@code loyalty_shop_id} per account). This list used to ignore both
+     * and return the whole tenant, so a shop admin's picker offered other
+     * merchants' outlets that every shop-scoped write then refused, and a
+     * cashier had no way to read their own shop at all. Now:
+     * <ul>
+     *   <li>a token naming a shop sees exactly that shop;</li>
+     *   <li>a token naming only a merchant sees that merchant's shops;</li>
+     *   <li>everyone else (SUPER_ADMIN, MERCHANT_ADMIN, tenant roles) is
+     *       unchanged.</li>
+     * </ul>
+     * A {@code merchantFilter} outside the caller's scope narrows to nothing
+     * (an empty page), the way a filter does — it is not an error.
+     */
     @Transactional(readOnly = true)
     public Page<Dtos.ShopResponse> list(UUID tenantId, UUID merchantFilter, Pageable pageable) {
-        Page<Shop> page = merchantFilter == null
+        UUID callerShop = callerShopScope();
+        if (callerShop != null) {
+            return shops.findById(callerShop)
+                    .filter(s -> s.getTenantId().equals(tenantId))
+                    .filter(s -> merchantFilter == null || merchantFilter.equals(s.getMerchantId()))
+                    .<Page<Dtos.ShopResponse>>map(s -> new PageImpl<>(List.of(toResponse(s)), pageable, 1))
+                    .orElseGet(() -> Page.empty(pageable));
+        }
+        UUID callerMerchant = callerMerchantScope();
+        UUID effectiveFilter = merchantFilter;
+        if (callerMerchant != null) {
+            if (merchantFilter != null && !merchantFilter.equals(callerMerchant)) {
+                return Page.empty(pageable);
+            }
+            effectiveFilter = callerMerchant;
+        }
+        Page<Shop> page = effectiveFilter == null
                 ? shops.findByTenantId(tenantId, pageable)
-                : shops.findByTenantIdAndMerchantId(tenantId, merchantFilter, pageable);
+                : shops.findByTenantIdAndMerchantId(tenantId, effectiveFilter, pageable);
         return page.map(ShopService::toResponse);
     }
 
+    /** A merchant's shops, narrowed to the caller's own shop when their token
+     *  names one. Naming a merchant other than the token's is refused, since
+     *  the merchant is the resource being asked for, not a filter. */
     @Transactional(readOnly = true)
     public List<Dtos.ShopResponse> listForMerchant(UUID tenantId, UUID merchantId) {
+        UUID callerMerchant = callerMerchantScope();
+        if (callerMerchant != null && !callerMerchant.equals(merchantId)) {
+            throw notMerchantOwner();
+        }
         merchants.requireMerchant(tenantId, merchantId);
-        return shops.findByTenantIdAndMerchantId(tenantId, merchantId)
-                .stream().map(ShopService::toResponse).toList();
+        UUID callerShop = callerShopScope();
+        return shops.findByTenantIdAndMerchantId(tenantId, merchantId).stream()
+                .filter(s -> callerShop == null || callerShop.equals(s.getId()))
+                .map(ShopService::toResponse).toList();
     }
 
+    /**
+     * Unscoped read by id, for server-side callers that apply their own
+     * ownership rule with their own error codes (guest checkout).
+     * {@code GET /loyalty/shops/{id}} uses {@link #getForCaller} instead.
+     */
     @Transactional(readOnly = true)
     public Dtos.ShopResponse get(UUID tenantId, UUID shopId) {
         return toResponse(requireShop(tenantId, shopId));
+    }
+
+    /** {@link #get} for the caller: a token naming a shop reads only that
+     *  shop, and a token naming a merchant reads only that merchant's shops —
+     *  the same pins {@code MerchantAuthz} applies elsewhere. */
+    @Transactional(readOnly = true)
+    public Dtos.ShopResponse getForCaller(UUID tenantId, UUID shopId) {
+        Shop s = requireShop(tenantId, shopId);
+        UUID callerShop = callerShopScope();
+        if (callerShop != null && !callerShop.equals(s.getId())) {
+            throw LoyaltyException.forbidden("NOT_SHOP_MEMBER", "You can only access shops you are assigned to.");
+        }
+        UUID callerMerchant = callerMerchantScope();
+        if (callerMerchant != null && !callerMerchant.equals(s.getMerchantId())) {
+            throw notMerchantOwner();
+        }
+        return toResponse(s);
+    }
+
+    /** The shop the caller's token pins them to, or null. SUPER_ADMIN is never
+     *  pinned, matching MerchantAuthz. */
+    private static UUID callerShopScope() {
+        return CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN") ? null : CallerDetails.currentShopId();
+    }
+
+    private static UUID callerMerchantScope() {
+        return CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN") ? null : CallerDetails.currentMerchantId();
+    }
+
+    private static LoyaltyException notMerchantOwner() {
+        return LoyaltyException.forbidden("NOT_MERCHANT_OWNER", "You can only act on merchants you administer.");
     }
 
     /**

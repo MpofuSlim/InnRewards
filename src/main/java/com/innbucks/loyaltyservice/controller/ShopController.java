@@ -223,8 +223,13 @@ public class ShopController {
 
     @GetMapping
     @Operation(summary = "List shops for the current tenant",
-            description = "Returns every shop in the tenant. Pass `merchantId` to filter to a single " +
-                          "merchant's outlets.")
+            description = "Returns the shops the CALLER may see in the tenant. A token that names a " +
+                          "shop (SHOP_USER / SHOP_ADMIN — the `shopId` claim) gets exactly that one shop, " +
+                          "so a till can read its own outlet's name and needs no picker. A token that names " +
+                          "only a merchant (`merchantId` claim) gets that merchant's shops. MERCHANT_ADMIN, " +
+                          "SUPER_ADMIN and tenant roles see every shop in the tenant. Pass `merchantId` to " +
+                          "filter to one merchant's outlets; a filter outside the caller's scope returns an " +
+                          "empty page, not an error.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -269,7 +274,7 @@ public class ShopController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.ShopResponse>>> list(
             @Parameter(description = "Optional merchant filter — return only shops under this merchant.")
             @RequestParam(required = false) UUID merchantId,
@@ -305,7 +310,26 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role is not permitted to read shops"),
+                    description = "The caller's token names a different shop (NOT_SHOP_MEMBER) or a different "
+                            + "merchant (NOT_MERCHANT_OWNER). Shop staff read only their own shop.",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Another outlet", value = """
+                                            {
+                                              "code": "NOT_SHOP_MEMBER",
+                                              "message": "You can only access shops you are assigned to.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another merchant's shop", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No shop with that id in this tenant",
                     content = @Content(mediaType = "application/json",
@@ -317,9 +341,9 @@ public class ShopController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> get(@PathVariable UUID id) {
-        Dtos.ShopResponse data = shops.get(tenantContext.requireTenantId(), id);
+        Dtos.ShopResponse data = shops.getForCaller(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Shop retrieved successfully", data));
     }
 
@@ -448,7 +472,9 @@ public class ShopController {
 
     @GetMapping("/by-merchant/{merchantId}")
     @Operation(summary = "List shops under a merchant",
-            description = "Convenience endpoint for nested navigation — returns every shop belonging " +
+            description = "Convenience endpoint for nested navigation. A token that names a shop sees only " +
+                          "that shop here, and a token naming a different merchant is refused " +
+                          "(NOT_MERCHANT_OWNER). Otherwise returns every shop belonging " +
                           "to the given merchant in the current tenant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -485,7 +511,17 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role is not permitted to list shops"),
+                    description = "Caller's role is not permitted to list shops, or the caller's token names "
+                            + "a different merchant",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Another merchant", value = """
+                                    {
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
+                                      "data": null
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No merchant with that id in this tenant")
     })

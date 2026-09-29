@@ -244,7 +244,8 @@ class VoucherServiceTest {
         recipient.setPhoneNumber(recipientPhone);
         when(userService.findOrCreatePending(TENANT, recipientPhone, MERCHANT_A)).thenReturn(recipient);
 
-        // Staff moving the voucher on the holder's behalf passes requireCallerMayViewVoucher.
+        // An admin of the voucher's merchant moving it on the holder's behalf
+        // (merchant pin: VoucherTransferStaffTest, with the real MerchantAuthz).
         authenticateAsMerchant(MERCHANT_A);
 
         Dtos.VoucherResponse resp = service.transfer(TENANT, v.getId(),

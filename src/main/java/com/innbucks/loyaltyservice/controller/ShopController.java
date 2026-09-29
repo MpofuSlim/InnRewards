@@ -504,8 +504,11 @@ public class ShopController {
                           "to the phone) but cannot REDEEM until they register, at which point the accrued " +
                           "balance becomes spendable. Cash-only: no points are burned. The merchant is " +
                           "derived from the shop, so it is NOT in the request body. The caller must own " +
-                          "the shop: SHOP_ADMIN/SHOP_USER must carry the shop's merchant in their JWT; " +
-                          "MERCHANT_ADMIN/SUPER_ADMIN are scoped by tenant membership. Requires X-Tenant-Id.")
+                          "the shop: SHOP_ADMIN/SHOP_USER must carry the shop's merchant in their JWT, " +
+                          "and when their JWT names a shop it must be THIS shop; " +
+                          "MERCHANT_ADMIN/SUPER_ADMIN are scoped by tenant membership. Requires X-Tenant-Id. " +
+                          "The phone is staff-typed, so the earn-integrity guards apply: a staff member " +
+                          "cannot earn to their own phone (SELF_EARN) or a colleague's (STAFF_RECIPIENT).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -540,15 +543,41 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role can't check out, or the shop isn't under the caller's merchant",
+                    description = "Caller's role can't check out, the shop isn't under the caller's merchant "
+                            + "(SHOP_NOT_OWNED) or isn't the caller's own outlet (NOT_SHOP_MEMBER), or the phone "
+                            + "is the caller's own (SELF_EARN) or a staff member's of this merchant "
+                            + "(STAFF_RECIPIENT).",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not your shop", value = """
-                                    {
-                                      "code": "SHOP_NOT_OWNED",
-                                      "message": "shop does not belong to your merchant",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Not your shop", value = """
+                                            {
+                                              "code": "SHOP_NOT_OWNED",
+                                              "message": "shop does not belong to your merchant",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another outlet", value = """
+                                            {
+                                              "code": "NOT_SHOP_MEMBER",
+                                              "message": "You can only access shops you are assigned to.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Cashier's own phone", value = """
+                                            {
+                                              "code": "SELF_EARN",
+                                              "message": "You can't award points to your own account.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "A colleague's phone", value = """
+                                            {
+                                              "code": "STAFF_RECIPIENT",
+                                              "message": "Points can't be awarded to a staff account of this merchant.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No shop with that id in this tenant")
     })
@@ -570,14 +599,28 @@ public class ShopController {
         if (callerMerchantId != null && !callerMerchantId.equals(shop.merchantId())) {
             throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
         }
+        // And to its own OUTLET: a caller whose token names a shop (SHOP_USER,
+        // SHOP_ADMIN) earns only through that shop, the same pin
+        // MerchantAuthz.requireCallerAccessesShop applies to the shop report.
+        // Otherwise a cashier at one branch rings sales up under a sibling
+        // branch, where nobody reconciles them against that till.
+        UUID callerShopId = CallerDetails.currentShopId();
+        if (callerShopId != null && !callerShopId.equals(shopId)) {
+            throw LoyaltyException.forbidden("NOT_SHOP_MEMBER", "You can only access shops you are assigned to.");
+        }
         // Reference is server-owned (per-merchant idempotency on the loyalty PURCHASE
         // row); the POS never supplies one. Mirrors /payments/shop-checkout's
         // "SHOP-" + UUID convention.
         String reference = "SHOP-" + UUID.randomUUID();
         // Cash-only: pointsAmount = ZERO skips the burn/redemption leg, so a PENDING
         // (unregistered) customer earns without a spendable-balance check.
+        // TYPED_PHONE, not CHECKOUT_S2S: the cashier keyed this phone in, so the
+        // earn-integrity guards apply — SELF_EARN (their own phone) and
+        // STAFF_RECIPIENT (any colleague's). REFERENCE_REQUIRED is already met
+        // by the server-generated reference above.
         ShopCheckoutService.Result r = shopCheckout.checkout(
-                shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, reference);
+                shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, reference,
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
         Dtos.GuestShopCheckoutResponse data = new Dtos.GuestShopCheckoutResponse(
                 r.shopId(), r.merchantId(), r.loyaltyUserId(),
                 r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId());

@@ -172,7 +172,7 @@ customer app has only ever reached loyalty through `/loyalty/public/**`.
 reach already bind the acted-on account to the caller, and the mint/drain paths
 use the STRICT check: transfer (`requireCallerOwns`), redeem
 (`requireCallerOwnsOrIsAdmin`), `/users/{id}/transactions`, voucher redeem
-(assignee phone), voucher transfer (`requireCallerMayViewVoucher`),
+(assignee phone), voucher transfer (`requireCallerMayTransferVoucher`),
 vouchers-by-phone (`requireCallerOwnsPhoneOrIsAdmin`), QR issue
 (`requireCallerAdministersMerchant` / `requireCallerOwns`), QR consume
 (`requireCallerOwns`). The ninth, `GET /loyalty/mini-apps/manifest`, returns the
@@ -1752,6 +1752,68 @@ now ties the newest CHECK to the enum, so adding a reason without a migration
 fails the build. And `VoucherService.recordAttempt` wraps every redeem-path
 `fraud.record` so a failed evidence row can never replace the refusal it was
 documenting again.
+
+## A cashier (SHOP_USER) can serve a customer, never take from one
+
+**Owner decision (2026-09-29):** a customer at the till who sends a voucher to
+a friend still gets their own copy of the code, and so does the friend. That is
+the issue-path sender copy (V46) and it is unchanged. What changed is what the
+till's own role can do. An audit of every endpoint a SHOP_USER token reaches
+found four ways for a cashier to take value from customers or the merchant.
+Each is now closed:
+
+- **The by-phone voucher list hides codes from a cashier.**
+  `GET /loyalty/vouchers/users/by-phone/{phone}/active` used to hand a
+  SHOP_USER every live code of any phone in the tenant. Redeem is keyed by the
+  code and accepts it from any till of the merchant, so a code a cashier could
+  read was a voucher they could spend without the customer present. The list
+  now comes back with `code: null` for them (`requireCallerMayListPhoneVouchers`
+  → `PhoneVoucherView.WITHOUT_CODES`). The customer supplies the code at the
+  till from their own WhatsApp, SMS or app, and that is what proves they are
+  there. The owner of the phone is checked FIRST, so a cashier looking up their
+  own number sees their own codes. Admin roles still see codes: they can list
+  every code in the tenant through `GET /loyalty/vouchers?status=` anyway.
+- **Transfer is closed to SHOP_USER.** It re-points a voucher's rotated code at
+  a phone the caller names, so a cashier could send any customer's voucher in
+  the tenant to an accomplice. The holder transfers their own. An admin acting
+  for them is merchant-pinned through `MerchantAuthz`, the same pin as issue
+  and revoke, which was missing. They also cannot name their own phone
+  (`403 STAFF_RECIPIENT`, fraud-recorded). `requireCallerMayViewVoucher` still
+  lets SHOP_USER through for mark-viewed, which moves nothing. **Do not route
+  transfer back through it.** Pinned by `VoucherTransferStaffTest`.
+- **Guest checkout posts as `TYPED_PHONE`, not `CHECKOUT_S2S`.** A cashier
+  types that phone. The S2S label exempted it from `SELF_EARN` /
+  `STAFF_RECIPIENT`, so every sale a customer did not claim could be rung up
+  to the cashier's own number or a colleague's. `REFERENCE_REQUIRED` is met by
+  the server-generated `SHOP-<uuid>`. `ShopCheckoutService.checkout`'s 5-arg
+  form is still `CHECKOUT_S2S`, and that is correct for payment-service's
+  internal checkout, where the phone comes from the customer's own payment.
+  The endpoint also pins a caller whose token names a shop to THAT shop
+  (`403 NOT_SHOP_MEMBER`), so a sale cannot land at a sibling branch where
+  nobody reconciles it against the till.
+- **QR consume refuses the issuing merchant's own staff.** A merchant QR is
+  shown at the counter for the customer to scan. `QR_PRESENCE` skips the
+  typed-phone guards on the premise that the scanner IS the customer, and
+  nothing checked it. Consume now refuses two cases before the token is marked
+  used. `SELF_EARN`: the caller's token is scoped to the QR's merchant.
+  `STAFF_RECIPIENT`: the credited phone is in `StaffRegistry` for that merchant,
+  which also catches the same person on a plain customer token. A refused scan
+  leaves the QR for the customer. The same `EARN_SELF_BLOCK` /
+  `EARN_STAFF_RECIPIENT_BLOCK` switches govern both guards. SHOP_USER also lost
+  consume in `@PreAuthorize`: it credits the caller, and a till token has no
+  reason to credit itself. Staff of a DIFFERENT merchant earn like anyone
+  else. Pinned by `QrStaffSelfEarnTest`.
+
+**Still open, deliberately:**
+- A cashier can still ring a fake cash sale up to an ACCOMPLICE's phone who is
+  not staff. That is inherent to a typed phone. The durable fix is
+  reconciliation against the till's real sales, and a server-generated
+  reference cannot provide it. Phase 3's receipt-claim channel is the intended
+  answer.
+- Guest checkout's `walletBalanceAfter` still tells the cashier any typed
+  phone's balance. That is disclosure, not theft, and the POS displays it.
+- A MERCHANT_ADMIN on guest checkout is still bounded by tenant only, not by
+  organization.
 
 ## A voucher is worth its face value, ONCE — MULTI_USE is retired
 

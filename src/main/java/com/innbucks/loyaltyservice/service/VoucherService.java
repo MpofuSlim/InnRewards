@@ -582,6 +582,45 @@ public class VoucherService {
         }
     }
 
+    /**
+     * Who may hand a voucher on. Returns {@code true} when an admin is acting
+     * for the holder, {@code false} when the caller IS the holder.
+     *
+     * <ul>
+     *   <li>The holder — resolved exactly as {@link #requireCallerMayViewVoucher}
+     *       resolves it — may always transfer their own voucher, whatever
+     *       other roles their token carries.</li>
+     *   <li>SUPER_ADMIN, and a MERCHANT_ADMIN / SHOP_ADMIN who administers the
+     *       voucher's merchant ({@link com.innbucks.loyaltyservice.security.MerchantAuthz}),
+     *       may transfer for the holder. Merchant-pinned like issue and
+     *       revoke: a merchant's admin has no business moving a sibling
+     *       merchant's customer's voucher.</li>
+     *   <li>SHOP_USER is NOT staff here. A cashier sees a customer's vouchers
+     *       and can redeem the code the customer presents; moving a voucher to
+     *       a phone the cashier chooses would send its fresh code to that phone.</li>
+     * </ul>
+     */
+    private boolean requireCallerMayTransferVoucher(UUID tenantId, Voucher v) {
+        String callerPhone = CallerDetails.currentPhoneNumber();
+        if (callerPhone != null && callerPhone.equals(holderPhone(v))) {
+            return false;
+        }
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN", "ROLE_SHOP_ADMIN")) {
+            if (v.getMerchantId() != null) {
+                merchantAuthz.requireCallerAdministersMerchant(tenantId, v.getMerchantId());
+            } else if (!CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+                // No merchant to pin the admin to. Only a platform operator may
+                // act on such a row, the same fail-closed rule MerchantAuthz
+                // applies to a merchant no organization owns.
+                throw LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
+                        "You can only act on merchants you administer.");
+            }
+            return true;
+        }
+        throw LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                "you can only act on your own vouchers");
+    }
+
     public Dtos.RedemptionResponse redeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
         // Timer captures end-to-end latency for the hottest read+write path in
         // the service. Exception paths are timed too (Timer.record records the
@@ -917,10 +956,11 @@ public class VoucherService {
         if (!v.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
-        // Only the current holder may pass it on. Staff roles are allowed
-        // through the same helper the view/delivery lifecycle uses, so an
-        // operator can move a voucher on a customer's behalf for support.
-        requireCallerMayViewVoucher(v);
+        // Only the current holder may pass it on, or an admin of the voucher's
+        // own merchant acting for them. NOT the view helper: that one lets any
+        // staff role through, SHOP_USER included, and a transfer re-points the
+        // voucher's code at a phone the caller chooses.
+        boolean staffActing = requireCallerMayTransferVoucher(tenantId, v);
 
         // THE single-hop rule.
         if (v.getTransferredAt() != null) {
@@ -954,6 +994,28 @@ public class VoucherService {
                 || (v.getAssignedUserId() != null && v.getAssignedUserId().equals(recipient.getId()))) {
             throw LoyaltyException.badRequest("SELF_TRANSFER",
                     "You can't transfer a voucher to yourself.");
+        }
+        // Staff moving a CUSTOMER's voucher may not move it to themselves. The
+        // recipient gets the rotated code, so this is the one transfer shape
+        // that turns support into taking the voucher. Compared on the caller's
+        // phone claim, with the same whitespace-insensitive key the SELF_EARN
+        // guard uses; a staff token with no phone claim cannot be compared and
+        // passes, exactly as it does there.
+        if (staffActing) {
+            String callerKey = StaffRegistry.compareKey(CallerDetails.currentPhoneNumber());
+            if (callerKey != null && callerKey.equals(StaffRegistry.compareKey(recipient.getPhoneNumber()))) {
+                try {
+                    fraud.record(tenantId, null, v.getMerchantId(), null,
+                            FraudAttempt.Reason.STAFF_RECIPIENT,
+                            "staff transfer of voucher " + v.getId() + " to the caller's own phone",
+                            null, null);
+                } catch (RuntimeException e) {
+                    log.warn("Could not record a STAFF_RECIPIENT fraud attempt for voucher {}; "
+                            + "the refusal stands", v.getId(), e);
+                }
+                throw LoyaltyException.forbidden("STAFF_RECIPIENT",
+                        "Staff can't transfer a customer's voucher to their own phone.");
+            }
         }
 
         UUID fromUserId = v.getAssignedUserId();

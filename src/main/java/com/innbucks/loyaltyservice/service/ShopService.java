@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -37,20 +38,33 @@ public class ShopService {
      */
     private static final int MAX_BULK_ROWS = 5000;
 
+    /**
+     * Roles that oversee a whole tenant and may manage any merchant's shops in
+     * it. Everyone else is a single-merchant principal and goes through
+     * {@link MerchantAuthz}. Same tier as {@code RuleAdminService}: MerchantAuthz
+     * exempts only SUPER_ADMIN, so delegating to it wholesale would 403 a
+     * TENANT_ADMIN managing a shop in their own tenant.
+     */
+    private static final String[] TENANT_LEVEL_ROLES =
+            {"ROLE_SUPER_ADMIN", "ROLE_PLATFORM_ADMIN", "ROLE_TENANT_ADMIN"};
+
     private final ShopRepository shops;
     private final MerchantService merchants;
+    private final MerchantAuthz merchantAuthz;
     private final TransactionTemplate txTemplate;
 
-    public ShopService(ShopRepository shops, MerchantService merchants, PlatformTransactionManager txManager) {
+    public ShopService(ShopRepository shops, MerchantService merchants, MerchantAuthz merchantAuthz,
+                       PlatformTransactionManager txManager) {
         this.shops = shops;
         this.merchants = merchants;
+        this.merchantAuthz = merchantAuthz;
         // Each row of a bulk upload runs in its own (default-propagation)
         // tx via this template — a failure on row N rolls back only row N.
         this.txTemplate = new TransactionTemplate(txManager);
     }
 
     public Dtos.ShopResponse create(UUID tenantId, Dtos.ShopRequest req) {
-        Merchant m = merchants.requireMerchant(tenantId, req.merchantId());
+        Merchant m = requireMerchantWrite(tenantId, req.merchantId());
 
         // Duplicate-name guard: a merchant can't have two shops with the same
         // name (case-insensitive). Trim first so " Avondale" and "Avondale" collide.
@@ -185,16 +199,45 @@ public class ShopService {
     }
 
     public Dtos.ShopResponse update(UUID tenantId, UUID shopId, Dtos.ShopRequest req) {
-        Shop s = requireShop(tenantId, shopId);
+        Shop s = requireShopWrite(tenantId, shopId);
         s.setName(HtmlSanitizer.stripAll(req.name()));
         if (req.address() != null) s.setAddress(HtmlSanitizer.stripAll(req.address()));
         return toResponse(s);
     }
 
     public Dtos.ShopResponse setActive(UUID tenantId, UUID shopId, boolean active) {
-        Shop s = requireShop(tenantId, shopId);
+        Shop s = requireShopWrite(tenantId, shopId);
         s.setStatus(active ? Shop.Status.ACTIVE : Shop.Status.INACTIVE);
         return toResponse(s);
+    }
+
+    /**
+     * Who may create shops under a merchant, or bulk-upload them. These writes
+     * used to check only that the merchant was in the tenant, so any SHOP_ADMIN
+     * or MERCHANT_ADMIN could add outlets to a merchant they have nothing to do
+     * with. Tenant-level roles keep tenant-wide reach; everyone else must
+     * administer the merchant (SHOP_ADMIN by its {@code merchantId} claim,
+     * MERCHANT_ADMIN by organization ownership).
+     */
+    private Merchant requireMerchantWrite(UUID tenantId, UUID merchantId) {
+        if (CallerDetails.hasAnyRole(TENANT_LEVEL_ROLES)) {
+            return merchants.requireMerchant(tenantId, merchantId);
+        }
+        return merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+    }
+
+    /**
+     * Who may rename, activate or deactivate a shop. Same tier: a SHOP_ADMIN may
+     * change only the shop on its token, a MERCHANT_ADMIN only its own
+     * merchants' shops. Before this, any of them could rename or switch off a
+     * competitor's outlet in the same tenant — and deactivating a shop stops
+     * guest checkout there.
+     */
+    private Shop requireShopWrite(UUID tenantId, UUID shopId) {
+        if (CallerDetails.hasAnyRole(TENANT_LEVEL_ROLES)) {
+            return requireShop(tenantId, shopId);
+        }
+        return merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
     }
 
     public Shop requireShop(UUID tenantId, UUID shopId) {
@@ -233,7 +276,7 @@ public class ShopService {
         // Validate merchant scope once up front — every row of the CSV
         // attaches to the same merchant, so re-checking per row would be
         // wasted DB hits.
-        Merchant m = merchants.requireMerchant(tenantId, merchantId);
+        Merchant m = requireMerchantWrite(tenantId, merchantId);
 
         List<String[]> rows;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(csv, StandardCharsets.UTF_8))) {

@@ -16,7 +16,7 @@ import java.util.UUID;
 
 /**
  * Request and response shapes of the customer-support surface
- * ({@code /loyalty/support/**}, V54).
+ * ({@code /loyalty/support/**}, V55).
  *
  * <p>Two rules run through every response here:
  * <ul>

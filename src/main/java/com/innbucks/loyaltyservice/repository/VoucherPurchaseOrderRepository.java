@@ -27,7 +27,7 @@ public interface VoucherPurchaseOrderRepository extends JpaRepository<VoucherPur
     @Query("select o from VoucherPurchaseOrder o where o.orderRef = :orderRef")
     Optional<VoucherPurchaseOrder> lockByOrderRef(@Param("orderRef") String orderRef);
 
-    // ---- Phone finders for the customer-support 360 (V54 indexes) ----
+    // ---- Phone finders for the customer-support 360 (V55 indexes) ----
     // `phones` is every stored spelling of one number: these three columns are
     // written as the staff member typed them, never canonicalised.
 

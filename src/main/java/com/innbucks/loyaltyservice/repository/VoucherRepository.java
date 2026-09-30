@@ -214,7 +214,7 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
                                          @Param("cutoff") Instant cutoff,
                                          Pageable pageable);
 
-    // ---- Phone finders for the customer-support 360 (V54 indexes) ----
+    // ---- Phone finders for the customer-support 360 (V55 indexes) ----
     //
     // A phone can sit on a voucher in three roles. HELD mirrors
     // VoucherService.holderPhone's precedence exactly: the assignee phone when

@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The read side of customer support, end to end: the real filter chain, real
- * Postgres (V54 applied), real repositories.
+ * Postgres (V55 applied), real repositories.
  *
  * <p>What is pinned: a lookup is on-record-or-404 and is LOGGED either way; a
  * lookupId works for the agent who made it and nobody else, and only while

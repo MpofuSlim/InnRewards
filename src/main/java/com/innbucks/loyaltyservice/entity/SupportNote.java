@@ -14,7 +14,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * An internal support note about a customer (V54). Append-only: no edit and no
+ * An internal support note about a customer (V55). Append-only: no edit and no
  * delete, anywhere — a support log that can be rewritten proves nothing.
  * {@link Immutable} and a repository with no delete make that structural.
  */

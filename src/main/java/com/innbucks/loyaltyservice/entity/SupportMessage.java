@@ -15,7 +15,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A support-initiated message to a customer and what became of it (V54).
+ * A support-initiated message to a customer and what became of it (V55).
  *
  * <p>Written {@link Outcome#PENDING} BEFORE the gateway is called — that
  * insert is what claims the rate-limit slot — then completed to SENT or FAILED

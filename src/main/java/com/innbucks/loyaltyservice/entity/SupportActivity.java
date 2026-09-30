@@ -15,7 +15,7 @@ import java.util.UUID;
 
 /**
  * One row of the support oversight feed: an agent looked at, or did, something
- * (V54). Append-only — {@link Immutable} stops Hibernate ever issuing an UPDATE,
+ * (V55). Append-only — {@link Immutable} stops Hibernate ever issuing an UPDATE,
  * and {@code SupportActivityRepository} exposes no delete.
  *
  * <p>A {@code CUSTOMER_LOOKUP} row doubles as the lookup SESSION: its id is the

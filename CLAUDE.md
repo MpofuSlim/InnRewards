@@ -329,7 +329,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V54**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V55**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -2003,7 +2003,7 @@ should go rather than grow a drawdown balance.
   out every read path touching it. The constant costs nothing; deleting it buys
   tidiness and risks an outage.
 
-## Customer support (`/loyalty/support/**`, V54)
+## Customer support (`/loyalty/support/**`, V55)
 
 A call-centre agent can find a customer by phone across EVERY tenant, read
 their whole loyalty record, keep notes, message them, and take a small set of
@@ -2127,7 +2127,7 @@ builds the same surface; change them only in lock-step.
   `LoyaltyDataException`, which has its own handler so `data` is not dropped.
 - **Append-only by SHAPE and by TRIGGER.** `SupportActivity` and `SupportNote`
   are `@Immutable` and their repositories extend `Repository` with save and
-  reads only — and V54's `support_log_is_append_only` refuses any UPDATE or
+  reads only — and V55's `support_log_is_append_only` refuses any UPDATE or
   DELETE on either table in Postgres, so no future code path can add one.
   `support_message` is completed once by a guarded bulk UPDATE
   (`outcome = PENDING`), and `support_message_is_final` makes that the only

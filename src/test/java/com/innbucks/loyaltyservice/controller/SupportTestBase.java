@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 /**
  * Shared base for the customer-support integration tests: the real security
- * chain, the real schema (V54 applied by Flyway on the Testcontainers Postgres),
+ * chain, the real schema (V55 applied by Flyway on the Testcontainers Postgres),
  * and mocked notification clients so no test ever reaches a gateway.
  *
  * <p>Every support test class extends this one so they share ONE Spring

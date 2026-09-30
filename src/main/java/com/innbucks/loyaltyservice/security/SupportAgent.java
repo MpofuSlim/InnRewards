@@ -22,7 +22,7 @@ import java.util.UUID;
  */
 public record SupportAgent(String uuid, String login, UUID userUuid) {
 
-    /** Width of every {@code agent_uuid} column (V54). */
+    /** Width of every {@code agent_uuid} column (V55). */
     public static final int MAX_UUID = 64;
 
     public static SupportAgent current() {

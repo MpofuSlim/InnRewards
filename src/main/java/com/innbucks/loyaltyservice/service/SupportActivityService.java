@@ -28,7 +28,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * The support oversight record ({@code support_activity}, V54) and the lookup
+ * The support oversight record ({@code support_activity}, V55) and the lookup
  * sessions that ride on it.
  *
  * <p>There is no tamper-evident audit chain in this service (marketplace and

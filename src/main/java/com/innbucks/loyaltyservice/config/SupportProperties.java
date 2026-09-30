@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * {@code loyalty.support.*} — the customer-support surface (V54).
+ * {@code loyalty.support.*} — the customer-support surface (V55).
  *
  * <p>Kept apart from {@link LoyaltyProperties}, whose record is built
  * positionally in many tests. Every field is BOXED with its default applied in

@@ -458,7 +458,7 @@ loyalty:
     # logs UNGATED so the state is never silent.
     api-key: ${LOYALTY_PUBLIC_TEST_API_KEY:}
   support:
-    # Customer support (/loyalty/support/**, V54). Gated by the JWT `perms`
+    # Customer support (/loyalty/support/**, V55). Gated by the JWT `perms`
     # claim (loyalty-support:read|manage|supervise, customer-messages:send),
     # never by a role. See CLAUDE.md, "Customer support".
     #

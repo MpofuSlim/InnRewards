@@ -227,7 +227,12 @@ public class TenantController {
         UUID callerId = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
         String email = authentication.getName();
         log.info("GET /loyalty/tenants/me userId={} email={}", callerId, email);
-        java.util.List<Dtos.TenantResponse> data = tenantService.findMine(callerId, email);
+        // SUPER_ADMIN oversees every tenant and needs no membership row to use
+        // one (TenantContext exempts it), so its picker lists them all.
+        java.util.List<Dtos.TenantResponse> data =
+                com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")
+                        ? tenantService.list()
+                        : tenantService.findMine(callerId, email);
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
     }
 

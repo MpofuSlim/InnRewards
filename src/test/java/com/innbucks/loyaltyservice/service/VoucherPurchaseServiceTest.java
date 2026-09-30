@@ -677,6 +677,16 @@ class VoucherPurchaseServiceTest {
     }
 
     @Test
+    void aSuperAdmin_readsAnyShopsOrder_evenWithAShopOnItsToken() {
+        signInAs("ROLE_SUPER_ADMIN", CASHIER_SHOP, CASHIER_PHONE);
+        VoucherPurchaseOrder elsewhere = cashierOrder();
+        elsewhere.setShopId(UUID.randomUUID());
+        when(orders.findByOrderRef(elsewhere.getOrderRef())).thenReturn(Optional.of(elsewhere));
+
+        assertThat(service.get(TENANT, elsewhere.getOrderRef()).orderRef()).isEqualTo(elsewhere.getOrderRef());
+    }
+
+    @Test
     void anOrderRaisedByAMerchantAdmin_withNoShop_isReachableByTheMerchantsCashier() {
         signInAs("ROLE_SHOP_USER", CASHIER_SHOP, CASHIER_PHONE);
         VoucherPurchaseOrder o = pendingOrder(); // shopId null

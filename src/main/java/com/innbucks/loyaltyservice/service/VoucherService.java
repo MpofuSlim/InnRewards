@@ -1184,7 +1184,17 @@ public class VoucherService {
      */
     @Transactional(readOnly = true)
     public Page<Dtos.VoucherResponse> activeForPhone(UUID tenantId, String phoneNumber, Pageable pageable) {
-        return users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber)
+        // Projections store E.164; a number typed "0771…" or "771…" must find the
+        // same customer. An unparseable number is looked up as typed (an empty
+        // page, as before) rather than refused.
+        String key = phoneNumber;
+        try {
+            String normalized = userService.normalizePhone(phoneNumber);
+            if (normalized != null) key = normalized;
+        } catch (RuntimeException notAPhone) {
+            // looked up as typed
+        }
+        return users.findByTenantIdAndPhoneNumber(tenantId, key)
                 .map(u -> vouchers.findByAssignedUserIdAndStatusIn(u.getId(), Voucher.LIVE_STATUSES, pageable)
                         .map(VoucherService::toResponse))
                 .orElseGet(() -> org.springframework.data.domain.Page.empty(pageable));

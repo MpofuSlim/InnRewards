@@ -311,7 +311,8 @@ public class VoucherPurchaseService {
     private void requireCallerMayActOn(UUID tenantId, VoucherPurchaseOrder order) {
         merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
         UUID callerShop = CallerDetails.currentShopId();
-        if (callerShop != null && order.getShopId() != null && !callerShop.equals(order.getShopId())) {
+        if (callerShop != null && order.getShopId() != null && !callerShop.equals(order.getShopId())
+                && !CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
             throw LoyaltyException.notFound("purchase order");
         }
     }

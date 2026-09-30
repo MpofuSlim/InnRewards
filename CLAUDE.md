@@ -1860,6 +1860,19 @@ fails the build. And `VoucherService.recordAttempt` wraps every redeem-path
 `fraud.record` so a failed evidence row can never replace the refusal it was
 documenting again.
 
+## SUPER_ADMIN is never scoped out of a read (owner decision, 2026-09-30)
+
+**Every GET answers SUPER_ADMIN for every merchant, shop and tenant** — it
+oversees the platform, so a read that refuses or silently narrows it is a bug.
+`TenantContext` and `MerchantAuthz` already exempt it; a new read keyed on a
+token claim SUPER_ADMIN does not carry (`shopId`, `merchantId`, `orgId`, a
+phone) must give it a way in rather than a 400 or an empty list:
+`GET /transactions/my-shop` takes `?shopId=` from SUPER_ADMIN (shop staff stay
+pinned to their token's shop), `GET /tenants/me` lists every tenant for it,
+and the purchase-order shop pin exempts it. Still open by design: a
+tenant-scoped GET needs `X-Tenant-Id` (there is no cross-tenant list), and a
+detail read sent with the wrong tenant is 403 `CROSS_TENANT`.
+
 ## A cashier (SHOP_USER) can serve a customer, never take from one
 
 **Owner decision (2026-09-29):** a customer at the till who sends a voucher to

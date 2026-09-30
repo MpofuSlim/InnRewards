@@ -390,10 +390,11 @@ public class TransactionController {
     @GetMapping("/transactions/my-shop")
     @Operation(summary = "Get this shop's transactions",
             description = "Returns every loyalty transaction stamped with the caller's shopId, most " +
-                          "recent first. The shopId comes from the authenticated JWT (SHOP_USER and " +
-                          "SHOP_ADMIN tokens carry it); the FE never sends it. Used by the shop-staff " +
-                          "dashboard so a cashier sees only their own outlet's earn / redemption / " +
-                          "reversal feed, not the whole merchant chain's.")
+                          "recent first. For shop staff the shopId comes from the authenticated JWT " +
+                          "(SHOP_USER and SHOP_ADMIN tokens carry it) and `shopId` is ignored, so a " +
+                          "cashier sees only their own outlet's earn / redemption / reversal feed. " +
+                          "SUPER_ADMIN has no shop on its token and passes `?shopId=` to read any " +
+                          "shop's feed in the X-Tenant-Id tenant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -455,14 +456,14 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Caller's JWT has no shopId — token isn't shop-staff",
+                    description = "No shop to read: the JWT carries no shopId and no `shopId` was passed",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "No shop scope", value = """
                                     {
                                       "code": "SHOP_REQUIRED",
-                                      "message": "caller's JWT has no shopId; endpoint is for SHOP_USER and SHOP_ADMIN only",
+                                      "message": "Choose a shop: pass shopId, or sign in as that shop's staff.",
                                       "data": null
                                     }
                                     """)
@@ -486,13 +487,21 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.TransactionResponse>>> myShop(
+            @RequestParam(value = "shopId", required = false) UUID requestedShopId,
             @ParameterObject Pageable pageable) {
         UUID tenantId = tenantContext.requireTenantId();
+        // Shop staff are pinned to the shop on their token; a shopId they send is
+        // ignored. SUPER_ADMIN oversees every shop and has none on its token, so
+        // it names one — still bounded to the X-Tenant-Id tenant by MerchantAuthz.
         UUID shopId = CallerDetails.currentShopId();
+        if (shopId == null && requestedShopId != null && CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+            merchantAuthz.requireCallerAccessesShop(tenantId, requestedShopId);
+            shopId = requestedShopId;
+        }
         if (shopId == null) {
             throw com.innbucks.loyaltyservice.exception.LoyaltyException.badRequest(
                     "SHOP_REQUIRED",
-                    "caller's JWT has no shopId; endpoint is for SHOP_USER and SHOP_ADMIN only");
+                    "Choose a shop: pass shopId, or sign in as that shop's staff.");
         }
         PageResponse<Dtos.TransactionResponse> data = PageResponse.from(
                 transactions.recentForShop(tenantId, shopId, pageable));

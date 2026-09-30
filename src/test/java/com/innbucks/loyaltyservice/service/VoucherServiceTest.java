@@ -123,6 +123,28 @@ class VoucherServiceTest {
     }
 
     @Test
+    void activeForPhone_findsTheCustomer_whenTheNumberIsTypedLocally() {
+        // Projections store E.164; "0771…" typed into a support screen used to
+        // miss the customer and read as "no vouchers".
+        when(userService.normalizePhone("0771234567")).thenReturn("+263771234567");
+        when(users.findByTenantIdAndPhoneNumber(TENANT, "+263771234567")).thenReturn(Optional.empty());
+
+        service.activeForPhone(TENANT, "0771234567", PageRequest.of(0, 20));
+
+        verify(users).findByTenantIdAndPhoneNumber(TENANT, "+263771234567");
+        verify(users, never()).findByTenantIdAndPhoneNumber(TENANT, "0771234567");
+    }
+
+    @Test
+    void activeForPhone_anUnparseableNumber_isLookedUpAsTyped_notRefused() {
+        when(userService.normalizePhone("abc")).thenThrow(
+                com.innbucks.loyaltyservice.exception.LoyaltyException.badRequest("BAD_PHONE", "Invalid phone number: abc"));
+        when(users.findByTenantIdAndPhoneNumber(TENANT, "abc")).thenReturn(Optional.empty());
+
+        assertThat(service.activeForPhone(TENANT, "abc", PageRequest.of(0, 20)).getContent()).isEmpty();
+    }
+
+    @Test
     void activeForPhone_returnsOnlyThatTenantsUsersVouchers() {
         Pageable pageable = PageRequest.of(0, 20);
         LoyaltyUser u = new LoyaltyUser();

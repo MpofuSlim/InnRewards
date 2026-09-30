@@ -385,4 +385,62 @@ class ReportingServiceTest {
         assertEquals("9087-8765-9876-4566", row.split(",")[1]);
         assertEquals("9087876598764566", reporting.voucherDetail(TENANT_A, vid).code());
     }
+
+    // ----- detail lookup by id OR code: the console's search box takes either -----
+
+    private Voucher codedVoucher(UUID tenant, String code) {
+        Voucher v = new Voucher();
+        v.setId(UUID.randomUUID());
+        v.setTenantId(tenant);
+        v.setCode(code);
+        v.setStatus(Voucher.Status.ISSUED);
+        return v;
+    }
+
+    @Test
+    void voucherDetail_byCode_findsTheVoucher_rawGroupedOrSpaced() {
+        Voucher v = codedVoucher(TENANT_A, "9087876598764566");
+        when(vouchers.findByCode("9087876598764566")).thenReturn(Optional.of(v));
+
+        for (String typed : new String[] {"9087876598764566", "9087-8765-9876-4566", " 9087 8765 9876 4566 "}) {
+            VoucherDetail d = reporting.voucherDetail(TENANT_A, typed);
+            assertEquals(v.getId(), d.id(), typed);
+            assertEquals("9087876598764566", d.code(), typed);
+        }
+        verify(vouchers, never()).findById(any());
+    }
+
+    @Test
+    void voucherDetail_byUuidString_takesTheIdPath_andKeepsTheTenantCheck() {
+        Voucher v = codedVoucher(UUID.randomUUID(), "9087876598764566");   // another tenant
+        when(vouchers.findById(v.getId())).thenReturn(Optional.of(v));
+
+        LoyaltyException ex = assertThrows(LoyaltyException.class,
+                () -> reporting.voucherDetail(TENANT_A, v.getId().toString()));
+        assertTrue(ex.getMessage().contains("different tenant"));
+        verify(vouchers, never()).findByCode(any());
+    }
+
+    @Test
+    void voucherDetail_codeFromAnotherTenant_isANotFound_notACrossTenantHint() {
+        // A code is guessable input, unlike a UUID; answering "different tenant"
+        // would confirm the code exists somewhere. Same 404 as an unknown code.
+        Voucher v = codedVoucher(UUID.randomUUID(), "9087876598764566");
+        when(vouchers.findByCode("9087876598764566")).thenReturn(Optional.of(v));
+
+        LoyaltyException foreign = assertThrows(LoyaltyException.class,
+                () -> reporting.voucherDetail(TENANT_A, "9087-8765-9876-4566"));
+        LoyaltyException unknown = assertThrows(LoyaltyException.class,
+                () -> reporting.voucherDetail(TENANT_A, "1111222233334444"));
+        assertEquals(unknown.getMessage(), foreign.getMessage());
+        assertEquals(unknown.getStatus(), foreign.getStatus());
+        verify(voucherRedemptions, never()).findByVoucherIdOrderByRedeemedAtDesc(any());
+    }
+
+    @Test
+    void voucherDetail_blankIdOrCode_isABadRequest() {
+        LoyaltyException ex = assertThrows(LoyaltyException.class,
+                () -> reporting.voucherDetail(TENANT_A, "   "));
+        assertEquals("VOUCHER_ID_OR_CODE_REQUIRED", ex.getCode());
+    }
 }

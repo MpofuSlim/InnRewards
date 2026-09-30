@@ -1395,8 +1395,10 @@ public class ReportingController {
     }
 
     @GetMapping("/vouchers/detail/{id}")
-    @Operation(summary = "Single voucher — full detail + redemption log",
-            description = "Every field of one voucher plus its complete redemption history (who redeemed it, when, " +
+    @Operation(summary = "Single voucher — full detail + redemption log, by id OR code",
+            description = "`{id}` is the voucher id (UUID) or its code, raw or grouped "
+                          + "(`2615207387054439`, `2615-2073-8705-4439` and `2615 2073 8705 4439` all work). " +
+                          "Every field of one voucher plus its complete redemption history (who redeemed it, when, " +
                           "at which merchant/outlet, success/rejected + reason). Tenant-guarded.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Voucher found",
@@ -1459,13 +1461,13 @@ public class ReportingController {
                                       }
                                     }
                                     """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "No such voucher",
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "No voucher with that id or code in this tenant",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not found",
                                     value = "{ \"code\": \"404 NOT_FOUND\", \"message\": \"voucher not found\", \"data\": null }")))
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<VoucherDetail>> voucherDetail(@PathVariable UUID id) {
+    public ResponseEntity<ApiResult<VoucherDetail>> voucherDetail(@PathVariable String id) {
         return ResponseEntity.ok(ApiResult.ok("Voucher detail retrieved successfully",
                 reporting.voucherDetail(tenantContext.requireTenantId(), id)));
     }

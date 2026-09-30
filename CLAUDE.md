@@ -1353,6 +1353,27 @@ along via `VoucherService.issueFromOrder` → `finishIssue`).
   sale is a drawer shortage plus an unexplained settlement credit. The PAN is
   never stored (`card_last4` is optional). `PaidViaCheckConstraintTest` ties the
   CHECK to the enum — the drift payment-service's V16 and this repo's V52 fixed.
+- **Cashiers (SHOP_USER) sell vouchers through this flow (owner decision,
+  2026-09-30)** — they are the ones at the till. All four endpoints (create,
+  poll, confirm-cash, confirm-card) admit SHOP_USER; the FREE
+  `POST /loyalty/vouchers/issue` stays admin-only, so a cashier can hand out a
+  voucher only against a payment. Three guards make that safe, all in
+  `VoucherPurchaseService`, none in `@PreAuthorize`:
+  (1) **shop pin** (`requireCallerMayActOn`, on get AND on every confirm):
+  a token naming a shop reaches only orders of THAT shop, or orders with no
+  shop (an admin-raised order the merchant's till settles); another shop's
+  order is a 404 like an unknown one, so no cross-shop oracle;
+  (2) **`403 SELF_CONFIRM`**: shop staff (SHOP_USER / SHOP_ADMIN not also
+  holding MERCHANT_ADMIN / SUPER_ADMIN) cannot confirm cash or card on an
+  order whose assignee, sender OR payer is their own phone
+  (`VoucherService.samePhone`, E.164-canonical, so `0771…` = `+263771…`);
+  (3) **`403 STAFF_RECIPIENT`**: nor on one whose assignee is merchant staff
+  (`StaffRegistry.isStaffPhone`, fail-open like every other staff check).
+  Off-system confirmation is the only step where the cashier's word IS the
+  payment; the EcoCash / InnBucks / online-card rails are never refused on
+  these grounds, because the money itself proves the sale. `cash_confirmed_by`
+  records email, else phone, else user id — a till account may have no email.
+  Pinned by the `aCashier_*` cases in `VoucherPurchaseServiceTest`.
 - Config: `loyalty.voucher.purchase-order-ttl` (`LOYALTY_VOUCHER_ORDER_TTL`,
   default PT30M); payment-service extends the window past its instrument TTL
   via extend-expiry (1..60 min, never shortens). No gateway route changes:

@@ -181,6 +181,13 @@ public class VoucherService {
         requireSenderIsNotRecipient(senderPhone, recipient);
     }
 
+    /** Whether two phones name the same number, compared canonically
+     *  ({@code 0782…} equals {@code +263782…}). False when either is blank. */
+    public boolean samePhone(String a, String b) {
+        String left = comparablePhone(a);
+        return left != null && left.equals(comparablePhone(b));
+    }
+
     /** Canonical E.164 when the number parses, else the digits as typed (a
      *  sender phone was never validated, so it may not). Null for blank. */
     private String comparablePhone(String raw) {
@@ -559,6 +566,12 @@ public class VoucherService {
      * when the input was not already canonical.
      */
     public Optional<Voucher> findByTypedCode(String typed) {
+        return findByTypedCode(vouchers, typed);
+    }
+
+    /** The typed-code rule above, for a caller that holds the repository but
+     *  not this service (the voucher report's lookup). One rule, one home. */
+    public static Optional<Voucher> findByTypedCode(VoucherRepository vouchers, String typed) {
         String canonical = VoucherCodes.normalize(typed);
         Optional<Voucher> v = vouchers.findByCode(canonical);
         if (v.isEmpty() && typed != null && !typed.strip().equals(canonical)) {

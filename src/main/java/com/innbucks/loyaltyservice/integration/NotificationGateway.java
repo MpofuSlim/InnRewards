@@ -216,7 +216,12 @@ public class NotificationGateway {
         StringBuilder sb = new StringBuilder("Hi ").append(name).append(", ");
         // A named sender turns the platform's notification into a personal
         // gift: "Tawanda Mpofu sent you an InnBucks voucher for Pizza Inn" (V46).
-        if (voucher.getSenderName() != null && !voucher.getSenderName().isBlank()) {
+        // Not when the sender IS the holder (a voucher issued to oneself shows
+        // the same person as sender and recipient): "Tawanda sent you" would
+        // read as a gift from themselves.
+        boolean selfIssued = com.innbucks.loyaltyservice.service.VoucherService.isSelfIssued(
+                voucher.getSenderPhone(), voucher.getAssigneePhone());
+        if (!selfIssued && voucher.getSenderName() != null && !voucher.getSenderName().isBlank()) {
             sb.append(voucher.getSenderName()).append(" sent you an InnBucks voucher")
                     .append(forMerchant).append(". Code ");
         } else {

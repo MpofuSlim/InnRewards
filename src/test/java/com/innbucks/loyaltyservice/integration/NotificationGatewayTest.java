@@ -156,6 +156,20 @@ class NotificationGatewayTest {
                 contains("Tawanda Mpofu sent you an InnBucks voucher"));
     }
 
+    @Test
+    void recipientMessage_forAVoucherIssuedToYourself_saysReady_notSentYou() {
+        // Same person as sender and recipient (owner decision, 2026-09-30):
+        // "Tawanda Mpofu sent you a voucher" to Tawanda reads as nonsense.
+        Voucher v = giftedVoucher(Voucher.DeliveryChannel.WHATSAPP);
+        v.setAssigneeName("Tawanda Mpofu");
+        v.setAssigneePhone("+263782608767");
+
+        gateway.deliver(v, PHONE);
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("your InnBucks voucher is ready"));
+        verify(whatsApp, org.mockito.Mockito.never()).sendCustomNotification(anyString(), contains("sent you"));
+    }
+
     // ---- where the voucher can be used ----
     // "Show this code at checkout" told the holder nothing about WHERE, and a
     // voucher is refused at any other merchant. Every message now names it.

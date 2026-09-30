@@ -320,6 +320,38 @@ re-keying sellers).
   organization membership. They keep their row-stamped `merchantId`/`shopId`
   claims; that move is a separate design change.
 
+## Voucher report filters and payment type (V56, 2026-09-30)
+
+Every voucher report (`/reports/vouchers/{operator,tenant,merchant/{id},shop/{id}}`)
+and both CSV exports take one optional filter set, `VoucherReportFilters`
+(bound as query parameters): merchantId, shopId, currency, paymentMethod,
+issuedBy, phone, q, bulk, batchId, campaign, expiresFrom/To, redeemedFrom/To,
+minValue/maxValue — on top of the existing status / from / to.
+
+- **One Specification feeds the rows AND the summary.** A filtered report
+  summarises through `VoucherReportQueries.summaryByStatus(spec)` (a Criteria
+  fragment on `VoucherRepository`), minus `status` so the tabs still count the
+  other statuses. An unfiltered report keeps the original JPQL summary. Every
+  predicate is appended only when set — never a nullable bind — and LIKE input
+  is escaped, so a typed `%` is literal.
+- **Payment type = the voucher's purchase order.** No order = `FREE` (direct or
+  bulk issue); `CASH` / `CARD_POS` from `paid_via`; an electronic payment is
+  `INNBUCKS` / `ECOCASH` / `ONLINE_CARD` by **`payment_rail` (V56)**, which
+  payment-service now sends on confirm-payment as `paymentRail` — and `ONLINE`
+  when the rail is unknown (confirmed before V56). The `ONLINE` filter matches
+  every electronic payment. The column has **no CHECK on purpose**: a rail
+  payment-service adds later must never make a paid confirmation fail here;
+  `cleanRail` just drops anything that is not a plain name. Payment filters are
+  correlated `EXISTS` subqueries — a `NOT IN` over the nullable `voucher_id`
+  would silently match nothing.
+- Every row (and the detail) carries `paymentMethod` + `orderRef`; the CSV
+  appends the same two columns at the END (`VoucherCsvHeaderTest`).
+- `phone` matches the recipient OR sender on the last 9 digits, so `0777…`,
+  `+263777…` and pre-V56 raw sender spellings all match.
+- A `merchantId` / `shopId` filter is ownership-checked like every other named
+  merchant (403 `NOT_MERCHANT_OWNER` / `NOT_SHOP_MEMBER`). Pinned against real
+  Postgres by `VoucherReportFiltersIT`.
+
 ## Tenant-wide reports are narrowed to the caller's merchants (2026-09-30)
 
 **A tenant holds merchants of several organizations, so "every row in the
@@ -359,7 +391,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V55**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V56**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]

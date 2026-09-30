@@ -139,6 +139,12 @@ public class VoucherPurchaseOrder {
     @Column(name = "card_last4", length = 4)
     private String cardLast4;
 
+    /** The electronic rail a GATEWAY payment came in on (V56), as payment-service
+     *  names it: INNBUCKS_CODE, ECOCASH or ZIMSWITCH_CARD. Null for cash, the
+     *  card machine, and any electronic payment confirmed before V56. */
+    @Column(name = "payment_rail", length = 32)
+    private String paymentRail;
+
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 

@@ -473,6 +473,13 @@ public class VoucherPurchaseService {
      * stranding a paid customer on an operator queue.
      */
     public InternalOrderView internalConfirmPayment(String orderRef, String paymentRef, long amountCents) {
+        return internalConfirmPayment(orderRef, paymentRef, amountCents, null);
+    }
+
+    /** @param paymentRail the rail payment-service collected on (V56), recorded for
+     *        the voucher report's payment-type filter; null when not sent. */
+    public InternalOrderView internalConfirmPayment(String orderRef, String paymentRef, long amountCents,
+                                                    String paymentRail) {
         if (paymentRef == null || paymentRef.isBlank()) {
             throw LoyaltyException.badRequest("PAYMENT_REF_REQUIRED",
                     "confirm-payment requires a non-blank paymentRef");
@@ -499,6 +506,7 @@ public class VoucherPurchaseService {
         }
 
         markPaid(order, VoucherPurchaseOrder.PaidVia.GATEWAY, paymentRef);
+        order.setPaymentRail(cleanRail(paymentRail));
         issueForOrder(order);
         log.info("Voucher purchase order confirmed orderRef={} paymentRef={} voucherId={}",
                 order.getOrderRef(), paymentRef, order.getVoucherId());
@@ -506,6 +514,14 @@ public class VoucherPurchaseService {
     }
 
     // ------------------------------------------------------------------
+
+    /** payment-service's PaymentRail name, upper-cased; anything else (blank, too
+     *  long, not a plain name) is dropped rather than refusing a paid confirm. */
+    static String cleanRail(String raw) {
+        if (raw == null) return null;
+        String r = raw.strip().toUpperCase(java.util.Locale.ROOT);
+        return r.matches("[A-Z0-9_]{1,32}") ? r : null;
+    }
 
     private void markPaid(VoucherPurchaseOrder order, VoucherPurchaseOrder.PaidVia via, String paymentRef) {
         order.setStatus(VoucherPurchaseOrder.Status.PAID);

@@ -88,12 +88,15 @@ class VoucherCsvHeaderTest {
         // holds only while additions go on the END.
         String[] cols = ReportingService.VOUCHER_CSV_HEADER.strip().split(",");
 
-        assertThat(cols[cols.length - 5]).isEqualTo("senderName");
-        assertThat(cols[cols.length - 4]).isEqualTo("senderPhone");
-        assertThat(cols[cols.length - 3]).isEqualTo("transferredAt");
-        assertThat(cols[cols.length - 2]).isEqualTo("transferredFromUserId");
-        assertThat(cols[cols.length - 1]).isEqualTo("transferredFromPhone");
+        // V56: payment type + purchase order, appended after the V46/V34 block.
+        assertThat(cols[cols.length - 2]).isEqualTo("paymentMethod");
+        assertThat(cols[cols.length - 1]).isEqualTo("orderRef");
+        assertThat(cols[cols.length - 7]).isEqualTo("senderName");
+        assertThat(cols[cols.length - 6]).isEqualTo("senderPhone");
+        assertThat(cols[cols.length - 5]).isEqualTo("transferredAt");
+        assertThat(cols[cols.length - 4]).isEqualTo("transferredFromUserId");
+        assertThat(cols[cols.length - 3]).isEqualTo("transferredFromPhone");
         // ...and the last column of the OLD export is still where it was.
-        assertThat(cols[cols.length - 6]).isEqualTo("redemptionCount");
+        assertThat(cols[cols.length - 8]).isEqualTo("redemptionCount");
     }
 }

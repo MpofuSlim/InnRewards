@@ -106,7 +106,17 @@ public final class VoucherReportDtos {
 
             @Schema(example = "1", description = "Number of redemption attempts logged against this voucher.") long redemptionCount,
             @Schema(nullable = true, description = "Full redemption log — populated only on the single-voucher "
-                    + "detail endpoint; null in list/report rows.") List<RedemptionDetail> redemptions
+                    + "detail endpoint; null in list/report rows.") List<RedemptionDetail> redemptions,
+
+            // How the voucher was paid for (V56). FREE = issued without a payment.
+            @Schema(example = "ECOCASH", allowableValues = {"FREE", "ONLINE", "INNBUCKS", "ECOCASH", "ONLINE_CARD",
+                    "CASH", "CARD_POS"},
+                    description = "How the voucher was paid for. FREE = issued without a payment (direct or bulk "
+                            + "issue); ONLINE = electronic, rail not recorded (confirmed before 2026-09-30); "
+                            + "INNBUCKS / ECOCASH / ONLINE_CARD = that electronic rail; CASH / CARD_POS = "
+                            + "confirmed at the till.") String paymentMethod,
+            @Schema(example = "VCH-4F9A1C22B7D3", nullable = true,
+                    description = "The purchase order it was paid through; null when FREE.") String orderRef
     ) {
     }
 

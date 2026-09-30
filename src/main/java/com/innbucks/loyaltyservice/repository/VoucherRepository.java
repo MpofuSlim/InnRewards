@@ -22,7 +22,7 @@ import java.util.UUID;
 // drives the operator, tenant, merchant and shop views without a combinatorial
 // explosion of derived-query methods (and without the nullable-enum-in-JPQL
 // footgun). See ReportingService.voucherReport / voucherCsv.
-public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
+public interface VoucherRepository extends VoucherReportQueries, JpaRepository<Voucher, UUID>,
         JpaSpecificationExecutor<Voucher> {
 
     Optional<Voucher> findByCode(String code);
@@ -182,6 +182,16 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
                                                      @Param("merchantIds") java.util.Collection<UUID> merchantIds,
                                                      @Param("from") Instant from,
                                                      @Param("to") Instant to);
+
+    /** How each voucher was paid for: {@code [voucherId, orderRef, paidVia, paymentRail]}
+     *  per PAID purchase order among {@code voucherIds}. A voucher with no row
+     *  was issued without a payment. */
+    @Query("""
+        SELECT o.voucherId, o.orderRef, o.paidVia, o.paymentRail
+        FROM VoucherPurchaseOrder o
+        WHERE o.voucherId IN :voucherIds
+        """)
+    List<Object[]> purchaseInfoForVouchers(@Param("voucherIds") java.util.Collection<UUID> voucherIds);
 
     long countByTenantIdAndMerchantIdInAndStatus(UUID tenantId, java.util.Collection<UUID> merchantIds,
                                                  Voucher.Status status);

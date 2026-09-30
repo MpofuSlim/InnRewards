@@ -861,4 +861,26 @@ class VoucherPurchaseServiceTest {
                 .isInstanceOfSatisfying(LoyaltyException.class,
                         ex -> assertThat(ex.getCode()).isEqualTo("INVALID_EXTENSION"));
     }
+
+    // ----- the payment rail (V56) -----
+
+    @Test
+    void internalConfirm_recordsTheRailPaymentServiceCollectedOn() {
+        VoucherPurchaseOrder o = pendingOrder();
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        service.internalConfirmPayment(o.getOrderRef(), "TKZ-VCH-ABC123", 500, " ecocash ");
+
+        assertThat(o.getPaidVia()).isEqualTo(VoucherPurchaseOrder.PaidVia.GATEWAY);
+        assertThat(o.getPaymentRail()).isEqualTo("ECOCASH");
+    }
+
+    @Test
+    void cleanRail_dropsAnythingThatIsNotAPlainRailName_ratherThanRefusingAPaidConfirm() {
+        assertThat(VoucherPurchaseService.cleanRail("INNBUCKS_CODE")).isEqualTo("INNBUCKS_CODE");
+        assertThat(VoucherPurchaseService.cleanRail(null)).isNull();
+        assertThat(VoucherPurchaseService.cleanRail("  ")).isNull();
+        assertThat(VoucherPurchaseService.cleanRail("<script>")).isNull();
+        assertThat(VoucherPurchaseService.cleanRail("X".repeat(33))).isNull();
+    }
 }

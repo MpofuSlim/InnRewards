@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.dto.SupportDtos;
 import com.innbucks.loyaltyservice.entity.SupportActivity;
 import com.innbucks.loyaltyservice.security.SupportPermissions;
 import com.innbucks.loyaltyservice.service.SupportActivityService;
+import com.innbucks.loyaltyservice.service.SupportMessageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -34,13 +35,15 @@ import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.UNAU
 @RestController
 @RequestMapping("/loyalty/support")
 @Tag(name = "Customer Support — Oversight",
-        description = "Every agent's activity, newest first. loyalty-support:supervise only.")
+        description = "Every agent's activity and messages, newest first. loyalty-support:supervise only.")
 public class SupportOversightController {
 
     private final SupportActivityService activity;
+    private final SupportMessageService messages;
 
-    public SupportOversightController(SupportActivityService activity) {
+    public SupportOversightController(SupportActivityService activity, SupportMessageService messages) {
         this.activity = activity;
+        this.messages = messages;
     }
 
     @GetMapping("/activity")
@@ -120,5 +123,57 @@ public class SupportOversightController {
             @RequestParam(defaultValue = "20") int size) {
         return SupportCustomerController.noStore(ApiResult.ok(
                 activity.feed(agentUuid, action, from, to, page, size)));
+    }
+
+    @GetMapping("/messages")
+    @PreAuthorize(SupportPermissions.HAS_SUPERVISE)
+    @Operation(summary = "Every support message across all agents",
+            description = "Typed messages and voucher resends, newest first, with outcome. Optional "
+                    + "`agentUuid` and an ISO-8601 `from` (inclusive) / `to` (exclusive). Recipients are masked; "
+                    + "a voucher resend's `text` is always null.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "A page of messages",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "OK",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "1a0f9e8d-7c6b-4a5f-8e4d-3c2b1a0f9e8d",
+                                            "kind": "CUSTOM",
+                                            "channelRequested": "SMS_THEN_WHATSAPP",
+                                            "deliveredVia": "WHATSAPP",
+                                            "outcome": "SENT",
+                                            "recipientRole": "CUSTOMER",
+                                            "recipient": "****4567",
+                                            "text": "Your voucher has been resent.\\n- InnBucks Loyalty Support",
+                                            "sentBy": { "uuid": "5b0e7a1c-3f2d-4c9e-8a7b-6d5e4f3a2b1c", "login": "agent.moyo@example.com" },
+                                            "createdAt": "2026-09-30T08:30:00Z",
+                                            "completedAt": "2026-09-30T08:30:05Z",
+                                            "failureCode": null
+                                          }
+                                        ],
+                                        "page": 0, "size": 20, "totalElements": 1, "totalPages": 1,
+                                        "first": true, "last": true
+                                      }
+                                    }"""))),
+            @ApiResponse(responseCode = "400", description = "A malformed instant, or from not before to",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = INVALID_RANGE))),
+            @ApiResponse(responseCode = "401", description = "No or invalid token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = UNAUTHORIZED))),
+            @ApiResponse(responseCode = "403", description = "Token lacks loyalty-support:supervise",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN)))
+    })
+    public ResponseEntity<ApiResult<PageResponse<SupportDtos.MessageResponse>>> messages(
+            @Parameter(description = "Only this agent (their userUuid)") @RequestParam(required = false) String agentUuid,
+            @Parameter(description = "ISO-8601 instant, inclusive") @RequestParam(required = false) Instant from,
+            @Parameter(description = "ISO-8601 instant, exclusive") @RequestParam(required = false) Instant to,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return SupportCustomerController.noStore(ApiResult.ok(
+                messages.oversight(agentUuid, from, to, page, size)));
     }
 }

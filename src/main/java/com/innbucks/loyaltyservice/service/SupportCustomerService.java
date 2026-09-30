@@ -163,8 +163,12 @@ public class SupportCustomerService {
         return new SupportDtos.LookupResponse(lookup.getId(), activity.expiresAt(lookup), build360(customer));
     }
 
-    /** The 360 again, for a live lookup. */
-    @Transactional
+    /**
+     * The 360 again, for a live lookup. Not transactional for the same reason as
+     * {@link #lookup}'s 360: it includes a best-effort call to user-service for
+     * the tier, and no database connection should be held across somebody
+     * else's network call. The VIEW row commits in its own short transaction.
+     */
     public SupportDtos.LookupResponse view(SupportAgent agent, UUID lookupId) {
         SupportActivity lookup = activity.requireLiveLookup(agent, lookupId);
         Customer customer = customerOf(lookup);

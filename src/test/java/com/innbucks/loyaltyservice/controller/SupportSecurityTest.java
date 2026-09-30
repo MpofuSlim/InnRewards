@@ -52,7 +52,25 @@ class SupportSecurityTest extends SupportTestBase {
                 Arguments.of(HttpMethod.GET, l + "/voucher-orders", null, SupportPermissions.READ, 404),
                 Arguments.of(HttpMethod.GET, l + "/notes", null, SupportPermissions.READ, 404),
                 Arguments.of(HttpMethod.POST, l + "/notes", "{\"body\":\"hello\"}", SupportPermissions.MANAGE, 404),
-                Arguments.of(HttpMethod.GET, "/loyalty/support/activity", null, SupportPermissions.SUPERVISE, 200));
+                Arguments.of(HttpMethod.GET, "/loyalty/support/activity", null, SupportPermissions.SUPERVISE, 200),
+                Arguments.of(HttpMethod.GET, "/loyalty/support/messages", null, SupportPermissions.SUPERVISE, 200),
+                Arguments.of(HttpMethod.GET, l + "/messages", null, SupportPermissions.READ, 404),
+                Arguments.of(HttpMethod.POST, l + "/messages/preview", "{\"channel\":\"SMS\",\"body\":\"hi\"}",
+                        SupportPermissions.SEND_MESSAGES, 404),
+                Arguments.of(HttpMethod.POST, l + "/messages", "{\"channel\":\"SMS\",\"body\":\"hi\"}",
+                        SupportPermissions.SEND_MESSAGES, 404),
+                Arguments.of(HttpMethod.POST, l + "/vouchers/" + UUID.randomUUID() + "/resend",
+                        "{\"channel\":\"SMS\"}", SupportPermissions.MANAGE, 404),
+                Arguments.of(HttpMethod.POST, l + "/sign-out", "{\"reason\":\"lost phone\"}",
+                        SupportPermissions.MANAGE, 404),
+                Arguments.of(HttpMethod.POST, l + "/points/adjust",
+                        "{\"userId\":\"" + UUID.randomUUID() + "\",\"merchantId\":\"" + UUID.randomUUID()
+                                + "\",\"points\":5,\"reason\":\"x\"}",
+                        SupportPermissions.SUPERVISE, 404),
+                Arguments.of(HttpMethod.POST, l + "/transactions/" + UUID.randomUUID() + "/reverse",
+                        "{\"reason\":\"x\"}", SupportPermissions.SUPERVISE, 404),
+                Arguments.of(HttpMethod.POST, l + "/memberships/" + UUID.randomUUID() + "/unblock",
+                        "{\"reason\":\"x\"}", SupportPermissions.SUPERVISE, 404));
     }
 
     private MockHttpServletRequestBuilder call(HttpMethod method, String path, String body) {

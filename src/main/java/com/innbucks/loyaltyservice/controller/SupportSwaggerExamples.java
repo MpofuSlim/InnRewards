@@ -174,4 +174,113 @@ final class SupportSwaggerExamples {
                   "messages": 1
                 }
             """;
+
+    static final String RATE_LIMITED = """
+            {
+              "code": "support_message_rate_limited",
+              "message": "This customer has already been sent 5 support messages in the last 24 hours. Try again later.",
+              "data": { "scope": "RECIPIENT", "limit": 5, "windowMinutes": 1440 }
+            }""";
+
+    static final String RATE_LIMITED_AGENT = """
+            {
+              "code": "support_message_rate_limited",
+              "message": "You have sent 60 customer messages in the last hour. Try again later.",
+              "data": { "scope": "AGENT", "limit": 60, "windowMinutes": 60 }
+            }""";
+
+    static final String CHANNEL_UNAVAILABLE = """
+            {
+              "code": "channel_unavailable",
+              "message": "WHATSAPP is not configured on this cell. Choose another channel.",
+              "data": null
+            }""";
+
+    static final String NOT_DELIVERED = """
+            {
+              "code": "message_not_delivered",
+              "message": "The message could not be delivered on any channel. The attempt is recorded.",
+              "data": {
+                "id": "2b1a0f9e-8d7c-4b6a-9f5e-4d3c2b1a0f9e",
+                "kind": "CUSTOM",
+                "channelRequested": "SMS_THEN_WHATSAPP",
+                "deliveredVia": null,
+                "outcome": "FAILED",
+                "recipientRole": "CUSTOMER",
+                "recipient": "****4567",
+                "text": "Hi, your points adjustment has been applied. Check your balance in the app.\\n- InnBucks Loyalty Support",
+                "sentBy": { "uuid": "5b0e7a1c-3f2d-4c9e-8a7b-6d5e4f3a2b1c", "login": "agent.moyo@example.com" },
+                "createdAt": "2026-09-30T08:30:00Z",
+                "completedAt": "2026-09-30T08:30:04Z",
+                "failureCode": "sms_and_whatsapp_failed"
+              }
+            }""";
+
+    static final String MESSAGE_SENT = """
+            {
+              "code": "201 CREATED",
+              "message": "Message sent",
+              "data": {
+                "id": "1a0f9e8d-7c6b-4a5f-8e4d-3c2b1a0f9e8d",
+                "kind": "CUSTOM",
+                "channelRequested": "SMS_THEN_WHATSAPP",
+                "deliveredVia": "SMS",
+                "outcome": "SENT",
+                "recipientRole": "CUSTOMER",
+                "recipient": "****4567",
+                "text": "Hi, your points adjustment has been applied. Check your balance in the app.\\n- InnBucks Loyalty Support",
+                "sentBy": { "uuid": "5b0e7a1c-3f2d-4c9e-8a7b-6d5e4f3a2b1c", "login": "agent.moyo@example.com" },
+                "createdAt": "2026-09-30T08:30:00Z",
+                "completedAt": "2026-09-30T08:30:02Z",
+                "failureCode": null
+              }
+            }""";
+
+    static final String VOUCHER_RESENT = """
+            {
+              "code": "201 CREATED",
+              "message": "Voucher resent to its holder",
+              "data": {
+                "id": "0f9e8d7c-6b5a-4f4e-9d3c-2b1a0f9e8d7c",
+                "kind": "VOUCHER_RESEND",
+                "channelRequested": "WHATSAPP",
+                "deliveredVia": "WHATSAPP",
+                "outcome": "SENT",
+                "recipientRole": "VOUCHER_HOLDER",
+                "recipient": "****4567",
+                "text": null,
+                "sentBy": { "uuid": "5b0e7a1c-3f2d-4c9e-8a7b-6d5e4f3a2b1c", "login": "agent.moyo@example.com" },
+                "createdAt": "2026-09-30T08:40:00Z",
+                "completedAt": "2026-09-30T08:40:01Z",
+                "failureCode": null
+              }
+            }""";
+
+    static final String AGENT_IDENTITY_REQUIRED = """
+            {
+              "code": "agent_identity_required",
+              "message": "This action needs an agent token carrying a userUuid claim. Sign in again.",
+              "data": null
+            }""";
+
+    static final String INVALID_REASON = """
+            {
+              "code": "invalid_reason",
+              "message": "Give a reason. It is empty once formatting is removed.",
+              "data": null
+            }""";
+
+    static final String MEMBERSHIP_NOT_FOUND = """
+            {
+              "code": "membership_not_found",
+              "message": "This customer has no loyalty membership with that id.",
+              "data": null
+            }""";
+
+    static final String REASON_BLANK = """
+            {
+              "code": "400 BAD_REQUEST",
+              "message": "Validation failed",
+              "data": { "reason": "must not be blank" }
+            }""";
 }

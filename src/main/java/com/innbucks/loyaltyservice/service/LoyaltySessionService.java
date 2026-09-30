@@ -245,10 +245,14 @@ public class LoyaltySessionService {
     /**
      * Revokes every chain of a phone — "sign this customer out everywhere".
      *
-     * <p>The lever the access token's TTL was standing in for. Not reachable
-     * from the customer API by design: it is the operator-side companion to
-     * revoking the phone's registration, and it is called from there rather than
-     * exposed as an endpoint anyone could aim at a number.
+     * <p>The lever the access token's TTL was standing in for. Still not
+     * reachable from the customer API: its one endpoint is the customer-support
+     * sign-out ({@code POST /loyalty/support/lookups/{lookupId}/sign-out}), gated
+     * on the {@code loyalty-support:manage} PERMISSION, logged, and aimed only at
+     * the customer the agent looked up — the phone comes from that lookup, never
+     * from the request. Callers pass a short machine reason (it is logged and
+     * stored in a VARCHAR(64)); a support sign-out's typed reason is kept as a
+     * support note instead.
      */
     @Transactional
     public int revokeAllForPhone(String e164Phone, String reason) {

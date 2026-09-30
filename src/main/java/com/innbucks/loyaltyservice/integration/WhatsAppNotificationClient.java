@@ -38,6 +38,19 @@ public class WhatsAppNotificationClient {
         this.properties = properties;
     }
 
+    /**
+     * Whether this cell has a WhatsApp gateway to talk to: a base URL and a real
+     * API key. The committed default key is a {@code change-me} placeholder,
+     * which the gateway would refuse — so it counts as not configured, and the
+     * support message endpoints answer 503 rather than record a doomed attempt.
+     */
+    public boolean isConfigured() {
+        String key = properties.getApiKey();
+        return properties.getBaseUrl() != null && !properties.getBaseUrl().isBlank()
+                && key != null && !key.isBlank()
+                && !key.toLowerCase(java.util.Locale.ROOT).contains("change-me");
+    }
+
     public void sendCustomNotification(String to, String notification) {
         if (to == null || to.isBlank()) {
             throw new NotificationDeliveryException("Recipient phone number is blank");

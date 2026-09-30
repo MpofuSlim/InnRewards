@@ -246,6 +246,21 @@ public class LoyaltyMetrics {
     }
 
     /**
+     * Customer-support messages by kind (CUSTOM / VOUCHER_RESEND) and outcome
+     * (SENT / FAILED). A rising FAILED share is a gateway problem an agent will
+     * report as "the customer never got it"; every attempt is also a row in
+     * {@code support_message}.
+     */
+    public void incSupportMessage(String kind, String outcome) {
+        Counter.builder("loyalty.support.message")
+                .description("Support-initiated customer messages, by kind and outcome")
+                .tag("kind", kind)
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Refused refresh attempts, grouped by reason (unknown, revoked, expired,
      * registration_revoked, reuse_detected).
      *

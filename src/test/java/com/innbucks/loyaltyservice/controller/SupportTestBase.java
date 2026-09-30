@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
@@ -72,6 +73,9 @@ public abstract class SupportTestBase extends ControllerSecurityTestBase {
     @BeforeEach
     void supportDefaults() {
         jdbc = new JdbcTemplate(dataSource);
+        // Both channels provisioned unless a test says otherwise.
+        when(sms.isConfigured()).thenReturn(true);
+        when(whatsApp.isConfigured()).thenReturn(true);
     }
 
     // ---- Tokens ----

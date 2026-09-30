@@ -262,6 +262,25 @@ public class TransactionService {
     }
 
     public Dtos.TransactionResponse reverse(UUID tenantId, UUID txnId, String reason) {
+        return doReverse(tenantId, txnId, reason,
+                com.innbucks.loyaltyservice.security.CallerDetails.currentMerchantId(),
+                com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+    }
+
+    /**
+     * The customer-support reversal ({@code /loyalty/support/**}). Identical to
+     * {@link #reverse} — same lock, same ALREADY_REVERSED guard, same
+     * ledger-derived compensation — except that the operator is passed
+     * explicitly and there is no merchant-claim scoping: support is a platform
+     * function, authorized by a permission, and has already bound the
+     * transaction to the looked-up customer before calling this.
+     */
+    public Dtos.TransactionResponse reverseAs(UUID tenantId, UUID txnId, String reason, UUID operator) {
+        return doReverse(tenantId, txnId, reason, null, operator);
+    }
+
+    private Dtos.TransactionResponse doReverse(UUID tenantId, UUID txnId, String reason,
+                                               UUID callerMerchantId, UUID operator) {
         // Sanitize the operator-supplied reason — it is persisted in the wallet
         // ledger entry as "reverse:<reason>" (stored-XSS hardening). Null-safe.
         reason = HtmlSanitizer.stripAll(reason);
@@ -281,7 +300,6 @@ public class TransactionService {
         // merchant A's transaction within the same tenant. MERCHANT_ADMIN /
         // SUPER_ADMIN are tenant-scoped (currentMerchantId() is null) and bypass,
         // already bounded by the tenant check above.
-        UUID callerMerchantId = com.innbucks.loyaltyservice.security.CallerDetails.currentMerchantId();
         if (orig.getMerchantId() != null && callerMerchantId != null
                 && !orig.getMerchantId().equals(callerMerchantId)) {
             throw LoyaltyException.forbidden("WRONG_MERCHANT", "This transaction belongs to a different merchant.");
@@ -313,7 +331,7 @@ public class TransactionService {
         rev.setReversesId(orig.getId());
         // Attribution: the operator who posted the reversal (channel stays
         // null — reversals aren't earns).
-        rev.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+        rev.setPostedBy(operator);
         rev.setReference(orig.getReference() == null ? null : "REV-" + orig.getReference());
         // saveAndFlush so the uq_txn_reverses_id unique index (V20) surfaces a
         // second reversal as a clean ALREADY_REVERSED here — and crucially
@@ -341,12 +359,25 @@ public class TransactionService {
 
     public Dtos.TransactionResponse adjust(UUID tenantId, UUID userId, UUID merchantId,
                                            BigDecimal points, String reason) {
+        return adjustAs(tenantId, userId, merchantId, points, reason,
+                com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+    }
+
+    /**
+     * {@link #adjust} with the operator named explicitly — the customer-support
+     * path, where the operator is the agent. Everything else is the same code:
+     * the per-adjustment and per-operator daily ceilings (keyed on
+     * {@code posted_by} = {@code operator}), the SUPER_ADMIN exemption, the
+     * ledger entry and the customer's adjustment SMS.
+     */
+    public Dtos.TransactionResponse adjustAs(UUID tenantId, UUID userId, UUID merchantId,
+                                             BigDecimal points, String reason, UUID operator) {
         // Sanitize the operator-supplied reason once — it is persisted both as the
         // transaction reference AND in the wallet ledger entry (stored-XSS hardening).
         reason = HtmlSanitizer.stripAll(reason);
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         LoyaltyUser u = users.require(tenantId, userId);
-        requireWithinAdjustmentCeilings(tenantId, u, merchantId, points);
+        requireWithinAdjustmentCeilings(tenantId, u, merchantId, points, operator);
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
         t.setMerchantId(merchantId);
@@ -354,7 +385,7 @@ public class TransactionService {
         t.setType(TransactionType.ADJUSTMENT);
         t.setPointsDelta(points);
         // Attribution: the operator who keyed the adjustment.
-        t.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+        t.setPostedBy(operator);
         // Adjustments inherit the merchant's currency (previously left at the
         // entity "USD" default — the audit's mislabelled-ledger finding).
         t.setCurrency(m.getCurrency());
@@ -389,7 +420,7 @@ public class TransactionService {
      * that posting +N then −N cannot present as a day of zero activity.
      */
     private void requireWithinAdjustmentCeilings(UUID tenantId, LoyaltyUser target,
-                                                 UUID merchantId, BigDecimal points) {
+                                                 UUID merchantId, BigDecimal points, UUID operator) {
         if (points == null || points.signum() == 0) {
             return;
         }
@@ -400,7 +431,7 @@ public class TransactionService {
         BigDecimal magnitude = points.abs();
         BigDecimal perCap = props.adjustment().maxPerAdjustment();
         if (perCap != null && perCap.signum() > 0 && magnitude.compareTo(perCap) > 0) {
-            rejectAdjustment(tenantId, target, merchantId,
+            rejectAdjustment(tenantId, target, merchantId, operator,
                     "single adjustment " + magnitude.toPlainString() + " exceeds cap " + perCap.toPlainString(),
                     "ADJUSTMENT_LIMIT_EXCEEDED",
                     "That adjustment is larger than you're allowed to post. "
@@ -408,7 +439,6 @@ public class TransactionService {
         }
 
         BigDecimal dailyCap = props.adjustment().maxDailyPerOperator();
-        UUID operator = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
         // A null operator means the token carries no userId claim (legacy or
         // server-side). The daily sum is keyed on postedBy, so it cannot be
         // attributed — the per-adjustment cap above still applies, which is the
@@ -419,7 +449,7 @@ public class TransactionService {
             if (already == null) already = BigDecimal.ZERO;
             BigDecimal projected = already.add(magnitude);
             if (projected.compareTo(dailyCap) > 0) {
-                rejectAdjustment(tenantId, target, merchantId,
+                rejectAdjustment(tenantId, target, merchantId, operator,
                         "operator 24h adjustment total would reach " + projected.toPlainString()
                                 + ", cap " + dailyCap.toPlainString(),
                         "ADJUSTMENT_DAILY_LIMIT_EXCEEDED",
@@ -435,11 +465,10 @@ public class TransactionService {
      * a rejected over-cap adjustment is exactly the signal an operator review
      * needs, and it would be worthless if it vanished with the rejection.
      */
-    private void rejectAdjustment(UUID tenantId, LoyaltyUser target, UUID merchantId,
+    private void rejectAdjustment(UUID tenantId, LoyaltyUser target, UUID merchantId, UUID operator,
                                   String detail, String code, String message) {
         log.warn("Adjustment refused operator={} targetUserId={} merchantId={} detail={}",
-                com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(),
-                target.getId(), merchantId, detail);
+                operator, target.getId(), merchantId, detail);
         fraud.record(tenantId, target.getId(), merchantId, null,
                 FraudAttempt.Reason.ADJUSTMENT_LIMIT, detail, null, null);
         throw LoyaltyException.forbidden(code, message);

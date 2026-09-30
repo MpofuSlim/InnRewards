@@ -34,7 +34,9 @@ import org.springframework.web.bind.annotation.RestController;
  *       this {@code orderRef} ({@code paymentRail} omitted = InnBucks 2D
  *       code + QR; {@code ECOCASH} = PIN prompt pushed to the payer's phone;
  *       {@code ZIMSWITCH_CARD} = card widget). Cash is confirmed HERE via
- *       {@code confirm-cash} once the cashier holds the money.</li>
+ *       {@code confirm-cash} once the cashier holds the money, and a card
+ *       swiped on the till's own machine via {@code confirm-card} with the
+ *       slip's approval code (V54).</li>
  *   <li>Poll {@code GET .../{orderRef}} until {@code status=PAID} — the
  *       response then carries the issued voucher (code included), and the
  *       recipient's WhatsApp/SMS has been dispatched. The sender's own
@@ -45,7 +47,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/loyalty/vouchers/purchase")
 @Tag(name = "Voucher Purchase", description = "Pay-before-issue voucher orders (V47): create an order, "
-        + "collect payment (EcoCash / InnBucks code / card via POST /payments, or cash confirmed here), "
+        + "collect payment (EcoCash / InnBucks code / card via POST /payments, or cash / the till's card "
+        + "machine confirmed here), "
         + "and the voucher is issued on confirmation.")
 public class VoucherPurchaseController {
 
@@ -239,7 +242,7 @@ public class VoucherPurchaseController {
                     + "the voucher immediately — the recipient's WhatsApp/SMS goes out, and the sender gets "
                     + "their own confirmation copy only when the ORDER named an explicit `senderPhone` (it is "
                     + "never filled in from the confirming cashier's token). Idempotent "
-                    + "for a double-click; refused when the order was already paid electronically or has "
+                    + "for a double-click; refused when the order was already paid another way or has "
                     + "expired (create a new order and take payment again).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -288,7 +291,9 @@ public class VoucherPurchaseController {
                                           "expiresAt": "2027-09-17T19:55:00Z",
                                           "transferredFromUserId": null,
                                           "transferredFromPhone": null
-                                        }
+                                        },
+                                        "electronicPaymentUntil": null,
+                                        "cardApprovalCode": null
                                       }
                                     }
                                     """))),
@@ -296,7 +301,7 @@ public class VoucherPurchaseController {
                     responseCode = "409",
                     description = "An electronic payment for this order may still complete "
                             + "(ELECTRONIC_PAYMENT_PENDING — wait for `electronicPaymentUntil` to pass), or the "
-                            + "order was already paid electronically, cancelled, or expired",
+                            + "order was already paid (electronically or on the card machine), cancelled, or expired",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
@@ -311,6 +316,13 @@ public class VoucherPurchaseController {
                                             {
                                               "code": "ORDER_ALREADY_PAID",
                                               "message": "This order was already paid electronically — do not take cash for it.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Already paid on the card machine", value = """
+                                            {
+                                              "code": "ORDER_ALREADY_PAID",
+                                              "message": "This order was already paid on the card machine — do not take cash for it.",
                                               "data": null
                                             }
                                             """),
@@ -345,5 +357,148 @@ public class VoucherPurchaseController {
             @PathVariable String orderRef) {
         return ResponseEntity.ok(ApiResult.ok("Cash payment confirmed — voucher issued",
                 purchases.confirmCash(tenantContext.requireTenantId(), orderRef)));
+    }
+
+    @PostMapping("/{orderRef}/confirm-card")
+    @Operation(summary = "Confirm a card swiped on the till's card machine and issue the voucher",
+            description = "For a card swiped on the shop's OWN card machine (not the online ZimSwitch card "
+                    + "checkout, which goes through POST /payments). The machine is outside our systems, so — "
+                    + "like cash — the cashier's confirmation is the payment proof: same staff roles, WHO "
+                    + "confirmed is recorded, the voucher issues immediately, and the same double-payment and "
+                    + "expiry guards apply. Two extra rules: the `approvalCode` from the machine's slip is "
+                    + "REQUIRED (it reconciles the voucher against the bank's card settlement), and the order "
+                    + "must be priced in a currency the card machines settle in "
+                    + "(`loyalty.voucher.card-pos-currencies`, USD and ZWG on the ZW cell). Idempotent for a "
+                    + "double-click with the same approval code.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Card payment confirmed — voucher issued",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Card confirmed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Card payment confirmed — voucher issued",
+                                      "data": {
+                                        "orderRef": "VCH-4F9A1C22B7D3",
+                                        "status": "PAID",
+                                        "amount": 5.0000,
+                                        "currency": "USD",
+                                        "payerPhone": "+263782608767",
+                                        "expiresAt": "2026-09-17T20:15:00Z",
+                                        "paidVia": "CARD_POS",
+                                        "paidAt": "2026-09-17T19:55:00Z",
+                                        "voucher": {
+                                          "id": "c1b7e9f0-9012-3456-0123-456789012345",
+                                          "code": "4829137605128368",
+                                          "status": "ISSUED",
+                                          "voucherType": "SINGLE_USE",
+                                          "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "shopId": null,
+                                          "batchId": null,
+                                          "campaignSource": null,
+                                          "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                          "assigneePhone": "+263786546765",
+                                          "assigneeName": "Sedrick Nyanyiwa",
+                                          "senderName": "Tawanda Mpofu",
+                                          "senderPhone": "+263782608767",
+                                          "issuerUserId": "77777777-7777-7777-7777-777777777777",
+                                          "issuerPhone": "+263772000111",
+                                          "issuerEmail": "shopadmin@westgate.co.zw",
+                                          "usesRemaining": 1,
+                                          "value": 5.0000,
+                                          "currency": "USD",
+                                          "baseValue": 5.0000,
+                                          "issuedAt": "2026-09-17T19:55:00Z",
+                                          "deliveredAt": "2026-09-17T19:55:05Z",
+                                          "viewedAt": null,
+                                          "redeemedAt": null,
+                                          "transferredAt": null,
+                                          "expiresAt": "2027-09-17T19:55:00Z",
+                                          "transferredFromUserId": null,
+                                          "transferredFromPhone": null
+                                        },
+                                        "electronicPaymentUntil": null,
+                                        "cardApprovalCode": "A1B2C3"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "Approval code missing or malformed, or a bad last4",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "No approval code", value = """
+                                            {
+                                              "code": "APPROVAL_CODE_REQUIRED",
+                                              "message": "Enter the approval code printed on the card machine slip (4 to 12 letters or digits).",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Bad last4", value = """
+                                            {
+                                              "code": "INVALID_CARD_LAST4",
+                                              "message": "last4 must be exactly the last four digits of the card, or left out.",
+                                              "data": null
+                                            }
+                                            """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "An electronic payment for this order may still complete, or the order was "
+                            + "already paid, cancelled, or expired",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Electronic payment still live", value = """
+                                            {
+                                              "code": "ELECTRONIC_PAYMENT_PENDING",
+                                              "message": "An EcoCash, InnBucks or card payment for this order is still waiting for the customer. Don't swipe the card now: let the customer finish paying, or wait about 4 minutes for it to lapse and try again.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Already paid in cash", value = """
+                                            {
+                                              "code": "ORDER_ALREADY_PAID",
+                                              "message": "This order was already paid in cash — do not charge the card.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Expired", value = """
+                                            {
+                                              "code": "ORDER_EXPIRED",
+                                              "message": "This purchase order has expired — create a new one and take payment again.",
+                                              "data": null
+                                            }
+                                            """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422", description = "The order's currency is not one the card machines take",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "ZAR order", value = """
+                                    {
+                                      "code": "CARD_CURRENCY_UNSUPPORTED",
+                                      "message": "The card machine can't take payment in ZAR. Take cash, or create the order in USD or ZWG.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "Unknown order in this tenant",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "purchase order not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> confirmCard(
+            @PathVariable String orderRef,
+            @Valid @RequestBody Dtos.ConfirmCardPaymentRequest req) {
+        return ResponseEntity.ok(ApiResult.ok("Card payment confirmed — voucher issued",
+                purchases.confirmCardPos(tenantContext.requireTenantId(), orderRef,
+                        req.approvalCode(), req.last4())));
     }
 }

@@ -785,7 +785,10 @@ public class Dtos {
             BigDecimal amount, String currency,
             @Schema(example = "+263782608767") String payerPhone,
             Instant expiresAt,
-            @Schema(example = "GATEWAY", nullable = true, allowableValues = {"GATEWAY", "CASH"})
+            @Schema(example = "GATEWAY", nullable = true, allowableValues = {"GATEWAY", "CASH", "CARD_POS"},
+                    description = "GATEWAY = EcoCash / InnBucks / online card via payment-service; CASH = "
+                            + "cash confirmed by staff; CARD_POS = a card swiped on the till's own card "
+                            + "machine, confirmed by staff (V54).")
             String paidVia,
             Instant paidAt,
             @Schema(nullable = true, description = "The issued voucher — present once status is PAID.")
@@ -795,7 +798,27 @@ public class Dtos {
                             + "for this order may still be completed by the customer, and "
                             + "confirm-cash is refused (409 ELECTRONIC_PAYMENT_PENDING). Show it as a "
                             + "countdown before offering cash. Null = no electronic payment was started.")
-            Instant electronicPaymentUntil
+            Instant electronicPaymentUntil,
+            @Schema(example = "A1B2C3", nullable = true,
+                    description = "The approval code from the card machine slip, present only when "
+                            + "paidVia is CARD_POS (V54).")
+            String cardApprovalCode
+    ) {}
+
+    /**
+     * Confirm a card swiped on the till's own card machine (V54). The approval
+     * code is validated in the service so every refusal carries its domain code.
+     */
+    public record ConfirmCardPaymentRequest(
+            @Schema(example = "A1B2C3", requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "The approval (authorisation) code printed on the card machine slip: 4 to 12 "
+                            + "letters or digits. Required — it is what reconciles the voucher against the "
+                            + "bank's card settlement.")
+            @Size(max = 32) String approvalCode,
+            @Schema(example = "4242", nullable = true,
+                    description = "Optional last four digits of the card, for disputes. Never send the full "
+                            + "card number.")
+            @Size(max = 8) String last4
     ) {}
 
     /**

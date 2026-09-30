@@ -397,6 +397,159 @@ class VoucherPurchaseServiceTest {
     }
 
     // ------------------------------------------------------------------
+    // Card swiped on the till's own machine (V54) — confirmed like cash
+    // ------------------------------------------------------------------
+
+    @Test
+    void confirmCard_marksPaidViaCardPos_recordsTheApprovalCodeAndWho_andIssues() {
+        var auth = new UsernamePasswordAuthenticationToken("cashier@example.com", "n/a",
+                List.of(new SimpleGrantedAuthority("ROLE_SHOP_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        VoucherPurchaseOrder o = pendingOrder();
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        Dtos.VoucherPurchaseOrderResponse resp = service.confirmCardPos(TENANT, o.getOrderRef(), " a1b2c3 ", "4242");
+
+        assertThat(o.getStatus()).isEqualTo(VoucherPurchaseOrder.Status.PAID);
+        assertThat(o.getPaidVia()).isEqualTo(VoucherPurchaseOrder.PaidVia.CARD_POS);
+        assertThat(o.getCardApprovalCode()).isEqualTo("A1B2C3");
+        assertThat(o.getCardLast4()).isEqualTo("4242");
+        assertThat(o.getPaymentRef()).startsWith("CARD-A1B2C3-");
+        assertThat(o.getCashConfirmedBy()).isEqualTo("cashier@example.com");
+        assertThat(resp.paidVia()).isEqualTo("CARD_POS");
+        assertThat(resp.cardApprovalCode()).isEqualTo("A1B2C3");
+        verify(voucherService).issueFromOrder(o);
+    }
+
+    @Test
+    void confirmCard_withoutAnApprovalCode_isRefused_beforeTheOrderIsTouched() {
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, "VCH-4F9A1C22B7D3", "  ", null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("APPROVAL_CODE_REQUIRED"));
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, "VCH-4F9A1C22B7D3", "A1-B2", null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("APPROVAL_CODE_REQUIRED"));
+        verify(orders, never()).lockByOrderRef(anyString());
+        verify(voucherService, never()).issueFromOrder(any());
+    }
+
+    @Test
+    void confirmCard_withAFullCardNumberAsLast4_isRefused() {
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, "VCH-4F9A1C22B7D3", "A1B2C3", "4111111111111111"))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("INVALID_CARD_LAST4"));
+        verify(voucherService, never()).issueFromOrder(any());
+    }
+
+    @Test
+    void confirmCard_inACurrencyTheMachinesDoNotTake_isRefused422_andNothingIsIssued() {
+        // A ZAR 100 voucher swiped on a USD machine would take USD 100.
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setCurrency("ZAR");
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, o.getOrderRef(), "A1B2C3", null))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("CARD_CURRENCY_UNSUPPORTED");
+                    assertThat(ex.getStatus().value()).isEqualTo(422);
+                    assertThat(ex.getMessage())
+                            .isEqualTo("The card machine can't take payment in ZAR. Take cash, or create the "
+                                    + "order in USD or ZWG.");
+                });
+        assertThat(o.getStatus()).isEqualTo(VoucherPurchaseOrder.Status.PENDING_PAYMENT);
+        verify(voucherService, never()).issueFromOrder(any());
+    }
+
+    @Test
+    void confirmCard_inZwg_isAccepted() {
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setCurrency("ZWG");
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        service.confirmCardPos(TENANT, o.getOrderRef(), "A1B2C3", null);
+
+        assertThat(o.getPaidVia()).isEqualTo(VoucherPurchaseOrder.PaidVia.CARD_POS);
+    }
+
+    @Test
+    void confirmCard_doubleClickWithTheSameCode_isIdempotent_aDifferentCodeIsASecondSwipe() {
+        VoucherPurchaseOrder o = pendingOrder();
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+        service.confirmCardPos(TENANT, o.getOrderRef(), "A1B2C3", null);
+
+        assertThat(service.confirmCardPos(TENANT, o.getOrderRef(), "a1b2c3", null).status()).isEqualTo("PAID");
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, o.getOrderRef(), "Z9Y8X7", null))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("ORDER_ALREADY_PAID");
+                    assertThat(ex.getMessage()).isEqualTo(
+                            "This order was already paid on the card machine — do not charge the card.");
+                });
+        verify(voucherService, times(1)).issueFromOrder(any());
+    }
+
+    @Test
+    void cardAndCash_cannotBothPayOneOrder() {
+        VoucherPurchaseOrder o = pendingOrder();
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+        service.confirmCash(TENANT, o.getOrderRef());
+
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, o.getOrderRef(), "A1B2C3", null))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> assertThat(ex.getMessage())
+                        .isEqualTo("This order was already paid in cash — do not charge the card."));
+
+        VoucherPurchaseOrder other = pendingOrder();
+        other.setOrderRef("VCH-000000000002");
+        when(orders.lockByOrderRef(other.getOrderRef())).thenReturn(Optional.of(other));
+        service.confirmCardPos(TENANT, other.getOrderRef(), "A1B2C3", null);
+
+        assertThatThrownBy(() -> service.confirmCash(TENANT, other.getOrderRef()))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> assertThat(ex.getMessage())
+                        .isEqualTo("This order was already paid on the card machine — do not take cash for it."));
+        verify(voucherService, times(2)).issueFromOrder(any());
+    }
+
+    @Test
+    void confirmCard_whileAnElectronicPaymentIsLive_isRefused() {
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setElectronicPaymentUntil(Instant.now().plus(Duration.ofMinutes(4)));
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, o.getOrderRef(), "A1B2C3", null))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("ELECTRONIC_PAYMENT_PENDING");
+                    assertThat(ex.getMessage()).contains("Don't swipe the card now");
+                });
+        verify(voucherService, never()).issueFromOrder(any());
+    }
+
+    @Test
+    void confirmCard_onAnExpiredOrder_isRefused() {
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setExpiresAt(Instant.now().minus(Duration.ofMinutes(5)));
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        assertThatThrownBy(() -> service.confirmCardPos(TENANT, o.getOrderRef(), "A1B2C3", null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getCode()).isEqualTo("ORDER_EXPIRED"));
+    }
+
+    @Test
+    void confirmCard_wrongTenant_isANotFound() {
+        VoucherPurchaseOrder o = pendingOrder();
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        assertThatThrownBy(() -> service.confirmCardPos(UUID.randomUUID(), o.getOrderRef(), "A1B2C3", null))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        ex -> assertThat(ex.getStatus().value()).isEqualTo(404));
+    }
+
+    @Test
+    void cardPosCurrencies_parseFromConfig_andDefaultToUsdAndZwg() {
+        assertThat(VoucherPurchaseService.parseCurrencies(null)).containsExactlyInAnyOrder("USD", "ZWG");
+        assertThat(VoucherPurchaseService.parseCurrencies(" usd , kes ,")).containsExactlyInAnyOrder("USD", "KES");
+    }
+
+    // ------------------------------------------------------------------
     // Double-payment guard: no cash while an electronic payment is live
     // ------------------------------------------------------------------
 

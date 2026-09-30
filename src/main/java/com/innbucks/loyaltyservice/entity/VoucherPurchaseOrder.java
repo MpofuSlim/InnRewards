@@ -124,8 +124,20 @@ public class VoucherPurchaseOrder {
     @Column(name = "paid_at")
     private Instant paidAt;
 
+    /** The staff member who confirmed an off-system payment — cash, or the
+     *  till's card machine (V54 kept the column name). */
     @Column(name = "cash_confirmed_by", length = 200)
     private String cashConfirmedBy;
+
+    /** The approval code from the card machine's slip (V54). Required for a
+     *  CARD_POS payment: it is what reconciles the order against the
+     *  acquirer's settlement statement. */
+    @Column(name = "card_approval_code", length = 12)
+    private String cardApprovalCode;
+
+    /** Optional last four digits of the card, for disputes. Never the PAN. */
+    @Column(name = "card_last4", length = 4)
+    private String cardLast4;
 
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
@@ -149,8 +161,11 @@ public class VoucherPurchaseOrder {
     public enum Status { PENDING_PAYMENT, PAID, EXPIRED, CANCELLED }
 
     /** GATEWAY = payment-service confirmed an electronic rail; CASH = a staff
-     *  caller vouched for cash in hand. */
-    public enum PaidVia { GATEWAY, CASH }
+     *  caller vouched for cash in hand; CARD_POS = a staff caller vouched for a
+     *  card swiped on the till's own terminal (V54). The CHECK
+     *  {@code chk_vpo_paid_via} must list every value — see
+     *  {@code PaidViaCheckConstraintTest}. */
+    public enum PaidVia { GATEWAY, CASH, CARD_POS }
 
     /** True while an electronic payment started for this order may still
      *  complete — the window in which taking cash could charge the customer

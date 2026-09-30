@@ -329,7 +329,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V53**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V54**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1336,6 +1336,23 @@ along via `VoucherService.issueFromOrder` → `finishIssue`).
   later; cash after the window is then the same refund case, now narrowed from
   "any time" to that rare tail. Pinned by the double-payment cases in
   `VoucherPurchaseServiceTest`.
+- **A card swiped on the till's OWN machine is confirmed like cash (V54)** —
+  `POST /loyalty/vouchers/purchase/{ref}/confirm-card`, `paid_via = CARD_POS`.
+  Not the online ZimSwitch card checkout (that is `POST /payments`): the
+  terminal is outside our systems, so the cashier's word is the proof, with
+  cash's authz, double-payment and expiry guards (one shared
+  `requireOffSystemPayable`, so the two cannot drift). Two rules cash does not
+  have, both load-bearing: the **slip's approval code is required** — the only
+  fact that reconciles the voucher against the acquirer's settlement, and what
+  makes a "card" click with no swipe behind it visible — and the order must be
+  priced in a currency the terminals settle in (`loyalty.voucher.card-pos-currencies`,
+  `LOYALTY_CARD_POS_CURRENCIES`, default `USD,ZWG`; else `422
+  CARD_CURRENCY_UNSUPPORTED`), because a terminal charges the number it is given
+  in ITS currency — the same overcharge payment-service's electronic rails
+  refuse. Recorded as its own method, never as CASH: counted as cash, every card
+  sale is a drawer shortage plus an unexplained settlement credit. The PAN is
+  never stored (`card_last4` is optional). `PaidViaCheckConstraintTest` ties the
+  CHECK to the enum — the drift payment-service's V16 and this repo's V52 fixed.
 - Config: `loyalty.voucher.purchase-order-ttl` (`LOYALTY_VOUCHER_ORDER_TTL`,
   default PT30M); payment-service extends the window past its instrument TTL
   via extend-expiry (1..60 min, never shortens). No gateway route changes:

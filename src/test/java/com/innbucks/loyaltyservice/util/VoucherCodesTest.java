@@ -20,13 +20,13 @@ class VoucherCodesTest {
     // ------------------------------------------------------------------ display
 
     @Test
-    void display_groupsInFoursWithSpaces() {
-        assertThat(VoucherCodes.display(CODE)).isEqualTo("9087 8765 9876 4566");
+    void display_groupsInFoursWithHyphens() {
+        assertThat(VoucherCodes.display(CODE)).isEqualTo("9087-8765-9876-4566");
     }
 
     @Test
     void display_groupsALegacyAlphanumericCodeTheSameWay() {
-        assertThat(VoucherCodes.display("K7M2PQ9XR4TB")).isEqualTo("K7M2 PQ9X R4TB");
+        assertThat(VoucherCodes.display("K7M2PQ9XR4TB")).isEqualTo("K7M2-PQ9X-R4TB");
     }
 
     @Test
@@ -40,7 +40,7 @@ class VoucherCodesTest {
 
     @Test
     void display_isIdempotent() {
-        assertThat(VoucherCodes.display(VoucherCodes.display(CODE))).isEqualTo("9087 8765 9876 4566");
+        assertThat(VoucherCodes.display(VoucherCodes.display(CODE))).isEqualTo("9087-8765-9876-4566");
     }
 
     @Test

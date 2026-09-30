@@ -1608,8 +1608,11 @@ invent its own.
 - **RAW at rest and on every machine surface.** The column, the API JSON, the
   HMAC signature payload (`signPayload`) and S2S bodies all carry the code
   exactly as stored. **Grouping is for text a PERSON reads, and only
-  that**: `display()` (spaces) in WhatsApp/SMS copy, `forExport()` (hyphens)
-  in the CSV. Putting a grouped code in a signature payload or an API field
+  that**: `display()` in WhatsApp/SMS copy and `forExport()` in the CSV —
+  both hyphen-grouped (`9087-8765-9876-4566`) since the owner's 2026-09-30
+  decision, so a code reads the same in the message and in the report. (The
+  message used spaces before; a UI may still show spaces — the FE's own
+  display choice — and `normalize` accepts either back.) Putting a grouped code in a signature payload or an API field
   would break verification or every client's lookup.
 - **Why the CSV uses hyphens, not spaces or raw.** Spreadsheets hold 15
   significant digits, so a raw 16-digit code opened from a CSV silently loses

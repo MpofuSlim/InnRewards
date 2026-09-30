@@ -76,9 +76,14 @@ public final class VoucherCodes {
     }
 
     /**
-     * The code as a PERSON should read it in a message: groups of four
-     * separated by single spaces — {@code 9087 8765 9876 4566}, or
-     * {@code K7M2 PQ9X R4TB} for a legacy code.
+     * The code as a PERSON reads it in a WhatsApp/SMS message: groups of four
+     * joined by hyphens — {@code 9087-8765-9876-4566}, or {@code K7M2-PQ9X-R4TB}
+     * for a legacy code (owner decision, 2026-09-30; it was space-separated).
+     * The same form as {@link #forExport}, so a code reads identically in the
+     * message and in the report. A hyphenated code is one unbroken token — a
+     * phone keeps it together when it wraps a line and selects all of it on a
+     * long-press — and {@link #normalize} strips hyphens, so it redeems exactly
+     * as copied.
      *
      * <p>A code containing anything but {@code A–Z}/{@code 0–9} is returned
      * UNCHANGED rather than regrouped: it is not a shape this service ever
@@ -89,7 +94,7 @@ public final class VoucherCodes {
      * payload or a QR: machines get the raw code.
      */
     public static String display(String code) {
-        return group(code, ' ');
+        return group(code, '-');
     }
 
     /**

@@ -161,6 +161,35 @@ public class ReportingService {
                 invoicesPending, invoicesPaid, expiringIn7, expiringIn30);
     }
 
+    /**
+     * The tenant dashboard narrowed to a merchant scope ({@code null} = the whole
+     * tenant — see {@code MerchantAuthz.readableMerchants}). Tenant-wide
+     * campaigns (no merchant) count for a scoped caller: they apply to its
+     * merchants too, exactly as the merchant-360 report shows them.
+     */
+    public Dtos.TenantDashboard tenant(UUID tenantId, Set<UUID> scope) {
+        if (scope == null) {
+            return tenant(tenantId);
+        }
+        long activeCampaigns = campaigns.findByTenantId(tenantId).stream()
+                .filter(Campaign::isActive)
+                .filter(c -> c.getMerchantId() == null || scope.contains(c.getMerchantId()))
+                .count();
+        if (scope.isEmpty()) {
+            return new Dtos.TenantDashboard(tenantId, 0, activeCampaigns, 0, 0, BigDecimal.ZERO, 0);
+        }
+        long outstanding = Voucher.LIVE_STATUSES.stream()
+                .mapToLong(st -> vouchers.countByTenantIdAndMerchantIdInAndStatus(tenantId, scope, st))
+                .sum();
+        long expired = vouchers.countByTenantIdAndMerchantIdInAndStatus(tenantId, scope, Voucher.Status.EXPIRED);
+        BigDecimal totalBalance = nz(transactions.sumNetPointsForMerchants(tenantId, scope));
+        long pending = invoices.findByTenantIdAndStatus(tenantId, Invoice.Status.PENDING).stream()
+                .filter(i -> scope.contains(i.getMerchantId()))
+                .count();
+        return new Dtos.TenantDashboard(tenantId, scope.size(), activeCampaigns,
+                outstanding, expired, totalBalance, pending);
+    }
+
     public Dtos.TenantDashboard tenant(UUID tenantId) {
         long merchantCount = merchants.findByTenantId(tenantId).size();
         long activeCampaigns = campaigns.findByTenantId(tenantId).stream()
@@ -420,6 +449,45 @@ public class ReportingService {
         return out;
     }
 
+    /** {@link #transactionMix} over a merchant scope ({@code null} = the whole tenant). */
+    public Map<String, Long> transactionMix(UUID tenantId, Set<UUID> scope,
+                                            LocalDate from, LocalDate to) {
+        if (scope == null) {
+            return transactionMix(tenantId, (UUID) null, from, to);
+        }
+        Map<String, Long> out = new HashMap<>();
+        if (scope.isEmpty()) {
+            return out;
+        }
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        for (Object[] r : transactions.countByTypeForMerchants(tenantId, scope, fromInstant, toInstant)) {
+            out.put(String.valueOf(r[0]), ((Number) r[1]).longValue());
+        }
+        return out;
+    }
+
+    /** {@link #recentFraud(UUID)} over a merchant scope ({@code null} = the whole
+     *  tenant). A scoped caller sees only attempts against its own merchants —
+     *  an attempt with no merchant (an unknown code) names nobody's business. */
+    public List<Dtos.FraudAttemptResponse> recentFraud(UUID tenantId, Set<UUID> scope) {
+        if (scope == null) {
+            return recentFraud(tenantId);
+        }
+        if (scope.isEmpty()) {
+            return List.of();
+        }
+        return fraud.findTop100ByTenantIdAndMerchantIdInOrderByCreatedAtDesc(tenantId, scope).stream()
+                .map(ReportingService::toFraudResponse)
+                .toList();
+    }
+
+    private static Dtos.FraudAttemptResponse toFraudResponse(com.innbucks.loyaltyservice.entity.FraudAttempt f) {
+        return new Dtos.FraudAttemptResponse(f.getId(), f.getVoucherCode(),
+                f.getMerchantId(), f.getReason().name(), f.getDetail(),
+                f.getDeviceFingerprint(), f.getCreatedAt());
+    }
+
     public List<Dtos.FraudAttemptResponse> recentFraud(UUID tenantId) {
         return fraud.findTop100ByTenantIdOrderByCreatedAtDesc(tenantId).stream()
                 .map(f -> new Dtos.FraudAttemptResponse(f.getId(), f.getVoucherCode(),
@@ -536,12 +604,32 @@ public class ReportingService {
                 t.getReference(), t.getMerchantId(), t.getRuleId(), t.getCampaignId());
     }
 
+    /** {@link #pointsByType(UUID, UUID, LocalDate, LocalDate)} over a merchant
+     *  scope ({@code null} = the whole tenant). */
+    public List<Dtos.PointsByTypeRow> pointsByType(UUID tenantId, Set<UUID> scope,
+                                                   LocalDate from, LocalDate to) {
+        if (scope == null) {
+            return pointsByType(tenantId, (UUID) null, from, to);
+        }
+        requireRange(from, to);
+        if (scope.isEmpty()) {
+            return List.of();
+        }
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return toPointsByTypeRows(
+                transactions.sumPointsByTypeForMerchants(tenantId, scope, fromInstant, toInstant));
+    }
+
     public List<Dtos.PointsByTypeRow> pointsByType(UUID tenantId, UUID merchantId,
                                                    LocalDate from, LocalDate to) {
         requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        List<Object[]> rows = transactions.sumPointsByType(tenantId, merchantId, fromInstant, toInstant);
+        return toPointsByTypeRows(transactions.sumPointsByType(tenantId, merchantId, fromInstant, toInstant));
+    }
+
+    private static List<Dtos.PointsByTypeRow> toPointsByTypeRows(List<Object[]> rows) {
         List<Dtos.PointsByTypeRow> out = new ArrayList<>(rows.size());
         for (Object[] r : rows) {
             // Row shape: [TransactionType, long count, BigDecimal issued, BigDecimal redeemed].
@@ -554,16 +642,35 @@ public class ReportingService {
         return out;
     }
 
+    /** {@link #pointsTimeSeries(UUID, UUID, LocalDate, LocalDate)} over a merchant
+     *  scope ({@code null} = the whole tenant). An empty scope is a series of
+     *  zero days, not an error. */
+    public List<Dtos.PointsTimeSeriesPoint> pointsTimeSeries(UUID tenantId, Set<UUID> scope,
+                                                             LocalDate from, LocalDate to) {
+        if (scope == null) {
+            return pointsTimeSeries(tenantId, (UUID) null, from, to);
+        }
+        requireRange(from, to);
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return toSeries(scope.isEmpty() ? List.of()
+                : transactions.dailyPointBucketsForMerchants(tenantId, scope, fromInstant, toInstant),
+                from, to);
+    }
+
     public List<Dtos.PointsTimeSeriesPoint> pointsTimeSeries(UUID tenantId, UUID merchantId,
                                                              LocalDate from, LocalDate to) {
         requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return toSeries(transactions.dailyPointBuckets(tenantId, merchantId, fromInstant, toInstant), from, to);
+    }
 
+    private static List<Dtos.PointsTimeSeriesPoint> toSeries(List<Object[]> rows, LocalDate from, LocalDate to) {
         // The query skips zero-activity days; we backfill so the FE always
         // gets a contiguous series and can render a chart without holes.
         Map<Instant, Dtos.PointsTimeSeriesPoint> byBucket = new LinkedHashMap<>();
-        for (Object[] r : transactions.dailyPointBuckets(tenantId, merchantId, fromInstant, toInstant)) {
+        for (Object[] r : rows) {
             // The native query returns the bucket as a java.sql.Timestamp under
             // both Postgres and H2's PostgreSQL-compat mode; normalise to Instant.
             Instant bucket = toInstantUtc(r[0]);
@@ -595,7 +702,20 @@ public class ReportingService {
      * <p>Pages through the DB at 500 rows at a time so a busy month
      * doesn't materialise the full result set in memory.
      */
+    /** {@link #csv(UUID, UUID, LocalDate, LocalDate)} over a merchant scope
+     *  ({@code null} = the whole tenant). An empty scope is the header alone. */
+    public String csv(UUID tenantId, Set<UUID> scope, LocalDate from, LocalDate to) {
+        if (scope == null) {
+            return csv(tenantId, (UUID) null, from, to);
+        }
+        return csvRows(tenantId, null, scope, from, to);
+    }
+
     public String csv(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
+        return csvRows(tenantId, merchantId, null, from, to);
+    }
+
+    private String csvRows(UUID tenantId, UUID merchantId, Set<UUID> scope, LocalDate from, LocalDate to) {
         requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
@@ -614,7 +734,11 @@ public class ReportingService {
         int pageSize = 500;
         int pageNum = 0;
         while (true) {
-            var page = (merchantId == null)
+            if (scope != null && scope.isEmpty()) break;
+            var page = scope != null
+                    ? transactions.findByTenantIdAndMerchantIdInAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
+                            tenantId, scope, fromInstant, toInstant, PageRequest.of(pageNum, pageSize))
+                    : (merchantId == null)
                     ? transactions.findByTenantIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
                             tenantId, fromInstant, toInstant, PageRequest.of(pageNum, pageSize))
                     : transactions.findByTenantIdAndMerchantIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
@@ -669,6 +793,14 @@ public class ReportingService {
                 status, from, to, pageable);
     }
 
+    /** Every voucher in one tenant that the caller's merchant scope admits
+     *  ({@code null} = every merchant). */
+    public VoucherReport vouchersForTenant(UUID tenantId, Set<UUID> merchantScope, Voucher.Status status,
+                                           LocalDate from, LocalDate to, Pageable pageable) {
+        return voucherReport("TENANT", tenantId, tenantName(tenantId),
+                tenantId, null, null, null, merchantScope, status, from, to, pageable);
+    }
+
     /** Every voucher in one tenant. */
     public VoucherReport vouchersForTenant(UUID tenantId, Voucher.Status status,
                                            LocalDate from, LocalDate to, Pageable pageable) {
@@ -712,6 +844,39 @@ public class ReportingService {
      * case are forgiven), and a code that exists only in ANOTHER tenant is a
      * plain 404: a staff lookup must not confirm that a code is real elsewhere.
      */
+    /**
+     * {@link #voucherDetail(UUID, String)} for a caller limited to some merchants
+     * ({@code null} = every merchant). A sibling merchant's voucher is refused
+     * like a foreign tenant's: by id 403 {@code NOT_MERCHANT_OWNER}; by code the
+     * plain 404, so a typed code never confirms it exists elsewhere.
+     */
+    public VoucherDetail voucherDetail(UUID tenantId, String idOrCode, Set<UUID> merchantScope) {
+        if (merchantScope == null) {
+            return voucherDetail(tenantId, idOrCode);
+        }
+        if (idOrCode == null || idOrCode.isBlank()) {
+            throw LoyaltyException.badRequest("VOUCHER_ID_OR_CODE_REQUIRED",
+                    "Enter a voucher id or a voucher code.");
+        }
+        UUID id = parseUuid(idOrCode.strip());
+        if (id != null) {
+            Voucher v = vouchers.findById(id).orElseThrow(() -> LoyaltyException.notFound("voucher"));
+            if (!v.getTenantId().equals(tenantId)) {
+                throw LoyaltyException.forbidden("CROSS_TENANT", "voucher belongs to a different tenant");
+            }
+            if (!merchantScope.contains(v.getMerchantId())) {
+                throw LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
+                        "You can only act on merchants you administer.");
+            }
+            return detailOf(v);
+        }
+        Voucher v = VoucherService.findByTypedCode(vouchers, idOrCode)
+                .filter(found -> found.getTenantId().equals(tenantId))
+                .filter(found -> merchantScope.contains(found.getMerchantId()))
+                .orElseThrow(() -> LoyaltyException.notFound("voucher"));
+        return detailOf(v);
+    }
+
     public VoucherDetail voucherDetail(UUID tenantId, String idOrCode) {
         if (idOrCode == null || idOrCode.isBlank()) {
             throw LoyaltyException.badRequest("VOUCHER_ID_OR_CODE_REQUIRED",
@@ -750,20 +915,40 @@ public class ReportingService {
     private VoucherReport voucherReport(String level, UUID scopeId, String scopeName,
                                         UUID tenantId, UUID excludeTenantId, UUID merchantId, UUID shopId,
                                         Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
+        return voucherReport(level, scopeId, scopeName, tenantId, excludeTenantId, merchantId, shopId,
+                null, status, from, to, pageable);
+    }
+
+    /** @param merchantScope the merchants a scoped caller may read ({@code null}
+     *        = no narrowing; empty = nothing) — see {@code MerchantAuthz.readableMerchants} */
+    private VoucherReport voucherReport(String level, UUID scopeId, String scopeName,
+                                        UUID tenantId, UUID excludeTenantId, UUID merchantId, UUID shopId,
+                                        Set<UUID> merchantScope,
+                                        Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
         Instant fromI = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : Instant.EPOCH;
         Instant toI = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
                 : Instant.now().plus(1, ChronoUnit.DAYS);
         if (fromI.isAfter(toI)) {
             throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
         }
-        VoucherSummary summary = summarise(
-                vouchers.reportSummaryByStatus(tenantId, excludeTenantId, merchantId, shopId, fromI, toI));
-        Specification<Voucher> spec = filter(tenantId, excludeTenantId, merchantId, shopId, status, fromI, toI);
+        VoucherSummary summary = summarise(merchantScope == null
+                ? vouchers.reportSummaryByStatus(tenantId, excludeTenantId, merchantId, shopId, fromI, toI)
+                : merchantScope.isEmpty() ? List.of()
+                : vouchers.reportSummaryByStatusForMerchants(tenantId, merchantScope, fromI, toI));
+        Specification<Voucher> spec = filter(tenantId, excludeTenantId, merchantId, shopId, status, fromI, toI)
+                .and(inMerchants(merchantScope));
         Pageable effective = pageable.getSort().isSorted() ? pageable
                 : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
                         Sort.by(Sort.Direction.DESC, "issuedAt"));
         Page<VoucherDetail> details = enrich(vouchers.findAll(spec, effective));
         return new VoucherReport(level, scopeId, scopeName, fromI, toI, summary, PageResponse.from(details));
+    }
+
+    /** Narrows to a merchant scope: {@code null} = no narrowing, empty = no rows. */
+    private static Specification<Voucher> inMerchants(Set<UUID> merchantScope) {
+        return (root, query, cb) -> merchantScope == null ? cb.conjunction()
+                : merchantScope.isEmpty() ? cb.disjunction()
+                : root.get("merchantId").in(merchantScope);
     }
 
     /** Null-aware filter shared by every report level + the CSV export. */
@@ -910,6 +1095,14 @@ public class ReportingService {
      */
     public String voucherCsv(String level, UUID tenantId, UUID scopeId,
                              Voucher.Status status, LocalDate from, LocalDate to) {
+        return voucherCsv(level, tenantId, scopeId, null, status, from, to);
+    }
+
+    /** @param merchantScope narrows the TENANT level to the merchants a scoped
+     *        caller may read ({@code null} = no narrowing); the MERCHANT / SHOP
+     *        levels are ownership-checked by the controller instead. */
+    public String voucherCsv(String level, UUID tenantId, UUID scopeId, Set<UUID> merchantScope,
+                             Voucher.Status status, LocalDate from, LocalDate to) {
         UUID excludeTenantId = null, filterTenantId = null, merchantId = null, shopId = null;
         switch (level == null ? "" : level.toUpperCase()) {
             case "OPERATOR" -> excludeTenantId = TicketingLoyaltyService.TICKETING_TENANT_ID;
@@ -932,7 +1125,8 @@ public class ReportingService {
                 : Instant.now().plus(1, ChronoUnit.DAYS);
         if (fromI.isAfter(toI)) throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
 
-        Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI);
+        Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI)
+                .and(inMerchants(merchantScope));
         StringBuilder sb = new StringBuilder(VOUCHER_CSV_HEADER);
         int pageNum = 0;
         int pageSize = 500;

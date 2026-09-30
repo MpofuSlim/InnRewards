@@ -12,6 +12,9 @@ public interface FraudAttemptRepository extends JpaRepository<FraudAttempt, UUID
     long countByDeviceFingerprintAndCreatedAtAfter(String deviceFingerprint, Instant after);
     long countByCreatedAtAfter(Instant after);
     List<FraudAttempt> findTop100ByTenantIdOrderByCreatedAtDesc(UUID tenantId);
+
+    List<FraudAttempt> findTop100ByTenantIdAndMerchantIdInOrderByCreatedAtDesc(
+            UUID tenantId, java.util.Collection<UUID> merchantIds);
     /** Merchant-360 report: recent fraud pressure on one merchant. */
     long countByMerchantIdAndCreatedAtAfter(UUID merchantId, Instant after);
 }

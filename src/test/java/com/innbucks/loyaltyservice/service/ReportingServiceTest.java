@@ -443,4 +443,91 @@ class ReportingServiceTest {
                 () -> reporting.voucherDetail(TENANT_A, "   "));
         assertEquals("VOUCHER_ID_OR_CODE_REQUIRED", ex.getCode());
     }
+
+    // ----- merchant scope: a merchant/shop admin never reads a sibling's figures -----
+
+    private static final UUID MERCHANT_MINE = UUID.fromString("33333333-3333-3333-3333-333333333333");
+
+    @Test
+    void scopedTenantDashboard_countsOnlyTheCallersMerchants() {
+        java.util.Set<UUID> scope = java.util.Set.of(MERCHANT_MINE);
+        when(vouchers.countByTenantIdAndMerchantIdInAndStatus(eq(TENANT_A), eq(scope), any())).thenReturn(2L);
+        when(transactions.sumNetPointsForMerchants(TENANT_A, scope)).thenReturn(new java.math.BigDecimal("150"));
+
+        var d = reporting.tenant(TENANT_A, scope);
+
+        assertEquals(1L, d.merchants());
+        assertEquals(new java.math.BigDecimal("150"), d.totalWalletBalance());
+        // The tenant-wide aggregates are never touched for a scoped caller.
+        verify(vouchers, never()).countByTenantIdAndStatus(any(), any());
+        verify(transactions, never()).sumNetPointsByTenant(any());
+    }
+
+    @Test
+    void scopedReports_withAnEmptyScope_readNothing_andNeverQueryTheTenant() {
+        java.util.Set<UUID> none = java.util.Set.of();
+        java.time.LocalDate from = java.time.LocalDate.of(2026, 9, 1);
+        java.time.LocalDate to = java.time.LocalDate.of(2026, 9, 3);
+
+        assertTrue(reporting.transactionMix(TENANT_A, none, from, to).isEmpty());
+        assertTrue(reporting.pointsByType(TENANT_A, none, from, to).isEmpty());
+        assertTrue(reporting.recentFraud(TENANT_A, none).isEmpty());
+        assertEquals(3, reporting.pointsTimeSeries(TENANT_A, none, from, to).size()); // zero days, still contiguous
+        assertEquals(1, reporting.csv(TENANT_A, none, from, to).lines().count());    // header only
+
+        verify(transactions, never()).countByType(any(), any(), any(), any());
+        verify(transactions, never()).sumPointsByType(any(), any(), any(), any());
+        verify(fraud, never()).findTop100ByTenantIdOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    void scopedFraud_readsOnlyTheCallersMerchants() {
+        java.util.Set<UUID> scope = java.util.Set.of(MERCHANT_MINE);
+        when(fraud.findTop100ByTenantIdAndMerchantIdInOrderByCreatedAtDesc(TENANT_A, scope)).thenReturn(List.of());
+
+        reporting.recentFraud(TENANT_A, scope);
+
+        verify(fraud).findTop100ByTenantIdAndMerchantIdInOrderByCreatedAtDesc(TENANT_A, scope);
+        verify(fraud, never()).findTop100ByTenantIdOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    void scopedVoucherReport_summarisesOnlyTheCallersMerchants() {
+        java.util.Set<UUID> scope = java.util.Set.of(MERCHANT_MINE);
+        when(vouchers.reportSummaryByStatusForMerchants(eq(TENANT_A), eq(scope), any(), any())).thenReturn(List.of());
+        when(vouchers.findAll(any(Specification.class), any(PageRequest.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of()));
+
+        reporting.vouchersForTenant(TENANT_A, scope, null, null, null, PageRequest.of(0, 20));
+
+        verify(vouchers).reportSummaryByStatusForMerchants(eq(TENANT_A), eq(scope), any(), any());
+        verify(vouchers, never()).reportSummaryByStatus(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void scopedVoucherDetail_aSiblingMerchantsVoucher_is403ById_and404ByCode() {
+        Voucher v = codedVoucher(TENANT_A, "9087876598764566");
+        v.setMerchantId(MERCHANT_B);                        // a sibling merchant's
+        when(vouchers.findById(v.getId())).thenReturn(Optional.of(v));
+        when(vouchers.findByCode("9087876598764566")).thenReturn(Optional.of(v));
+        java.util.Set<UUID> scope = java.util.Set.of(MERCHANT_MINE);
+
+        LoyaltyException byId = assertThrows(LoyaltyException.class,
+                () -> reporting.voucherDetail(TENANT_A, v.getId().toString(), scope));
+        assertEquals("NOT_MERCHANT_OWNER", byId.getCode());
+        LoyaltyException byCode = assertThrows(LoyaltyException.class,
+                () -> reporting.voucherDetail(TENANT_A, "9087-8765-9876-4566", scope));
+        assertEquals(org.springframework.http.HttpStatus.NOT_FOUND, byCode.getStatus());
+        verify(voucherRedemptions, never()).findByVoucherIdOrderByRedeemedAtDesc(any());
+    }
+
+    @Test
+    void scopedVoucherDetail_ownMerchantsVoucher_isServed() {
+        Voucher v = codedVoucher(TENANT_A, "9087876598764566");
+        v.setMerchantId(MERCHANT_MINE);
+        when(vouchers.findByCode("9087876598764566")).thenReturn(Optional.of(v));
+
+        assertEquals(v.getId(),
+                reporting.voucherDetail(TENANT_A, "9087876598764566", java.util.Set.of(MERCHANT_MINE)).id());
+    }
 }

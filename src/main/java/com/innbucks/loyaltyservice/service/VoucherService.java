@@ -1196,6 +1196,21 @@ public class VoucherService {
                 .map(VoucherService::toResponse).toList();
     }
 
+    /** {@link #findByStatus(UUID, Voucher.Status, Pageable)} narrowed to a
+     *  merchant scope ({@code null} = every merchant, empty = nothing). */
+    @Transactional(readOnly = true)
+    public Page<Dtos.VoucherResponse> findByStatus(UUID tenantId, java.util.Set<UUID> merchantScope,
+                                                   Voucher.Status status, Pageable pageable) {
+        if (merchantScope == null) {
+            return findByStatus(tenantId, status, pageable);
+        }
+        if (merchantScope.isEmpty()) {
+            return Page.empty(pageable);
+        }
+        return vouchers.findByTenantIdAndMerchantIdInAndStatus(tenantId, merchantScope, status, pageable)
+                .map(VoucherService::toResponse);
+    }
+
     @Transactional(readOnly = true)
     public Page<Dtos.VoucherResponse> findByStatus(UUID tenantId, Voucher.Status status, Pageable pageable) {
         return vouchers.findByTenantIdAndStatus(tenantId, status, pageable)

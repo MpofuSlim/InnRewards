@@ -85,6 +85,39 @@ moved from the Eureka registry to that map.
   balancing and in-cluster mTLS are planned via the Linkerd mesh, again with no
   change to the map. Do not reintroduce a registry.
 
+## Deploying loyalty-service after a merge
+
+> [!IMPORTANT]
+> **Every time a PR merges to `master`, output the exact deploy commands** —
+> a standing expectation, as in `ticketing-system`.
+
+The cell runs every Deployment **pinned** to a `sha-<commit>` tag or an
+`@sha256:` digest, never `:latest`. So **`kubectl rollout restart` deploys
+nothing new**: it re-runs the build already pinned. On 2026-09-30 a restart
+after #155 "successfully rolled out" and Flyway still reported V52. A deploy is
+a `set image` to THIS repo's merge commit, which the Release workflow pushes as
+`ghcr.io/mpofuslim/loyalty-service:sha-<full 40-char merge sha>`:
+
+```sh
+# once the merge commit's Release run is green; note the current pin first,
+# it is your rollback:
+kubectl -n ticketing get deploy loyalty-service -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+kubectl -n ticketing set image deployment/loyalty-service \
+  '*=ghcr.io/mpofuslim/loyalty-service:sha-<merge commit sha>'
+kubectl -n ticketing rollout status deployment/loyalty-service
+```
+
+- **Verify with Flyway** when the merge carried a migration:
+  `SELECT version FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 1;`
+  in the `loyalty_service` database (`kubectl -n ticketing exec -it postgres-0 …`).
+- **Rollback** is the same `set image` to the pin you noted. Safe across an
+  additive migration (a new nullable column or table); the old build ignores
+  what it does not map.
+- The manifest (`deploy/k8s/04-services.yaml` in `ticketing-system`) still says
+  `:latest`, so a `kubectl apply` of it un-pins loyalty — re-run the `set image`
+  afterwards. Full procedure in `ticketing-system`'s CLAUDE.md, "Deploying to
+  the EC2 k3s cell after a merge".
+
 ## Internal endpoints — controller + SecurityConfig must agree (gateway lives in ticketing)
 
 An internal-only endpoint (`/loyalty/internal/**`) is only correct when:

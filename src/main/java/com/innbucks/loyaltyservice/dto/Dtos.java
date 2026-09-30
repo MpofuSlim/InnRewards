@@ -789,7 +789,13 @@ public class Dtos {
             String paidVia,
             Instant paidAt,
             @Schema(nullable = true, description = "The issued voucher — present once status is PAID.")
-            VoucherResponse voucher
+            VoucherResponse voucher,
+            @Schema(example = "2026-09-30T10:12:00Z", nullable = true,
+                    description = "While this lies in the future, an EcoCash / InnBucks / card payment started "
+                            + "for this order may still be completed by the customer, and "
+                            + "confirm-cash is refused (409 ELECTRONIC_PAYMENT_PENDING). Show it as a "
+                            + "countdown before offering cash. Null = no electronic payment was started.")
+            Instant electronicPaymentUntil
     ) {}
 
     /**

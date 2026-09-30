@@ -193,6 +193,20 @@ class TenantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(jsonPath("$.data[0].id").value(tenantId.toString()));
     }
 
+    @Test
+    void tenants_me_superAdmin_listsEveryTenant_withoutAMembershipRow() throws Exception {
+        // SUPER_ADMIN oversees every tenant and TenantContext needs no membership
+        // row for it, so its tenant picker must not come back empty.
+        UUID first = newTenant("sa-a");
+        UUID second = newTenant("sa-b");
+        String token = jwt("root@test.local", "SUPER_ADMIN"); // joined to nothing
+        mockMvc.perform(get("/loyalty/tenants/me")
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == '" + first + "')]").exists())
+                .andExpect(jsonPath("$.data[?(@.id == '" + second + "')]").exists());
+    }
+
     // --- GET /loyalty/tenants/{id}/members — roster is tenant-private -----------
 
     @Test

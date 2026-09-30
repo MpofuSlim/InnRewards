@@ -130,6 +130,16 @@ public class VoucherPurchaseOrder {
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
+    /**
+     * Until when an electronic payment payment-service has started for this
+     * order may still complete (V53). Stamped by extend-expiry, which
+     * payment-service calls before minting every instrument. Null = no
+     * electronic attempt was ever started. While it lies in the future,
+     * confirm-cash is refused: taking cash then risks the customer paying twice.
+     */
+    @Column(name = "electronic_payment_until")
+    private Instant electronicPaymentUntil;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
@@ -141,6 +151,13 @@ public class VoucherPurchaseOrder {
     /** GATEWAY = payment-service confirmed an electronic rail; CASH = a staff
      *  caller vouched for cash in hand. */
     public enum PaidVia { GATEWAY, CASH }
+
+    /** True while an electronic payment started for this order may still
+     *  complete — the window in which taking cash could charge the customer
+     *  twice. */
+    public boolean electronicPaymentPending(Instant now) {
+        return electronicPaymentUntil != null && now.isBefore(electronicPaymentUntil);
+    }
 
     /** Live-and-payable test used by every reader (lazy expiry). */
     public boolean payable(Instant now) {

@@ -296,7 +296,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V52**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V53**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1286,6 +1286,23 @@ along via `VoucherService.issueFromOrder` → `finishIssue`).
   electronically is 409 (`ORDER_ALREADY_PAID`) and vice versa; both
   confirmation writers take a pessimistic lock (`lockByOrderRef`) so a cash
   confirm racing a gateway confirm cannot issue two vouchers.
+- **No cash while an electronic payment is live (V53).** The lock above stops
+  two VOUCHERS, not two PAYMENTS: a cashier taking cash while the customer
+  still holds a live EcoCash prompt or InnBucks code let the customer pay
+  twice — their late approval is refused on the already-paid order and
+  becomes a manual refund. payment-service calls `extend-expiry` before it
+  mints EVERY instrument (all three rails), asking for the instrument TTL +
+  margin, so that call is the reliable "an electronic payment is live until T"
+  signal: it now stamps `voucher_purchase_orders.electronic_payment_until`
+  (never shortened), and confirm-cash is `409 ELECTRONIC_PAYMENT_PENDING` while
+  it lies in the future. The order response carries `electronicPaymentUntil`
+  for the console's countdown. **The window guards cash only** — the
+  electronic confirmation it describes must still land inside it. Residual,
+  stated rather than hidden: an instrument whose upstream outcome is still
+  UNKNOWN after its TTL (payment-service's VERIFYING) can in principle confirm
+  later; cash after the window is then the same refund case, now narrowed from
+  "any time" to that rare tail. Pinned by the double-payment cases in
+  `VoucherPurchaseServiceTest`.
 - Config: `loyalty.voucher.purchase-order-ttl` (`LOYALTY_VOUCHER_ORDER_TTL`,
   default PT30M); payment-service extends the window past its instrument TTL
   via extend-expiry (1..60 min, never shortens). No gateway route changes:

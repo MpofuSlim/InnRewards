@@ -396,6 +396,94 @@ class VoucherPurchaseServiceTest {
         verify(voucherService, times(1)).issueFromOrder(any());
     }
 
+    // ------------------------------------------------------------------
+    // Double-payment guard: no cash while an electronic payment is live
+    // ------------------------------------------------------------------
+
+    @Test
+    void extendExpiry_recordsHowLongTheElectronicPaymentStaysLive() {
+        VoucherPurchaseOrder o = pendingOrder();
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+        Instant before = Instant.now();
+
+        service.internalExtendExpiry(o.getOrderRef(), 15);
+
+        assertThat(o.getElectronicPaymentUntil())
+                .isAfterOrEqualTo(before.plus(Duration.ofMinutes(15)))
+                .isBeforeOrEqualTo(Instant.now().plus(Duration.ofMinutes(15)));
+    }
+
+    @Test
+    void extendExpiry_neverShortensTheElectronicWindow() {
+        // An earlier, longer instrument (an InnBucks code) may still be live
+        // when a shorter one (an EcoCash prompt) is requested.
+        VoucherPurchaseOrder o = pendingOrder();
+        Instant longer = Instant.now().plus(Duration.ofMinutes(40));
+        o.setExpiresAt(longer);
+        o.setElectronicPaymentUntil(longer);
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        service.internalExtendExpiry(o.getOrderRef(), 5);
+
+        assertThat(o.getElectronicPaymentUntil()).isEqualTo(longer);
+    }
+
+    @Test
+    void confirmCash_whileAnElectronicPaymentIsLive_isRefused_andNothingIsIssued() {
+        // The customer is still looking at an EcoCash prompt / InnBucks code.
+        // Taking cash now is how they end up paying twice.
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setElectronicPaymentUntil(Instant.now().plus(Duration.ofMinutes(4)));
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        assertThatThrownBy(() -> service.confirmCash(TENANT, o.getOrderRef()))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("ELECTRONIC_PAYMENT_PENDING");
+                    assertThat(ex.getStatus().value()).isEqualTo(409);
+                    assertThat(ex.getMessage()).contains("4 minutes");
+                });
+
+        assertThat(o.getStatus()).isEqualTo(VoucherPurchaseOrder.Status.PENDING_PAYMENT);
+        assertThat(o.getPaidVia()).isNull();
+        verify(voucherService, never()).issueFromOrder(any());
+    }
+
+    @Test
+    void confirmCash_afterTheElectronicWindowLapses_isAllowed() {
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setElectronicPaymentUntil(Instant.now().minus(Duration.ofSeconds(5)));
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        service.confirmCash(TENANT, o.getOrderRef());
+
+        assertThat(o.getPaidVia()).isEqualTo(VoucherPurchaseOrder.PaidVia.CASH);
+        verify(voucherService).issueFromOrder(o);
+    }
+
+    @Test
+    void theElectronicConfirmation_isNotBlockedByItsOwnWindow() {
+        // The window guards CASH. The electronic payment it describes must
+        // still be able to land inside it.
+        VoucherPurchaseOrder o = pendingOrder();
+        o.setElectronicPaymentUntil(Instant.now().plus(Duration.ofMinutes(4)));
+        when(orders.lockByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        service.internalConfirmPayment(o.getOrderRef(), "PAY-1", 500L);
+
+        assertThat(o.getStatus()).isEqualTo(VoucherPurchaseOrder.Status.PAID);
+        assertThat(o.getPaidVia()).isEqualTo(VoucherPurchaseOrder.PaidVia.GATEWAY);
+    }
+
+    @Test
+    void theOrderResponse_carriesTheElectronicWindow_forTheConsoleCountdown() {
+        VoucherPurchaseOrder o = pendingOrder();
+        Instant until = Instant.now().plus(Duration.ofMinutes(4));
+        o.setElectronicPaymentUntil(until);
+        when(orders.findByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        assertThat(service.get(TENANT, o.getOrderRef()).electronicPaymentUntil()).isEqualTo(until);
+    }
+
     @Test
     void confirmCash_afterAnElectronicPayment_isRefused() {
         VoucherPurchaseOrder o = pendingOrder();

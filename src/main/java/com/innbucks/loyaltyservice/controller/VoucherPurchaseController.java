@@ -294,10 +294,19 @@ public class VoucherPurchaseController {
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "Already paid electronically, cancelled, or expired",
+                    description = "An electronic payment for this order may still complete "
+                            + "(ELECTRONIC_PAYMENT_PENDING — wait for `electronicPaymentUntil` to pass), or the "
+                            + "order was already paid electronically, cancelled, or expired",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
+                                    @ExampleObject(name = "Electronic payment still live", value = """
+                                            {
+                                              "code": "ELECTRONIC_PAYMENT_PENDING",
+                                              "message": "An EcoCash, InnBucks or card payment for this order is still waiting for the customer. Don't take cash now: let the customer finish paying, or wait about 4 minutes for it to lapse and try again.",
+                                              "data": null
+                                            }
+                                            """),
                                     @ExampleObject(name = "Already paid electronically", value = """
                                             {
                                               "code": "ORDER_ALREADY_PAID",

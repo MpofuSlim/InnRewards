@@ -195,6 +195,20 @@ public class VoucherPurchaseService {
             throw LoyaltyException.conflict("ORDER_NOT_CONFIRMABLE",
                     "This order was cancelled and can no longer be paid.");
         }
+        // An EcoCash prompt, InnBucks code or card checkout for this order may
+        // still be completed by the customer. Taking cash now is how a customer
+        // pays twice: their late approval lands on an already-paid order, is
+        // refused (ORDER_ALREADY_PAID) and becomes a manual refund. Refused
+        // until the instrument's window (instrument TTL + margin, recorded by
+        // extend-expiry) has passed; the console shows the countdown.
+        Instant now = Instant.now();
+        if (order.electronicPaymentPending(now)) {
+            long minutes = Math.max(1, (Duration.between(now, order.getElectronicPaymentUntil()).getSeconds() + 59) / 60);
+            throw LoyaltyException.conflict("ELECTRONIC_PAYMENT_PENDING",
+                    "An EcoCash, InnBucks or card payment for this order is still waiting for the customer. "
+                            + "Don't take cash now: let the customer finish paying, or wait about " + minutes
+                            + " minute" + (minutes == 1 ? "" : "s") + " for it to lapse and try again.");
+        }
         // Unlike a LATE electronic confirmation (money already moved), cash is
         // being taken NOW — an expired order is simply re-created, so refusing
         // costs nothing and keeps the amount/FX snapshot fresh.
@@ -248,6 +262,13 @@ public class VoucherPurchaseService {
         Instant candidate = Instant.now().plus(Duration.ofMinutes(minutes));
         if (candidate.isAfter(order.getExpiresAt())) {
             order.setExpiresAt(candidate);
+        }
+        // payment-service is about to show the customer an instrument that
+        // lives this long. Record it: confirm-cash must not run while the
+        // customer can still pay electronically. Never shortened, like the
+        // expiry itself — an earlier, longer instrument may still be live.
+        if (order.getElectronicPaymentUntil() == null || candidate.isAfter(order.getElectronicPaymentUntil())) {
+            order.setElectronicPaymentUntil(candidate);
         }
         return new InternalOrderView(order.getOrderRef(), effectiveStatus(order).name(),
                 order.getAmount(), order.getCurrency(), order.getPayerPhone(),
@@ -350,7 +371,7 @@ public class VoucherPurchaseService {
                 order.getAmount(), order.getCurrency(), order.getPayerPhone(),
                 order.getExpiresAt(),
                 order.getPaidVia() == null ? null : order.getPaidVia().name(),
-                order.getPaidAt(), voucher);
+                order.getPaidAt(), voucher, order.getElectronicPaymentUntil());
     }
 
     private static String firstNonBlank(String... values) {

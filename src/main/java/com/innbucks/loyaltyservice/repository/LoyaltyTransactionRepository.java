@@ -303,6 +303,71 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
                                @Param("from") Instant from,
                                @Param("to") Instant to);
 
+    // --- Merchant-set twins, for a caller scoped to some merchants of a tenant
+    // (MerchantAuthz.readableMerchants). Never called with an empty set: the
+    // service answers "nothing" itself, since IN () is not portable SQL.
+
+    @Query("""
+        SELECT t.type, COUNT(t)
+        FROM LoyaltyTransaction t
+        WHERE t.tenantId = :tenantId
+          AND t.merchantId IN :merchantIds
+          AND t.createdAt >= :from AND t.createdAt < :to
+        GROUP BY t.type
+        """)
+    List<Object[]> countByTypeForMerchants(@Param("tenantId") UUID tenantId,
+                                           @Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                           @Param("from") Instant from,
+                                           @Param("to") Instant to);
+
+    @Query("""
+        SELECT t.type,
+               COUNT(t),
+               COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN t.pointsDelta < 0 THEN -t.pointsDelta ELSE 0 END), 0)
+        FROM LoyaltyTransaction t
+        WHERE t.tenantId = :tenantId
+          AND t.merchantId IN :merchantIds
+          AND t.createdAt >= :from AND t.createdAt < :to
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+        GROUP BY t.type
+        """)
+    List<Object[]> sumPointsByTypeForMerchants(@Param("tenantId") UUID tenantId,
+                                               @Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                               @Param("from") Instant from,
+                                               @Param("to") Instant to);
+
+    @Query(value = """
+        SELECT DATE_TRUNC('day', t.created_at) AS bucket,
+               COALESCE(SUM(CASE WHEN t.points_delta > 0 THEN t.points_delta ELSE 0 END), 0) AS issued,
+               COALESCE(SUM(CASE WHEN t.points_delta < 0 THEN -t.points_delta ELSE 0 END), 0) AS redeemed,
+               COUNT(*) AS txn_count
+        FROM loyalty_transactions t
+        WHERE t.tenant_id = :tenantId
+          AND t.merchant_id IN (:merchantIds)
+          AND t.created_at >= :from AND t.created_at < :to
+          AND t.status = 'POSTED'
+        GROUP BY DATE_TRUNC('day', t.created_at)
+        ORDER BY bucket
+        """, nativeQuery = true)
+    List<Object[]> dailyPointBucketsForMerchants(@Param("tenantId") UUID tenantId,
+                                                 @Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                                 @Param("from") Instant from,
+                                                 @Param("to") Instant to);
+
+    @Query("""
+        SELECT COALESCE(SUM(t.pointsDelta), 0)
+        FROM LoyaltyTransaction t
+        WHERE t.tenantId = :tenantId
+          AND t.merchantId IN :merchantIds
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+        """)
+    BigDecimal sumNetPointsForMerchants(@Param("tenantId") UUID tenantId,
+                                        @Param("merchantIds") java.util.Collection<UUID> merchantIds);
+
+    Page<LoyaltyTransaction> findByTenantIdAndMerchantIdInAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
+            UUID tenantId, java.util.Collection<UUID> merchantIds, Instant from, Instant to, Pageable pageable);
+
     @Query("""
         SELECT COUNT(t) FROM LoyaltyTransaction t
         WHERE t.createdAt >= :from

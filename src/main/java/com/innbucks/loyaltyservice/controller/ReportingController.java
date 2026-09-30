@@ -61,6 +61,21 @@ public class ReportingController {
         return tenantId;
     }
 
+    /**
+     * The merchants a tenant-wide report may include for this caller: a
+     * {@code merchantId} the caller names is ownership-checked (403
+     * NOT_MERCHANT_OWNER for a sibling's) and becomes the whole scope; with none
+     * named, the caller's readable merchants ({@code null} = every merchant, for
+     * SUPER_ADMIN and the tenant/platform admin roles).
+     */
+    private java.util.Set<UUID> reportScope(UUID tenantId, UUID merchantId) {
+        if (merchantId != null) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+            return java.util.Set.of(merchantId);
+        }
+        return merchantAuthz.readableMerchants(tenantId);
+    }
+
     /** Resolves the tenant AND enforces the caller may access {@code shopId}. */
     private UUID shopAuthzTenant(UUID shopId) {
         UUID tenantId = tenantContext.requireTenantId();
@@ -112,7 +127,7 @@ public class ReportingController {
     @GetMapping("/tenant")
     @Operation(summary = "Tenant dashboard",
             description = "Per-tenant rollup for the current X-Tenant-Id: merchants, active campaigns, " +
-                          "outstanding/expired vouchers, total wallet balance, pending invoices.")
+                          "outstanding/expired vouchers, total wallet balance, pending invoices." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -140,7 +155,8 @@ public class ReportingController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantDashboard>> tenant() {
-        Dtos.TenantDashboard data = reporting.tenant(tenantContext.requireTenantId());
+        UUID tenantId = tenantContext.requireTenantId();
+        Dtos.TenantDashboard data = reporting.tenant(tenantId, merchantAuthz.readableMerchants(tenantId));
         return ResponseEntity.ok(ApiResult.ok("Tenant dashboard retrieved successfully", data));
     }
 
@@ -665,10 +681,7 @@ public class ReportingController {
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID tenantId = tenantContext.requireTenantId();
-        if (merchantId != null) {
-            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
-        }
-        Map<String, Long> data = reporting.transactionMix(tenantId, merchantId, from, to);
+        Map<String, Long> data = reporting.transactionMix(tenantId, reportScope(tenantId, merchantId), from, to);
         return ResponseEntity.ok(ApiResult.ok("Transaction mix retrieved successfully", data));
     }
 
@@ -1029,7 +1042,8 @@ public class ReportingController {
                           "pointsRedeemed for each `TransactionType`. The existing `/transactions/mix` " +
                           "endpoint returns counts only (kept for backwards-compat); this one is the " +
                           "report your donut-chart actually wants. Optional `merchantId` narrows to one " +
-                          "merchant; omit it for tenant-wide.")
+                          "merchant (403 NOT_MERCHANT_OWNER for one you do not administer); omit it for " +
+                          "everything you may see." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1056,8 +1070,9 @@ public class ReportingController {
             @RequestParam(required = false) UUID merchantId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        UUID tenantId = tenantContext.requireTenantId();
         List<Dtos.PointsByTypeRow> data = reporting.pointsByType(
-                tenantContext.requireTenantId(), merchantId, from, to);
+                tenantId, reportScope(tenantId, merchantId), from, to);
         return ResponseEntity.ok(ApiResult.ok("Points by type retrieved successfully", data));
     }
 
@@ -1094,8 +1109,9 @@ public class ReportingController {
             @RequestParam(required = false) UUID merchantId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        UUID tenantId = tenantContext.requireTenantId();
         List<Dtos.PointsTimeSeriesPoint> data = reporting.pointsTimeSeries(
-                tenantContext.requireTenantId(), merchantId, from, to);
+                tenantId, reportScope(tenantId, merchantId), from, to);
         return ResponseEntity.ok(ApiResult.ok("Points time-series retrieved successfully", data));
     }
 
@@ -1103,7 +1119,7 @@ public class ReportingController {
     @Operation(summary = "Recent fraud attempts",
             description = "Returns rejected redemption attempts (signature mismatch, expired, duplicate, " +
                           "wrong-merchant, blocked-user, blocked-device) for the current tenant. Used by " +
-                          "compliance dashboards and to triage velocity-blocked users.")
+                          "compliance dashboards and to triage velocity-blocked users." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1150,8 +1166,9 @@ public class ReportingController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.FraudAttemptResponse>>> fraud(@ParameterObject Pageable pageable) {
+        UUID tenantId = tenantContext.requireTenantId();
         PageResponse<Dtos.FraudAttemptResponse> data = PageResponse.from(
-                reporting.recentFraud(tenantContext.requireTenantId()), pageable);
+                reporting.recentFraud(tenantId, merchantAuthz.readableMerchants(tenantId)), pageable);
         return ResponseEntity.ok(ApiResult.ok("Fraud attempts retrieved successfully", data));
     }
 
@@ -1193,10 +1210,7 @@ public class ReportingController {
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID tenantId = tenantContext.requireTenantId();
-        if (merchantId != null) {
-            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
-        }
-        String csv = reporting.csv(tenantId, merchantId, from, to);
+        String csv = reporting.csv(tenantId, reportScope(tenantId, merchantId), from, to);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
                 .header("Content-Disposition", "attachment; filename=\"transactions.csv\"")
                 .body(csv);
@@ -1313,7 +1327,7 @@ public class ReportingController {
 
     @GetMapping("/vouchers/tenant")
     @Operation(summary = "Voucher report — current tenant",
-            description = "Every voucher for the X-Tenant-Id tenant, with summary aggregates + paginated detail.")
+            description = "Every voucher for the X-Tenant-Id tenant, with summary aggregates + paginated detail." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(
             responseCode = "200", description = "Report retrieved",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -1324,8 +1338,10 @@ public class ReportingController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject Pageable pageable) {
+        UUID tenantId = tenantContext.requireTenantId();
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForTenant(tenantContext.requireTenantId(), status, from, to, pageable)));
+                reporting.vouchersForTenant(tenantId, merchantAuthz.readableMerchants(tenantId),
+                        status, from, to, pageable)));
     }
 
     @GetMapping("/vouchers/merchant/{merchantId}")
@@ -1468,8 +1484,9 @@ public class ReportingController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<VoucherDetail>> voucherDetail(@PathVariable String id) {
+        UUID tenantId = tenantContext.requireTenantId();
         return ResponseEntity.ok(ApiResult.ok("Voucher detail retrieved successfully",
-                reporting.voucherDetail(tenantContext.requireTenantId(), id)));
+                reporting.voucherDetail(tenantId, id, merchantAuthz.readableMerchants(tenantId))));
     }
 
     @GetMapping(value = "/vouchers/export", produces = "text/csv")
@@ -1504,7 +1521,15 @@ public class ReportingController {
         UUID tenantId = tenantContext.requireTenantId();
         String level = shopId != null ? "SHOP" : merchantId != null ? "MERCHANT" : "TENANT";
         UUID scopeId = shopId != null ? shopId : merchantId;
-        String csv = reporting.voucherCsv(level, tenantId, scopeId, status, from, to);
+        // A named shop or merchant must be the caller's; the tenant level is
+        // narrowed to the caller's merchants.
+        if (shopId != null) {
+            merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
+        } else if (merchantId != null) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        }
+        java.util.Set<UUID> scope = "TENANT".equals(level) ? merchantAuthz.readableMerchants(tenantId) : null;
+        String csv = reporting.voucherCsv(level, tenantId, scopeId, scope, status, from, to);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
                 .header("Content-Disposition", "attachment; filename=\"vouchers.csv\"")
                 .body(csv);

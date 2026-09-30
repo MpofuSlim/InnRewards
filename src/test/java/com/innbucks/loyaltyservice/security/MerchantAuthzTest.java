@@ -188,4 +188,44 @@ class MerchantAuthzTest {
         assertThat(authz.requireCallerAccessesShop(tenant, ownShop).getId()).isEqualTo(ownShop);
         assertForbidden(() -> authz.requireCallerAccessesShop(tenant, rivalShop), "NOT_MERCHANT_OWNER");
     }
+
+    // --- readableMerchants: the scope of every tenant-wide report ---------------
+
+    @Test
+    void readableMerchants_merchantAdmin_seesOnlyItsOrganizationsMerchants() {
+        UUID org = UUID.randomUUID();
+        Merchant mine = merchant(ACME, org);
+        Merchant sibling = merchant(RIVAL, UUID.randomUUID());
+        when(merchants.findByTenantId(tenant)).thenReturn(List.of(mine, sibling));
+        authenticate("owner@acme.co.zw", "MERCHANT_ADMIN", null, null, org);
+
+        assertThat(authz.readableMerchants(tenant)).containsExactly(ACME);
+    }
+
+    @Test
+    void readableMerchants_shopAdmin_seesOnlyTheMerchantOnItsToken() {
+        Merchant mine = merchant(ACME, UUID.randomUUID());
+        Merchant sibling = merchant(RIVAL, UUID.randomUUID());
+        when(merchants.findByTenantId(tenant)).thenReturn(List.of(mine, sibling));
+        authenticate("shop@acme.co.zw", "SHOP_ADMIN", ACME, UUID.randomUUID());
+
+        assertThat(authz.readableMerchants(tenant)).containsExactly(ACME);
+    }
+
+    @Test
+    void readableMerchants_superAdmin_isUnrestricted_andReadsNoMerchantList() {
+        authenticate("root@innbucks.co.zw", "SUPER_ADMIN", null, null);
+
+        assertThat(authz.readableMerchants(tenant)).isNull();
+        org.mockito.Mockito.verify(merchants, org.mockito.Mockito.never()).findByTenantId(tenant);
+    }
+
+    @Test
+    void readableMerchants_aMerchantAdminWithNoOrganization_readsNothing_notEverything() {
+        Merchant m = merchant(ACME, UUID.randomUUID());
+        when(merchants.findByTenantId(tenant)).thenReturn(List.of(m));
+        authenticate("orphan@acme.co.zw", "MERCHANT_ADMIN", null, null, null);
+
+        assertThat(authz.readableMerchants(tenant)).isEmpty();
+    }
 }

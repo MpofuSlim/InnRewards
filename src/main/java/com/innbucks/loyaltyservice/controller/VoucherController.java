@@ -43,13 +43,16 @@ public class VoucherController {
     private final VoucherService voucherService;
     private final TenantContext tenantContext;
     private final VoucherGuessGuard guessGuard;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
 
     public VoucherController(VoucherService voucherService,
                              TenantContext tenantContext,
-                             VoucherGuessGuard guessGuard) {
+                             VoucherGuessGuard guessGuard,
+                             com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.voucherService = voucherService;
         this.tenantContext = tenantContext;
         this.guessGuard = guessGuard;
+        this.merchantAuthz = merchantAuthz;
     }
 
     @PostMapping("/issue")
@@ -1100,8 +1103,12 @@ public class VoucherController {
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> findByStatus(@RequestParam("status") Voucher.Status status,
                                                                                       @ParameterObject Pageable pageable) {
+        // A merchant or shop admin lists its own merchants' vouchers, never a
+        // sibling merchant's in the same tenant (codes included).
+        UUID tenantId = tenantContext.requireTenantId();
         PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
-                voucherService.findByStatus(tenantContext.requireTenantId(), status, pageable));
+                voucherService.findByStatus(tenantId, merchantAuthz.readableMerchants(tenantId),
+                        status, pageable));
         return ResponseEntity.ok(ApiResult.ok("Vouchers retrieved successfully", data));
     }
 }

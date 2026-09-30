@@ -135,6 +135,53 @@ public class MerchantAuthz {
         return shop;
     }
 
+    /**
+     * The merchants in {@code tenantId} whose figures the caller may READ, for
+     * reports that aggregate across a tenant. {@code null} means every merchant
+     * (SUPER_ADMIN and the tenant/platform admin roles); otherwise the set is
+     * exactly the merchants {@link #callerMayRead} admits — possibly empty,
+     * which reads as "nothing", never as "everything".
+     *
+     * <p>Tenant membership alone never widened a merchant admin past their own
+     * merchants on a single-merchant endpoint, but the tenant-wide reports
+     * (dashboard, fraud, voucher report, points by type / time series, the
+     * exports) had no such narrowing, so a merchant or shop admin read every
+     * sibling merchant's figures in the tenant.
+     */
+    public java.util.Set<UUID> readableMerchants(UUID tenantId) {
+        if (readsEveryMerchant()) {
+            return null;
+        }
+        java.util.Set<UUID> ids = new java.util.LinkedHashSet<>();
+        for (Merchant m : merchants.findByTenantId(tenantId)) {
+            if (callerMayRead(m)) {
+                ids.add(m.getId());
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Non-throwing twin of {@link #requireCallerAdministersMerchant}'s ownership
+     * rule, for filtering: SHOP_ADMIN / SHOP_USER see the merchant pinned in
+     * their token, MERCHANT_ADMIN the merchants their organization owns.
+     */
+    public boolean callerMayRead(Merchant m) {
+        if (readsEveryMerchant()) {
+            return true;
+        }
+        UUID scopedMerchant = CallerDetails.currentMerchantId();
+        if (scopedMerchant != null) {
+            return scopedMerchant.equals(m.getId());
+        }
+        UUID callerOrganization = CallerDetails.currentOrganizationId();
+        return callerOrganization != null && callerOrganization.equals(m.getOrganizationId());
+    }
+
+    private static boolean readsEveryMerchant() {
+        return CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN");
+    }
+
     private static LoyaltyException notOwner() {
         return LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
                 "You can only act on merchants you administer.");

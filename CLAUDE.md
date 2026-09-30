@@ -320,6 +320,36 @@ re-keying sellers).
   organization membership. They keep their row-stamped `merchantId`/`shopId`
   claims; that move is a separate design change.
 
+## Tenant-wide reports are narrowed to the caller's merchants (2026-09-30)
+
+**A tenant holds merchants of several organizations, so "every row in the
+tenant" is never the scope of a merchant or shop admin.** The tenant-wide reads
+used to be: the dashboard (`/reports/tenant`), fraud, the voucher report
+(`/reports/vouchers/tenant`), points by type / time series, transaction mix,
+both CSV exports, the voucher detail/lookup and `GET /vouchers?status=` — so a
+MERCHANT_ADMIN or SHOP_ADMIN read every sibling merchant's figures (and codes).
+
+- **One rule, `MerchantAuthz.readableMerchants(tenantId)`** — `null` for
+  SUPER_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN (the whole tenant), else exactly
+  the merchants `callerMayRead` admits (the org's merchants for MERCHANT_ADMIN,
+  the token's merchant for SHOP_ADMIN / SHOP_USER). **Empty means nothing,
+  never everything** — every consumer short-circuits it (`IN ()` is not
+  portable SQL) rather than dropping the filter.
+- **A `merchantId` / `shopId` filter the caller names is ownership-checked**
+  (`requireCallerAdministersMerchant` / `requireCallerAccessesShop`, 403
+  `NOT_MERCHANT_OWNER` / `NOT_SHOP_MEMBER`) — it used to be taken on trust.
+- Queries take the set through dedicated `...ForMerchants` / `MerchantIdIn`
+  twins; the single-merchant and tenant-wide methods are unchanged, so a
+  SUPER_ADMIN's reports run exactly as before.
+- A sibling merchant's voucher in the detail lookup: 403 `NOT_MERCHANT_OWNER`
+  by id, the plain 404 by code (a typed code never confirms it exists).
+- Tenant-wide campaigns (no merchant) still count on a scoped dashboard — they
+  apply to the caller's merchants, as merchant-360 shows them.
+- **Not narrowed (yet), deliberately out of this change:** the customer-level
+  reads (`/reports/user/**`, `/reports/points/user/**`), which show a customer's
+  activity across the tenant, and the merchant / rule / campaign / invoice
+  LISTS outside `/reports`.
+
 ## Timestamps — UTC
 
 Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass

@@ -91,6 +91,9 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
 
     Page<Voucher> findByTenantIdAndStatus(UUID tenantId, Voucher.Status status, Pageable pageable);
 
+    Page<Voucher> findByTenantIdAndMerchantIdInAndStatus(UUID tenantId, java.util.Collection<UUID> merchantIds,
+                                                         Voucher.Status status, Pageable pageable);
+
     @Query("SELECT v FROM Voucher v WHERE v.expiresAt IS NOT NULL AND v.expiresAt < :now AND v.status NOT IN " +
             "(com.innbucks.loyaltyservice.entity.Voucher.Status.REDEEMED, " +
             " com.innbucks.loyaltyservice.entity.Voucher.Status.EXPIRED, " +
@@ -164,6 +167,24 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
                                          @Param("shopId") UUID shopId,
                                          @Param("from") Instant from,
                                          @Param("to") Instant to);
+
+    /** {@link #reportSummaryByStatus} over a set of merchants in one tenant
+     *  (never an empty set — the caller answers "nothing" itself). */
+    @Query("""
+        SELECT v.status, COUNT(v), COALESCE(SUM(v.baseValue), 0)
+        FROM Voucher v
+        WHERE v.tenantId = :tenantId
+          AND v.merchantId IN :merchantIds
+          AND v.issuedAt >= :from AND v.issuedAt < :to
+        GROUP BY v.status
+        """)
+    List<Object[]> reportSummaryByStatusForMerchants(@Param("tenantId") UUID tenantId,
+                                                     @Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                                     @Param("from") Instant from,
+                                                     @Param("to") Instant to);
+
+    long countByTenantIdAndMerchantIdInAndStatus(UUID tenantId, java.util.Collection<UUID> merchantIds,
+                                                 Voucher.Status status);
 
     /**
      * Total USD value of the merchant's FULLY redeemed vouchers. Powers the

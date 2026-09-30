@@ -2087,15 +2087,24 @@ builds the same surface; change them only in lock-step.
   (`ADJUSTMENT_LIMIT_EXCEEDED`, `ALREADY_REVERSED`, `USER_NOT_BLOCKED`) rather
   than being translated. Refusals that carry data (429, 502, some 400s) are
   `LoyaltyDataException`, which has its own handler so `data` is not dropped.
-- **Append-only by SHAPE.** `SupportActivity` and `SupportNote` are
-  `@Immutable` and their repositories extend `Repository` with save and reads
-  only — no update, no delete in code. `support_message` is completed once by a
-  guarded bulk UPDATE (`outcome = PENDING`).
+- **Append-only by SHAPE and by TRIGGER.** `SupportActivity` and `SupportNote`
+  are `@Immutable` and their repositories extend `Repository` with save and
+  reads only — and V54's `support_log_is_append_only` refuses any UPDATE or
+  DELETE on either table in Postgres, so no future code path can add one.
+  `support_message` is completed once by a guarded bulk UPDATE
+  (`outcome = PENDING`), and `support_message_is_final` makes that the only
+  change a row can see: no DELETE, a completed row never changes, who/what/to
+  whom never changes (only `body` may, while PENDING). The same triggers guard
+  marketplace-service's copies (shared contract). A test that must AGE a row
+  goes through `SupportTestBase.maintenanceUpdate` (`session_replication_role =
+  replica` for one transaction); the application has no such path. Pinned by
+  `SupportMessageFlowTest.supportTablesAreAppendOnly`.
 - **There is no tamper-evident audit chain in this service** (user-service,
   payment-service and marketplace have one). `support_activity` is THE record
   of who looked at which customer and what they did, written in the same
-  transaction as the action it describes. Porting the chain here is a separate
-  item; until then someone with database access could rewrite it.
+  transaction as the action it describes; the triggers stop the application
+  rewriting it, but someone with database-owner access still could. Porting the
+  chain here is a separate item.
 - **Deliberately NOT done:** tickets or case states; dispute-like decisions
   (a bigger correction than the ceilings allow is SUPER_ADMIN's, as for
   merchants); an email channel; any typed destination number; any support

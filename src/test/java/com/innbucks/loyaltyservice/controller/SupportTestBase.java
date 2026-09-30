@@ -212,4 +212,15 @@ public abstract class SupportTestBase extends ControllerSecurityTestBase {
         return jdbc.queryForList("SELECT action FROM support_activity WHERE agent_uuid = ? ORDER BY created_at, id",
                 String.class, agentUuid.toString());
     }
+
+    /**
+     * Runs one statement against the append-only support tables with their
+     * triggers bypassed — for a test that must age a row (a lookup past its
+     * TTL, a message out of the rate-limit window). {@code session_replication_role
+     * = replica} skips ordinary triggers for this one transaction only; the
+     * application can do no such thing. Values are inlined: test fixtures only.
+     */
+    protected void maintenanceUpdate(String sql) {
+        jdbc.execute("DO $$ BEGIN SET LOCAL session_replication_role = replica; " + sql + "; END $$");
+    }
 }

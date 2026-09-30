@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -326,8 +327,8 @@ class SupportMessageFlowTest extends SupportTestBase {
         for (int i = 0; i < 5; i++) {
             seedMessageRow(UUID.randomUUID().toString(), c.phone(), "SENT");
         }
-        jdbc.update("UPDATE support_message SET created_at = now() - interval '25 hours' WHERE recipient_msisdn = ?",
-                c.phone());
+        maintenanceUpdate("UPDATE support_message SET created_at = now() - interval '25 hours' "
+                + "WHERE recipient_msisdn = '" + c.phone() + "'");
 
         mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
                         .contentType(MediaType.APPLICATION_JSON).content(body("SMS", "Hello")))
@@ -426,6 +427,43 @@ class SupportMessageFlowTest extends SupportTestBase {
 
         verify(sms).sendSms(eq(c.phone()), anyString(), anyString());
         verify(sms, never()).sendSms(eq(elsewhere), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("the support tables are append-only in the database, and a message completes exactly once")
+    void supportTablesAreAppendOnly() {
+        String phone = randomPhone();
+        seedMessageRow(UUID.randomUUID().toString(), phone, "SENT");
+        assertThatThrownBy(() -> jdbc.update("UPDATE support_message SET body = 'rewritten' WHERE recipient_msisdn = ?",
+                phone)).hasMessageContaining("is already SENT");
+        assertThatThrownBy(() -> jdbc.update("DELETE FROM support_message WHERE recipient_msisdn = ?", phone))
+                .hasMessageContaining("append-only");
+
+        UUID pending = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO support_message (id, subject_kind, subject_id, recipient_msisdn, recipient_role, kind,
+                    channel_requested, outcome, agent_uuid, agent_login, created_at)
+                VALUES (?, 'PHONE', ?, ?, 'CUSTOMER', 'CUSTOM', 'SMS', 'PENDING', ?, 'seed@example.com', now())
+                """, pending, phone, phone, UUID.randomUUID().toString());
+        assertThatThrownBy(() -> jdbc.update("UPDATE support_message SET recipient_msisdn = '+263779999999' WHERE id = ?",
+                pending)).hasMessageContaining("may only record its outcome");
+        assertThat(jdbc.update("UPDATE support_message SET outcome = 'SENT', delivered_via = 'SMS', body = 'hi', "
+                + "completed_at = now() WHERE id = ?", pending)).isEqualTo(1);
+        assertThatThrownBy(() -> jdbc.update("UPDATE support_message SET outcome = 'FAILED' WHERE id = ?", pending))
+                .hasMessageContaining("is already SENT");
+
+        UUID activity = UUID.randomUUID();
+        jdbc.update("INSERT INTO support_activity (id, agent_uuid, action, created_at) VALUES (?, 'a', 'SEARCH', now())",
+                activity);
+        assertThatThrownBy(() -> jdbc.update("UPDATE support_activity SET action = 'X' WHERE id = ?", activity))
+                .hasMessageContaining("support_activity is append-only");
+        assertThatThrownBy(() -> jdbc.update("DELETE FROM support_activity WHERE id = ?", activity))
+                .hasMessageContaining("support_activity is append-only");
+        UUID note = UUID.randomUUID();
+        jdbc.update("INSERT INTO support_note (id, subject_kind, subject_id, body, agent_uuid, created_at) "
+                + "VALUES (?, 'PHONE', ?, 'note', 'a', now())", note, phone);
+        assertThatThrownBy(() -> jdbc.update("UPDATE support_note SET body = 'edited' WHERE id = ?", note))
+                .hasMessageContaining("support_note is append-only");
     }
 
     private void seedMessageRow(String agentUuid, String recipient, String outcome) {

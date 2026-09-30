@@ -169,7 +169,8 @@ class SupportCustomerFlowTest extends SupportTestBase {
         UUID agent = UUID.randomUUID();
         UUID lookupId = lookup(agentToken(agent), phone);
         // Age it past the 12h TTL. (The application cannot rewrite this table; the test can.)
-        jdbc.update("UPDATE support_activity SET created_at = now() - interval '13 hours' WHERE id = ?", lookupId);
+        maintenanceUpdate("UPDATE support_activity SET created_at = now() - interval '13 hours' "
+                + "WHERE id = '" + lookupId + "'");
 
         mockMvc.perform(get("/loyalty/support/lookups/" + lookupId + "/transactions")
                         .header("Authorization", bearer(agentToken(agent))))

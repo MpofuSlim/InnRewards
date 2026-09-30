@@ -126,8 +126,7 @@ public class VoucherController {
                     responseCode = "400",
                     description = "Validation error — missing/non-positive value, an unsupported currency, "
                             + "a currency with no in-force exchange rate, a `usageLimit` other than 1, or "
-                            + "`voucherType: MULTI_USE`, which is retired (`MULTI_USE_RETIRED`), or a "
-                            + "`senderPhone` that is the recipient's own number (`SENDER_IS_RECIPIENT`)",
+                            + "`voucherType: MULTI_USE`, which is retired (`MULTI_USE_RETIRED`)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -137,13 +136,6 @@ public class VoucherController {
                                               "code": "400 BAD_REQUEST",
                                               "message": "Validation failed",
                                               "data": { "value": "must not be null" }
-                                            }
-                                            """),
-                                    @ExampleObject(name = "Sender is the recipient", value = """
-                                            {
-                                              "code": "SENDER_IS_RECIPIENT",
-                                              "message": "The sender and the recipient can't be the same phone number. Enter the recipient's number, or leave the sender blank if the voucher is for the customer themselves.",
-                                              "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Unsupported currency", value = """

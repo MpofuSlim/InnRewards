@@ -97,8 +97,7 @@ public class VoucherPurchaseController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
                     description = "Validation error — missing/non-positive/sub-cent value, unsupported currency, "
-                            + "no in-force exchange rate, type/usageLimit conflict, no payer phone, a sender phone that is the "
-                            + "recipient's own number (SENDER_IS_RECIPIENT), or no "
+                            + "no in-force exchange rate, type/usageLimit conflict, no payer phone, or no "
                             + "merchantId when the caller's JWT carries no merchant scope (MERCHANT_REQUIRED). "
                             + "Each of these carries its own domain `code`; a bean-validation failure on the "
                             + "body is instead the generic `400 BAD_REQUEST` / `Validation failed` shape, whose "
@@ -110,13 +109,6 @@ public class VoucherPurchaseController {
                                             {
                                               "code": "PAYER_PHONE_REQUIRED",
                                               "message": "Provide payerPhone (or a senderPhone/assigneePhone to default from) — the payment prompt has to reach a real phone.",
-                                              "data": null
-                                            }
-                                            """),
-                                    @ExampleObject(name = "Sender is the recipient", value = """
-                                            {
-                                              "code": "SENDER_IS_RECIPIENT",
-                                              "message": "The sender and the recipient can't be the same phone number. Enter the recipient's number, or leave the sender blank if the voucher is for the customer themselves.",
                                               "data": null
                                             }
                                             """),

@@ -251,22 +251,12 @@ class VoucherPurchaseServiceTest {
     }
 
     @Test
-    void create_senderIsTheRecipient_isRefusedBeforeAnyoneIsAskedToPay() {
-        // Checked at CREATE, on the staff caller: refusing at confirmation
-        // would strand money the customer had already paid.
-        org.mockito.Mockito.doThrow(LoyaltyException.badRequest("SENDER_IS_RECIPIENT", "same person"))
-                .when(voucherService).requireSenderIsNotRecipient("+263786546765", "+263786546765", null);
+    void create_aVoucherForYourself_senderIsTheRecipient_isAccepted() {
+        // Owner decision (2026-09-30): the same person as sender and recipient
+        // is a voucher someone buys for themselves, not an error.
+        service.create(TENANT, request(new BigDecimal("5.00"), "USD", "+263786546765", "+263786546765", null));
 
-        assertRefused(request(new BigDecimal("5.00"), "USD", "+263786546765", "+263786546765", null),
-                "SENDER_IS_RECIPIENT");
-        verify(orders, never()).save(any());
-    }
-
-    @Test
-    void create_asksTheSameSenderRecipientQuestionIssueAsks() {
-        service.create(TENANT, request(new BigDecimal("5.00"), "USD", "+263782608767", "+263786546765", null));
-
-        verify(voucherService).requireSenderIsNotRecipient("+263782608767", "+263786546765", null);
+        verify(orders).save(any());
     }
 
     private void assertRefused(Dtos.PurchaseVoucherRequest req, String code) {

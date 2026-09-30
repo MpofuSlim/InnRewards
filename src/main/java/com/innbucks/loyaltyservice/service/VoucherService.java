@@ -138,47 +138,47 @@ public class VoucherService {
                 req.senderName(), req.senderPhone(),
                 req.deliveryChannel(), req.campaignSource(), req.value(), req.currency(),
                 voucherTypeOrDefault(req.voucherType()), usageLimit);
-        // Checked against the RESOLVED holder (createVoucher canonicalised the
-        // phone, or took it from assignedUserId), before anything is saved —
-        // the throw rolls back any PENDING enrolment createVoucher just made.
-        requireSenderIsNotRecipient(v.getSenderPhone(), holderPhone(v));
         return finishIssue(v);
     }
 
     /**
-     * A gift has two people. When the sender phone IS the recipient phone the
-     * recipient's message reads "Hi Tawanda, Tawanda Mpofu sent you a
-     * voucher" — which is what the till produced when the cashier put the
-     * customer's own number in both fields. Refused, so the operator either
-     * fixes the recipient or leaves the sender blank for a voucher the
-     * customer is buying for themselves (which then reads "your voucher is
-     * ready"). Phones are compared canonicalised, so "0782…" and "+263782…"
-     * are the same person. No sender, or no recipient phone: nothing to
-     * compare, allowed.
-     *
-     * <p>Not applied to {@link #issueFromOrder}: an order is checked when it
-     * is CREATED, and refusing at confirmation would strand money a customer
-     * has already paid. {@code finishIssue} still sends one message, not two,
-     * for any such legacy order.
+     * A voucher someone issues to THEMSELVES carries their name and number as
+     * both sender and recipient (owner decision, 2026-09-30: "if I issue to
+     * myself my name should appear twice"). It used to be refused
+     * ({@code SENDER_IS_RECIPIENT}) because the recipient's message then read
+     * "Hi Tawanda, Tawanda Mpofu sent you a voucher"; that was a wording
+     * problem, fixed where the words are made: {@code NotificationGateway}
+     * treats a sender phone equal to the holder's as "your voucher is ready",
+     * and {@link #finishIssue} sends one message, not two.
      */
-    public void requireSenderIsNotRecipient(String senderPhone, String recipientPhone) {
-        String sender = comparablePhone(senderPhone);
-        if (sender != null && sender.equals(comparablePhone(recipientPhone))) {
-            throw LoyaltyException.badRequest("SENDER_IS_RECIPIENT",
-                    "The sender and the recipient can't be the same phone number. Enter the "
-                            + "recipient's number, or leave the sender blank if the voucher is for "
-                            + "the customer themselves.");
+    public static boolean isSelfIssued(String senderPhone, String holderPhone) {
+        if (senderPhone == null || senderPhone.isBlank() || holderPhone == null || holderPhone.isBlank()) {
+            return false;
         }
+        String a = senderPhone.replaceAll("[^0-9]", "");
+        String b = holderPhone.replaceAll("[^0-9]", "");
+        return !a.isEmpty() && a.equals(b);
     }
 
-    /** {@link #requireSenderIsNotRecipient(String, String)} for a request that
-     *  may name the recipient by loyalty user id instead of phone. */
-    public void requireSenderIsNotRecipient(String senderPhone, String assigneePhone, UUID assignedUserId) {
-        String recipient = assigneePhone;
-        if ((recipient == null || recipient.isBlank()) && assignedUserId != null) {
-            recipient = users.findById(assignedUserId).map(LoyaltyUser::getPhoneNumber).orElse(null);
+    /**
+     * The sender phone as stored: canonical E.164 when it parses (so reports
+     * show one spelling, and "is this the holder?" is a plain comparison),
+     * else as typed — a sender number was never validated and is never
+     * refused. Null for blank.
+     */
+    private String canonicalSenderPhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
         }
-        requireSenderIsNotRecipient(senderPhone, recipient);
+        try {
+            String normalized = userService.normalizePhone(raw);
+            if (normalized != null) {
+                return normalized;
+            }
+        } catch (RuntimeException notAPhone) {
+            // stored as typed
+        }
+        return raw.strip();
     }
 
     /** Whether two phones name the same number, compared canonically
@@ -267,7 +267,7 @@ public class VoucherService {
         // defeat the rotation. Skipped when sender and recipient are the same
         // phone (self-issue): one message, not two identical ones.
         String stampedSenderPhone = v.getSenderPhone();
-        if (stampedSenderPhone != null && !stampedSenderPhone.equals(recipientPhone)) {
+        if (stampedSenderPhone != null && !isSelfIssued(stampedSenderPhone, recipientPhone)) {
             notifications.deliverSenderCopy(v, stampedSenderPhone);
         }
         metrics.incVouchersIssued();
@@ -483,7 +483,7 @@ public class VoucherService {
         // from the JWT and never the body; the caller (issue) resolves the
         // default sender phone, so bulk stock stays sender-less.
         v.setSenderName(HtmlSanitizer.stripAll(senderName));
-        v.setSenderPhone(senderPhone != null && !senderPhone.isBlank() ? senderPhone : null);
+        v.setSenderPhone(canonicalSenderPhone(senderPhone));
         // Stamp WHO issued it (and from which outlet) from the caller's JWT, so
         // reports carry a real issuer number alongside the receiver. All null
         // when there's no authenticated caller (internal / system issuance).

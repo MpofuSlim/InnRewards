@@ -27,7 +27,8 @@ public class WhatsAppNotificationClient {
 
     private static final String CUSTOM_NOTIFICATION_PATH = "/api/messages/custom-notification";
     private static final String API_KEY_HEADER = "x-api-key";
-    static final int MAX_MESSAGE_LENGTH = 1600;
+    /** The gateway's own cap; {@code SupportProperties} refuses to boot with a support cap above it. */
+    public static final int MAX_MESSAGE_LENGTH = 1600;
 
     private final RestClient restClient;
     private final WhatsAppProperties properties;
@@ -36,6 +37,19 @@ public class WhatsAppNotificationClient {
                                       WhatsAppProperties properties) {
         this.restClient = restClient;
         this.properties = properties;
+    }
+
+    /**
+     * Whether this cell has a WhatsApp gateway to talk to: a base URL and a real
+     * API key. The committed default key is a {@code change-me} placeholder,
+     * which the gateway would refuse — so it counts as not configured, and the
+     * support message endpoints answer 503 rather than record a doomed attempt.
+     */
+    public boolean isConfigured() {
+        String key = properties.getApiKey();
+        return properties.getBaseUrl() != null && !properties.getBaseUrl().isBlank()
+                && key != null && !key.isBlank()
+                && !key.toLowerCase(java.util.Locale.ROOT).contains("change-me");
     }
 
     public void sendCustomNotification(String to, String notification) {

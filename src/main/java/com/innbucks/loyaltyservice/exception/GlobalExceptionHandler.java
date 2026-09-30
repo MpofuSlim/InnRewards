@@ -74,6 +74,25 @@ public class GlobalExceptionHandler {
     public record RetryAfterDetail(long retryAfterSeconds) {
     }
 
+    /**
+     * A domain refusal that carries data — a support-message rate limit (its
+     * scope and window) or an undelivered support message (the record of the
+     * attempt). More specific than the {@link LoyaltyException} handler below,
+     * so Spring picks this one; that one would keep the status and code and
+     * drop the data. {@code no-store} because every such answer describes a
+     * moment: a cached copy of either would be wrong the next time it is read.
+     */
+    @ExceptionHandler(LoyaltyDataException.class)
+    public ResponseEntity<ApiResult<Object>> handle(LoyaltyDataException ex) {
+        return ResponseEntity.status(ex.getStatus())
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResult.<Object>builder()
+                        .code(ex.getCode())
+                        .message(ex.getMessage())
+                        .data(ex.getData())
+                        .build());
+    }
+
     @ExceptionHandler(LoyaltyException.class)
     public ResponseEntity<ApiResult<Void>> handle(LoyaltyException ex) {
         // Preserve the intentional domain code (e.g. MERCHANT_NAME_TAKEN) — it's

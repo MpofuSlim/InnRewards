@@ -76,6 +76,13 @@ class GlobalExceptionHandlerDispatchTest {
         String unknownVoucher() {
             throw VoucherCodeGuessException.unknownCode();
         }
+
+        @GetMapping("/probe/with-data")
+        String withData() {
+            throw new LoyaltyDataException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                    "support_message_rate_limited", "Too many support messages.",
+                    new com.innbucks.loyaltyservice.dto.SupportDtos.RateLimitDetail("RECIPIENT", 5, 1440));
+        }
     }
 
     private MockMvc mvc;
@@ -206,5 +213,20 @@ class GlobalExceptionHandlerDispatchTest {
                 .andExpect(jsonPath("$.code").value("404 NOT_FOUND"))
                 .andExpect(jsonPath("$.message").value("voucher not found"))
                 .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    void aRefusalCarryingData_keepsItsDomainCode_andItsData() throws Exception {
+        // LoyaltyDataException extends LoyaltyException, so the generic handler
+        // would also match it — and would answer with data: null. Spring must
+        // pick the more specific one, or a rate-limited agent is never told
+        // which limit they hit.
+        mvc.perform(get("/probe/with-data"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.code").value("support_message_rate_limited"))
+                .andExpect(jsonPath("$.data.scope").value("RECIPIENT"))
+                .andExpect(jsonPath("$.data.limit").value(5))
+                .andExpect(jsonPath("$.data.windowMinutes").value(1440));
     }
 }

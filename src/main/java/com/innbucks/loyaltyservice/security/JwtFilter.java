@@ -278,6 +278,22 @@ public class JwtFilter extends OncePerRequestFilter {
                 authorities.add(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
             }
 
+            // Permissions (the `perms` claim) — user-service resolves them from
+            // the caller's roles at mint time; SUPER_ADMIN's `*` arrives already
+            // expanded into concrete codes. Bare authorities, no prefix, and only
+            // entries shaped like a permission code: see permissionAuthorities.
+            // They only ever ADD a permission — none can equal a ROLE_/SERVICE_/
+            // TIER_/VERIFIED authority, so no role or scope check can be
+            // satisfied through this claim, and TenantContext's plain-customer
+            // test (which looks at ROLE_ authorities only) cannot see them.
+            //
+            // Never on a phone-scoped session: that token is a customer's proof
+            // of their phone, minted with nothing but a scope marker, and the
+            // one place a permission cannot legitimately come from.
+            if (!phoneScopedSession) {
+                authorities.addAll(permissionAuthorities(jwtUtil.extractPermissions(token)));
+            }
+
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
             auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber, userId, loyaltyOrganizationId));
             SecurityContextHolder.getContext().setAuthentication(auth);
@@ -366,6 +382,45 @@ public class JwtFilter extends OncePerRequestFilter {
                         + homeCountry + "\",\"data\":{\"errorCode\":\"wrong_cell\",\"homeCountry\":\""
                         + homeCountry + "\",\"homeBaseUrl\":null}}"
         );
+    }
+
+    /**
+     * The {@code perms} claim as authorities: each entry that matches
+     * {@link SupportPermissions#CODE_SHAPE} becomes a bare
+     * {@link SimpleGrantedAuthority} carrying the code itself; anything else is
+     * dropped silently (counted at DEBUG, never echoed — it is caller-shaped).
+     *
+     * <p><b>The shape check is load-bearing.</b> Without it a {@code perms}
+     * entry {@code "ROLE_SUPER_ADMIN"} would become the very authority
+     * {@code hasRole('SUPER_ADMIN')} checks for, and {@code "SERVICE_LOYALTY-OTP"}
+     * the scope marker {@code /loyalty/session/exchange} is gated on. A code is
+     * lowercase and colon-namespaced; every authority this filter mints from
+     * roles, services, tier and verification is uppercase, so the two sets can
+     * never meet. {@code *} is dropped too: user-service expands SUPER_ADMIN's
+     * wildcard before minting, and a raw one reaching us is not a grant.
+     *
+     * <p>There is no roles-to-permissions backfill here (that bridge lives only
+     * in user-service): a token minted before the claim existed simply holds no
+     * permission until its holder signs in again.
+     */
+    static List<SimpleGrantedAuthority> permissionAuthorities(List<String> perms) {
+        if (perms == null || perms.isEmpty()) {
+            return List.of();
+        }
+        java.util.LinkedHashSet<String> accepted = new java.util.LinkedHashSet<>();
+        int dropped = 0;
+        for (String code : perms) {
+            if (code != null && SupportPermissions.CODE_SHAPE.matcher(code).matches()) {
+                accepted.add(code);
+            } else {
+                dropped++;
+            }
+        }
+        if (dropped > 0) {
+            log.debug("Dropped {} perms claim entr{} not shaped like a permission code",
+                    dropped, dropped == 1 ? "y" : "ies");
+        }
+        return accepted.stream().map(SimpleGrantedAuthority::new).toList();
     }
 
     /**

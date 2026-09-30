@@ -166,6 +166,21 @@ public class JwtUtil {
         return List.of();
     }
 
+    /**
+     * The raw {@code perms} claim: the permission codes user-service resolved
+     * for the caller's roles at mint time (its {@code PermissionResolver}).
+     * Returns only the claim's STRING entries, unvalidated — {@link JwtFilter}
+     * decides which of them become authorities. A missing claim, a claim that is
+     * not an array, or an array of non-strings is an empty list: fail closed.
+     */
+    public List<String> extractPermissions(String token) {
+        Object raw = getClaims(token).get("perms");
+        if (raw instanceof Collection<?> c) {
+            return c.stream().filter(String.class::isInstance).map(String.class::cast).toList();
+        }
+        return List.of();
+    }
+
     public Integer extractTier(String token) {
         return getClaims(token).get("tier", Integer.class);
     }

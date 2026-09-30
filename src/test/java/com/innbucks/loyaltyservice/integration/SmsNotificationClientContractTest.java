@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClient;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -170,5 +171,22 @@ class SmsNotificationClientContractTest {
         }
         assertThatThrownBy(() -> client(closedPort).sendSms("+263782606983", "m", "r"))
                 .isInstanceOf(NotificationDeliveryException.class);
+    }
+
+    @Test
+    @DisplayName("isConfigured: all four notification-API settings present; any one blank is not configured")
+    void isConfigured_needsAllFourSettings() {
+        assertThat(client(wireMock.port()).isConfigured()).isTrue();
+
+        InnbucksNotifyProperties props = new InnbucksNotifyProperties();
+        props.setBaseUrl("http://localhost:" + wireMock.port());
+        props.setApiKey(API_KEY);
+        props.setUsername("test-user");
+        props.setPassword(" ");
+        SmsNotificationClient noPassword = new SmsNotificationClient(
+                RestClient.builder().baseUrl(props.getBaseUrl()).build(), props, new ObjectMapper());
+        assertThat(noPassword.isConfigured()).isFalse();
+        // Asking never touches the network — no login, no send.
+        wireMock.verify(0, postRequestedFor(urlEqualTo(LOGIN)));
     }
 }

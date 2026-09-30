@@ -457,6 +457,31 @@ loyalty:
     # start failing because a new key appeared in the config. The boot check
     # logs UNGATED so the state is never silent.
     api-key: ${LOYALTY_PUBLIC_TEST_API_KEY:}
+  support:
+    # Customer support (/loyalty/support/**, V55). Gated by the JWT `perms`
+    # claim (loyalty-support:read|manage|supervise, customer-messages:send),
+    # never by a role. See CLAUDE.md, "Customer support".
+    #
+    # How long a lookup session (its lookupId) resolves back to the customer's
+    # phone, for the agent who made it only. After this the agent looks the
+    # customer up again, which is logged again.
+    lookup-ttl: ${LOYALTY_SUPPORT_LOOKUP_TTL:PT12H}
+    messages:
+      # Appended on its own line to every message an agent types. The same
+      # contract as marketplace's "- InnBucks Marketplace Support".
+      signature: "${LOYALTY_SUPPORT_MESSAGE_SIGNATURE:- InnBucks Loyalty Support}"
+      # Caps on the FINAL text (signature included; for SMS, after the GSM
+      # transliteration). 459 = three GSM-7 segments. WhatsApp must stay at or
+      # under the gateway's own 1600.
+      sms-max-characters: ${LOYALTY_SUPPORT_SMS_MAX_CHARACTERS:459}
+      whatsapp-max-characters: ${LOYALTY_SUPPORT_WHATSAPP_MAX_CHARACTERS:1000}
+      # A link in a typed message must point at one of these hosts (or a
+      # subdomain). Comma-separated.
+      allowed-link-hosts: ${LOYALTY_SUPPORT_ALLOWED_LINK_HOSTS:innbucks.co.zw}
+      # Counted from support_message rows — every attempt, every kind,
+      # including voucher resends. Over either: 429 support_message_rate_limited.
+      per-agent-per-hour: ${LOYALTY_SUPPORT_MESSAGES_PER_AGENT_PER_HOUR:60}
+      per-recipient-per-day: ${LOYALTY_SUPPORT_MESSAGES_PER_RECIPIENT_PER_DAY:5}
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}

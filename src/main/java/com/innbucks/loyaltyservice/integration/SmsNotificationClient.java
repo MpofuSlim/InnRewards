@@ -185,6 +185,17 @@ public class SmsNotificationClient {
         }
     }
 
+    /**
+     * Whether this cell can send SMS at all — all four notification-API
+     * settings present. The support message endpoints ask BEFORE they write a
+     * row, so an unprovisioned cell answers 503 instead of recording an attempt
+     * that could never have been made.
+     */
+    public boolean isConfigured() {
+        return !isBlank(properties.getBaseUrl()) && !isBlank(properties.getApiKey())
+                && !isBlank(properties.getUsername()) && !isBlank(properties.getPassword());
+    }
+
     private void requireConfigured() {
         if (isBlank(properties.getBaseUrl()) || isBlank(properties.getApiKey())
                 || isBlank(properties.getUsername()) || isBlank(properties.getPassword())) {

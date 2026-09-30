@@ -329,7 +329,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V54**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V55**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -502,8 +502,15 @@ whole design:
   `UserService.isPhoneRegistered`, so revoking the V40 registration tombstone
   signs the customer out at their next renewal instead of being quietly outlived
   by a live chain. `revokeAllForPhone` is the operator's "sign them out
-  everywhere" lever — deliberately NOT an endpoint, since it is aimed at a phone
-  number.
+  everywhere" lever. It used to be deliberately NOT an endpoint, because it is
+  aimed at a phone number. **Owner decision (2026-09-30): it is now the
+  customer-support sign-out** (`POST /loyalty/support/lookups/{lookupId}/sign-out`),
+  and it is safe there for three reasons: it is gated on the
+  `loyalty-support:manage` PERMISSION (not a role), it writes an activity row
+  and a note carrying the agent's reason, and the phone comes from a lookup the
+  same agent made — never from the request — so it can only be aimed at a
+  customer that agent looked up. It is still not reachable from any customer
+  API. See "Customer support" below.
 - **`/refresh` and `/logout` are `permitAll` AND in `JwtFilter`'s excluded
   paths** — exact paths, never the `/loyalty/session` prefix. Their credential is
   the body token and the access token they exist to replace is normally expired
@@ -1995,6 +2002,179 @@ should go rather than grow a drawdown balance.
   backup, a lagging replica, or any row written before the migration would take
   out every read path touching it. The constant costs nothing; deleting it buys
   tidiness and risks an outage.
+
+## Customer support (`/loyalty/support/**`, V55)
+
+A call-centre agent can find a customer by phone across EVERY tenant, read
+their whole loyalty record, keep notes, message them, and take a small set of
+corrective actions. Owner decisions (2026-09-30), all binding: permissions live
+in user-service's `PermissionCatalog` and are granted by a user-service
+migration; a typed SMS/WhatsApp may only go to a customer ON RECORD, resolved
+server-side — an agent can never type a destination; case management is notes
++ message log + activity log, **no tickets**. The table names, error codes,
+limits and message shapes are a SHARED CONTRACT with marketplace-service, which
+builds the same surface; change them only in lock-step.
+
+- **Permission-gated, never role-gated.** `JwtFilter` turns each `perms` claim
+  entry shaped `^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)+$` into a BARE authority and
+  drops everything else. That shape check is load-bearing: without it a perms
+  entry `ROLE_SUPER_ADMIN` would satisfy `hasRole('SUPER_ADMIN')` and
+  `SERVICE_LOYALTY-OTP` the session-exchange scope. Codes are lowercase and
+  colon-namespaced, every other authority here is uppercase, so the sets never
+  meet, and `TenantContext`'s plain-customer test only reads `ROLE_*` — a
+  permission can ADD support authority and nothing else. Missing, non-array or
+  non-string claim = no permissions; there is no roles→perms backfill here (it
+  lives only in user-service), so a pre-perms staff token cannot use support
+  until its holder signs in again. Perms are ignored on a phone-scoped
+  loyalty session. Pinned by `JwtFilterPermissionsTest`.
+  - `loyalty-support:read` (look up + read), `:manage` (notes, voucher resend,
+    sign-out), `:supervise` (adjust/reverse points, unblock, the oversight feeds),
+    `customer-messages:send` (typed messages; shared with marketplace). All
+    PLATFORM scope; constants in `SupportPermissions`, `@PreAuthorize` built from
+    them — `hasAuthority` only, never `hasRole`.
+  - **SUPER_ADMIN reaches support through its `*` wildcard, which user-service
+    expands at mint time — not through the role.** A SUPER_ADMIN role with no
+    perms claim is a 403 on every support endpoint; `SupportSecurityTest` walks
+    every endpoint through that case and four others.
+  - **No `X-Tenant-Id`, no `TenantContext`, no role list.** Support is
+    platform-wide. It reuses service logic through narrow methods that take the
+    acting agent explicitly (`TransactionService.adjustAs` / `reverseAs`), so it
+    never depends on — and must never be added to — `requireCallerOwnsOrIsAdmin`,
+    `MerchantAuthz`, `VoucherService.requireCallerMay*` or any other role list.
+- **Lookup sessions keep phones out of URLs.** The phone is typed once, into the
+  BODY of `POST /customers/lookup`. On record = the phone appears in
+  `phone_registrations` (live or revoked), `loyalty_users`, `wallets`, a voucher
+  (assignee / sender / transferred-from) or a voucher order (payer / assignee /
+  sender). Found: a `CUSTOMER_LOOKUP` activity row whose id IS the `lookupId`,
+  and the 360. Not found: 404 `customer_not_found` and a `SEARCH` row holding
+  only the MASKED phone (the lookup method is deliberately not transactional so
+  that row commits despite the 404). A `lookupId` resolves to its phone only
+  for the agent who made it and only for `loyalty.support.lookup-ttl` (12h);
+  someone else's, an expired one and a made-up one are the same byte-identical
+  404 `lookup_not_found`. Every drill-down (transactions, ledger, vouchers by
+  role, voucher orders, notes, messages) writes its own `VIEW_*` row.
+- **Masked phones, no voucher codes, anywhere.** Every response masks phones
+  (`****4567`); `support_activity.subject_id` and `support_message.recipient_msisdn`
+  hold the full E.164 at rest (it is the query key), `detail` never does. No
+  support DTO has a voucher-code field — an agent who could read a code could
+  spend it; the resend exists so the holder gets it without anyone else seeing
+  it. Voucher sender phones and all three order phones were stored AS TYPED, so
+  lookups match every spelling of the number (`PhoneSpellings`: `+263…`,
+  `263…`, `0…`, bare national); spaces/dashes are not matched.
+- **Record-bound messaging** (`SupportMessageService`, contract §4). Channels
+  SMS / WHATSAPP / SMS_THEN_WHATSAPP. The last needs EITHER channel: it tries
+  SMS when SMS is provisioned, and WhatsApp when WhatsApp is — after a failed
+  SMS, or directly when the cell has no SMS — and is 503 only when neither is;
+  `failureCode` names what was tried (`sms_failed` / `whatsapp_failed` /
+  `sms_and_whatsapp_failed`). Body HTML-stripped, signed `- InnBucks Loyalty Support`
+  on a new line, capped on the FINAL text: 459 SMS characters after
+  `SmsTextSanitizer` (three GSM-7 segments), 1000 WhatsApp. **The sanitiser
+  turns `:` and `/` into spaces, so a full URL never survives SMS** — the
+  preview shows the agent that. **Link detection is STRICT and
+  character-identical to marketplace's** (`SupportMessageComposer.URL_LIKE`):
+  any `scheme://`, `www.`, an IPv4 address (bare or with a path), and a bare
+  `name.tld` with or without a path — labels are Unicode letters, so a Cyrillic
+  look-alike (`innbucks.cо.zw`) is SEEN and refused, never skipped — and an
+  e-mail address is judged by its domain. The host is taken after the LAST `@`
+  of every token (so `innbucks.co.zw@evil.example` is `evil.example`) and must be
+  an `allowed-link-host` or a subdomain of one. NFKC runs first, so full-width
+  characters cannot hide a link. Accepted false positive: a missing space after
+  a full stop (`Thanks.Your`) reads as a domain, and the refusal tells the agent
+  to add the space. `SupportProperties` refuses to BOOT on an allowed host that
+  is not plain ASCII (`IDN.toASCII` round-trip) or carries a path, and on a
+  WhatsApp cap above the gateway's own 1600. Order is load-bearing: validate
+  (503 `channel_unavailable` before any row) → claim a PENDING row (both limits:
+  60/agent/rolling hour, 5/recipient/rolling 24h, every attempt, every kind) →
+  gateway call OUTSIDE any transaction → complete the row + `MESSAGE_SENT`. The
+  claim takes two Postgres advisory locks (agent, then recipient — fixed order,
+  no cycle) so two concurrent sends cannot both squeeze under a limit. All
+  attempted channels failing is 502 `message_not_delivered` carrying the FAILED record. A
+  process dying between claim and complete leaves a PENDING row that still
+  counts. **Preview never refuses on length** — it reports `characters` vs
+  `maxCharacters` (the send refuses, 400 `message_too_long`); it does refuse a
+  disallowed link or an empty body.
+- **Voucher resend** sends the ISSUE template (`NotificationGateway.issueMessage`
+  — one template, not two) to the looked-up phone only, for a voucher that
+  phone HOLDS by the redemption holder rule and that is still live. `body` is
+  NULL (it carries the code), and `chk_support_message_secret_body` makes the
+  database refuse anything else.
+- **Actions reuse the rules they correct.** Adjust goes through `adjustAs`:
+  the SAME per-adjustment (5000) and per-operator-per-24h (20000) ceilings,
+  counted against the AGENT as `posted_by`; a supervisor is not exempt,
+  SUPER_ADMIN still is; the customer gets the usual adjustment SMS. Adjust and
+  reverse refuse a token with no `userUuid` (`403 agent_identity_required`) —
+  the daily ceiling keys on `posted_by`, and an unattributed adjustment would
+  be uncounted. Reverse keeps its lock and `ALREADY_REVERSED`; unblock keeps
+  BLOCKED-only `USER_NOT_BLOCKED`. Every target (membership, transaction,
+  voucher, merchant) must belong to the looked-up customer or it is a 404 — the
+  same as not existing.
+- **A reason goes where the action keeps one, never into `detail`.** Adjust →
+  the transaction reference + ledger (`@Size(max = 96)`: `REV-` + reference must
+  still fit VARCHAR(100)); reverse → the ledger (`@Size(max = 192)`:
+  `reverse:` + reason ≤ 200) — both pinned to the entity columns by
+  `SupportReasonWidthTest`. Sign-out and unblock have nowhere to keep a reason,
+  so it becomes an internal note on the customer and the activity row names its
+  `noteId`. **Sign-out revokes refresh chains; an access token already issued
+  keeps working until its TTL** (it carries no user id the denylist could
+  reach) — what stops is renewal. Swagger says so.
+- **Error codes on this surface are lowercase** (`customer_not_found`,
+  `lookup_not_found`, `link_not_allowed`, `support_message_rate_limited`,
+  `channel_unavailable`, `message_not_delivered`, …) — the shared contract's
+  style, so one console branches identically on loyalty and marketplace. The
+  refusals of the REUSED rules keep their existing UPPER_SNAKE codes
+  (`ADJUSTMENT_LIMIT_EXCEEDED`, `ALREADY_REVERSED`, `USER_NOT_BLOCKED`) rather
+  than being translated. Refusals that carry data (429, 502, some 400s) are
+  `LoyaltyDataException`, which has its own handler so `data` is not dropped.
+- **Append-only by SHAPE and by TRIGGER.** `SupportActivity` and `SupportNote`
+  are `@Immutable` and their repositories extend `Repository` with save and
+  reads only — and V55's `support_log_is_append_only` refuses any UPDATE or
+  DELETE on either table in Postgres, so no future code path can add one.
+  `support_message` is completed once by a guarded bulk UPDATE
+  (`outcome = PENDING`), and `support_message_is_final` makes that the only
+  change a row can see: no DELETE, a completed row never changes, who/what/to
+  whom never changes (only `body` may, while PENDING). The same triggers guard
+  marketplace-service's copies (shared contract). A test that must AGE a row
+  goes through `SupportTestBase.maintenanceUpdate` (`session_replication_role =
+  replica` for one transaction); the application has no such path. Pinned by
+  `SupportMessageFlowTest.supportTablesAreAppendOnly`.
+- **There is no tamper-evident audit chain in this service** (user-service,
+  payment-service and marketplace have one). `support_activity` is THE record
+  of who looked at which customer and what they did, written in the same
+  transaction as the action it describes; the triggers stop the application
+  rewriting it, but someone with database-owner access still could. Porting the
+  chain here is a separate item.
+- **Deliberately NOT done:** tickets or case states; dispute-like decisions
+  (a bigger correction than the ceilings allow is SUPER_ADMIN's, as for
+  merchants); an email channel; any typed destination number; any support
+  edit/delete of notes; reversal ceilings (a reversal of a large DEBIT
+  adjustment credits uncapped — an existing gap on the merchant endpoint too).
+- **Latent bug in the MERCHANT endpoints, found here and NOT changed:**
+  `POST /loyalty/transactions/adjust` accepts a `reason` up to 1000 characters
+  into `loyalty_transactions.reference` VARCHAR(100). Measured: 101+ characters
+  fail the INSERT and come back as `409 CONFLICT` "…the original may already
+  have succeeded" — it did not. Worse, a transaction whose reference is 97–100
+  characters can NEVER be reversed: `REV-` + reference overflows the same column
+  and the reversal's catch maps every `DataIntegrityViolationException` to
+  `409 ALREADY_REVERSED`, which that endpoint's Swagger tells clients to "treat
+  as success". The earn request's `reference` has no `@Size` at all (101+ →
+  `409 DUPLICATE_REFERENCE`). The support caps above are sized to avoid all of
+  it; fixing the merchant contract is a separate change.
+- **Config** (`loyalty.support.*`, `SupportProperties`):
+  `LOYALTY_SUPPORT_LOOKUP_TTL` (PT12H), `LOYALTY_SUPPORT_MESSAGE_SIGNATURE`,
+  `LOYALTY_SUPPORT_SMS_MAX_CHARACTERS` (459),
+  `LOYALTY_SUPPORT_WHATSAPP_MAX_CHARACTERS` (1000, ≤ 1600),
+  `LOYALTY_SUPPORT_ALLOWED_LINK_HOSTS` (innbucks.co.zw),
+  `LOYALTY_SUPPORT_MESSAGES_PER_AGENT_PER_HOUR` (60),
+  `LOYALTY_SUPPORT_MESSAGES_PER_RECIPIENT_PER_DAY` (5). Channels use the
+  existing `BANK_API_*` / `WHATSAPP_*` settings; a `change-me` WhatsApp key
+  counts as unprovisioned.
+- **No gateway change.** It rides `loyalty-service-route` (`/loyalty/**`) and
+  is NOT an internal surface: authenticated like any staff endpoint, no
+  `permitAll`, no deny route.
+- Pinned by `JwtFilterPermissionsTest`, `SupportSecurityTest`,
+  `SupportCustomerFlowTest`, `SupportMessageFlowTest`, `SupportActionFlowTest`,
+  `SupportMessageComposerTest`, `SupportReasonWidthTest`, `PhoneSpellingsTest`
+  and the `LoyaltyDataException` case in `GlobalExceptionHandlerDispatchTest`.
 
 ## Cryptography & key management (OWASP A02)
 

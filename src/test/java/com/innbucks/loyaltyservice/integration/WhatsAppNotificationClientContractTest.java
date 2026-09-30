@@ -14,6 +14,7 @@ import java.time.Duration;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -157,6 +158,26 @@ class WhatsAppNotificationClientContractTest {
         assertThatThrownBy(() -> client.sendCustomNotification("+263771234567", tooLong))
                 .isInstanceOf(NotificationDeliveryException.class)
                 .hasMessageContaining("1600");
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/custom-notification")));
+    }
+
+    @Test
+    @DisplayName("isConfigured: a URL and a real key; a blank key or the committed change-me placeholder is not")
+    void isConfigured_refusesBlankAndPlaceholderKeys() {
+        WhatsAppProperties p = new WhatsAppProperties();
+        p.setBaseUrl("http://localhost:" + wireMock.port());
+        p.setApiKey("real-key");
+        RestClient rc = RestClient.builder().baseUrl(p.getBaseUrl()).build();
+        assertThat(new WhatsAppNotificationClient(rc, p).isConfigured()).isTrue();
+
+        p.setApiKey("change-me-whatsapp-api-key");
+        assertThat(new WhatsAppNotificationClient(rc, p).isConfigured()).isFalse();
+        p.setApiKey(" ");
+        assertThat(new WhatsAppNotificationClient(rc, p).isConfigured()).isFalse();
+        p.setApiKey("real-key");
+        p.setBaseUrl("");
+        assertThat(new WhatsAppNotificationClient(rc, p).isConfigured()).isFalse();
+        // Asking never touches the network.
         wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/custom-notification")));
     }
 }

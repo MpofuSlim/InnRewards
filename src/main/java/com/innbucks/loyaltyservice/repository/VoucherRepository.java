@@ -213,4 +213,51 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID>,
     List<Voucher> findExpiringForWarning(@Param("now") Instant now,
                                          @Param("cutoff") Instant cutoff,
                                          Pageable pageable);
+
+    // ---- Phone finders for the customer-support 360 (V55 indexes) ----
+    //
+    // A phone can sit on a voucher in three roles. HELD mirrors
+    // VoucherService.holderPhone's precedence exactly: the assignee phone when
+    // there is one, else the assigned account's — so the voucher support shows
+    // as "held" is the voucher that customer would be allowed to redeem. `phones`
+    // is every stored spelling of one number (sender and some assignee columns
+    // were written as typed); `holderAccounts` is the phone's projection ids and
+    // must not be empty (JPQL IN () is not valid SQL — callers pass a sentinel).
+
+    String HELD_BY_PHONE = """
+            (v.assigneePhone IN :phones
+             OR ((v.assigneePhone IS NULL OR TRIM(v.assigneePhone) = '')
+                 AND v.assignedUserId IN :holderAccounts))""";
+
+    @Query(value = "SELECT v FROM Voucher v WHERE " + HELD_BY_PHONE + " ORDER BY v.issuedAt DESC, v.id",
+            countQuery = "SELECT COUNT(v) FROM Voucher v WHERE " + HELD_BY_PHONE)
+    Page<Voucher> findHeldByPhone(@Param("phones") Collection<String> phones,
+                                  @Param("holderAccounts") Collection<UUID> holderAccounts,
+                                  Pageable pageable);
+
+    @Query("SELECT COUNT(v) FROM Voucher v WHERE " + HELD_BY_PHONE)
+    long countHeldByPhone(@Param("phones") Collection<String> phones,
+                          @Param("holderAccounts") Collection<UUID> holderAccounts);
+
+    /** Held AND in one of {@code statuses} — pass {@link Voucher#LIVE_STATUSES}, never a hand-spelled list. */
+    @Query("SELECT COUNT(v) FROM Voucher v WHERE " + HELD_BY_PHONE + " AND v.status IN :statuses")
+    long countHeldByPhoneInStatus(@Param("phones") Collection<String> phones,
+                                  @Param("holderAccounts") Collection<UUID> holderAccounts,
+                                  @Param("statuses") Collection<Voucher.Status> statuses);
+
+    /** Vouchers this phone GIFTED (V46 sender identity). */
+    Page<Voucher> findBySenderPhoneInOrderByIssuedAtDesc(Collection<String> phones, Pageable pageable);
+
+    long countBySenderPhoneIn(Collection<String> phones);
+
+    /** Vouchers this phone TRANSFERRED AWAY (V34 single-hop transfer). */
+    Page<Voucher> findByTransferredFromPhoneInOrderByTransferredAtDesc(Collection<String> phones,
+                                                                      Pageable pageable);
+
+    long countByTransferredFromPhoneIn(Collection<String> phones);
+
+    /** Whether the phone appears on any voucher in any role — part of "is this customer on record". */
+    boolean existsByAssigneePhoneInOrSenderPhoneInOrTransferredFromPhoneIn(Collection<String> assignee,
+                                                                          Collection<String> sender,
+                                                                          Collection<String> transferredFrom);
 }

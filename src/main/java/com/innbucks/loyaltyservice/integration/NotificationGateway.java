@@ -198,6 +198,16 @@ public class NotificationGateway {
         }
     }
 
+    /**
+     * The exact message a voucher's holder receives at issue — code included —
+     * for the customer-support resend, so a resent voucher reads the same as the
+     * original and there is one template, not two. The caller sends it only to
+     * the holder's own phone and never stores or logs it.
+     */
+    public String issueMessage(Voucher voucher) {
+        return buildMessage(voucher);
+    }
+
     private String buildMessage(Voucher voucher) {
         String name = (voucher.getAssigneeName() != null && !voucher.getAssigneeName().isBlank())
                 ? voucher.getAssigneeName() : "there";

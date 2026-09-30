@@ -212,8 +212,9 @@ public class NotificationGateway {
         } else {
             sb.append("your InnBucks voucher").append(forMerchant).append(" is ready. Code ");
         }
-        // Grouped in fours for the person reading it — "9087 8765 9876 4566". The
-        // till accepts it typed back with the spaces (VoucherCodes.normalize).
+        // Grouped in fours for the person reading it — "9087-8765-9876-4566". The
+        // till accepts it typed back with the hyphens, or with spaces, or raw
+        // (VoucherCodes.normalize strips both).
         sb.append(VoucherCodes.display(voucher.getCode()));
         String worth = describeValue(voucher);
         if (worth != null) {

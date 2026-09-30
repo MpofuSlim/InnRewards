@@ -278,7 +278,7 @@ class NotificationGatewayTest {
     void recipientMessage_showsANumericCodeGroupedInFours() {
         gateway.deliver(numericGift(), PHONE);
 
-        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("Code 9087 8765 9876 4566"));
+        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("Code 9087-8765-9876-4566"));
         verify(whatsApp, never()).sendCustomNotification(anyString(), contains("9087876598764566"));
     }
 
@@ -287,17 +287,17 @@ class NotificationGatewayTest {
         Voucher v = numericGift();
         gateway.deliverSenderCopy(v, v.getSenderPhone());
 
-        verify(whatsApp).sendCustomNotification(eq(v.getSenderPhone()), contains("Code 9087 8765 9876 4566"));
+        verify(whatsApp).sendCustomNotification(eq(v.getSenderPhone()), contains("Code 9087-8765-9876-4566"));
     }
 
     @Test
     void smsFallback_keepsTheGrouping() {
-        // SmsTextSanitizer collapses runs of spaces; single ASCII spaces survive.
+        // A hyphen is GSM-7, so SmsTextSanitizer leaves the grouping intact.
         doThrow(new RuntimeException("wa down"))
                 .when(whatsApp).sendCustomNotification(anyString(), anyString());
 
         gateway.deliver(numericGift(), PHONE);
 
-        verify(sms).sendSms(eq(PHONE), contains("9087 8765 9876 4566"), startsWith("VOUCHER-"));
+        verify(sms).sendSms(eq(PHONE), contains("9087-8765-9876-4566"), startsWith("VOUCHER-"));
     }
 }

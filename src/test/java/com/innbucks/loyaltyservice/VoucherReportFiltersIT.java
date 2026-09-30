@@ -8,9 +8,11 @@ import com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.Voucher;
+import com.innbucks.loyaltyservice.entity.VoucherBatch;
 import com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import com.innbucks.loyaltyservice.repository.VoucherBatchRepository;
 import com.innbucks.loyaltyservice.repository.VoucherPurchaseOrderRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.service.ReportingService;
@@ -41,6 +43,7 @@ class VoucherReportFiltersIT extends PostgresIntegrationTestBase {
     @Autowired TenantRepository tenants;
     @Autowired MerchantRepository merchants;
     @Autowired VoucherRepository vouchers;
+    @Autowired VoucherBatchRepository batches;
     @Autowired VoucherPurchaseOrderRepository orders;
     @Autowired ReportingService reporting;
 
@@ -74,7 +77,11 @@ class VoucherReportFiltersIT extends PostgresIntegrationTestBase {
         merchantB = merchant("Beta Fuel");
 
         free = voucher(merchantA, prefix + "33334444", "USD", "3.00", null, null, null, "issuer.one@example.test");
-        free.setBatchId(UUID.randomUUID());
+        VoucherBatch batch = new VoucherBatch();   // vouchers.batch_id is a real FK
+        batch.setTenantId(tenantId);
+        batch.setQuantity(1);
+        batch.setCampaign("spring-test");
+        free.setBatchId(batches.save(batch).getId());
         free.setCampaignSource("spring-test");
         vouchers.save(free);
 

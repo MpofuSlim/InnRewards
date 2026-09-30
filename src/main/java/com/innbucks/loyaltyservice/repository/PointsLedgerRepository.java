@@ -12,6 +12,10 @@ import java.util.UUID;
 public interface PointsLedgerRepository extends JpaRepository<PointsLedger, UUID> {
     List<PointsLedger> findTop50ByWalletIdOrderByCreatedAtDesc(UUID walletId);
 
+    /** Every ledger entry across a customer's wallets, newest first (support drill-down; V54 index). */
+    org.springframework.data.domain.Page<PointsLedger> findByWalletIdInOrderByCreatedAtDesc(
+            java.util.Collection<UUID> walletIds, org.springframework.data.domain.Pageable pageable);
+
     /**
      * Sum of every ledger delta for a wallet — the wallet's balance from the
      * append-only audit log, which is the financial source of truth. Used by

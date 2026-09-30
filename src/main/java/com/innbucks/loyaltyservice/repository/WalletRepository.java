@@ -20,6 +20,8 @@ public interface WalletRepository extends JpaRepository<Wallet, UUID> {
     /** Every wallet (MAIN + pockets) for a customer. */
     List<Wallet> findByPhoneNumber(String phoneNumber);
 
+    boolean existsByPhoneNumber(String phoneNumber);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM Wallet w WHERE w.id = :id")
     Optional<Wallet> lockById(@Param("id") UUID id);

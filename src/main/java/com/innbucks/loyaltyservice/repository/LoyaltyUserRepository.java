@@ -19,6 +19,8 @@ public interface LoyaltyUserRepository extends JpaRepository<LoyaltyUser, UUID> 
     // ACTIVE together when user-service confirms the signup.
     List<LoyaltyUser> findByPhoneNumber(String phoneNumber);
 
+    boolean existsByPhoneNumber(String phoneNumber);
+
     // PENDING accounts older than the TTL get aged out by the expiry sweeper.
     // Kept for compatibility; the sweeper now uses findStaleUnregistered so a
     // registered phone is never aged out.

@@ -85,6 +85,7 @@ public final class TestJwtFactory {
         private String organizationRole;
         private List<String> products;
         private boolean withoutOrganization;
+        private List<String> permissions;
         // Default: token is valid for 1 hour from now.
         private long ttlMillis = 3_600_000L;
 
@@ -140,7 +141,18 @@ public final class TestJwtFactory {
             return this;
         }
 
-        /** Token issued in the past with expiry also in the past — for expired-token tests. */
+        /**
+         * The {@code perms} claim, as user-service's {@code PermissionResolver}
+         * mints it — the concrete permission codes the caller's roles hold.
+         * Emitted verbatim, so a test can also put a malformed entry on the
+         * wire and prove {@code JwtFilter} drops it. Null (the default) omits
+         * the claim entirely, which is the shape of a pre-permissions token.
+         */
+        public Builder permissions(List<String> permissions) {
+            this.permissions = permissions == null ? null : List.copyOf(permissions);
+            return this;
+        }
+
         /** The session's organization claims, as user-service mints them (V39). */
         public Builder organization(UUID organizationId, String organizationRole, List<String> products) {
             this.organizationId = organizationId;
@@ -155,6 +167,7 @@ public final class TestJwtFactory {
             return this;
         }
 
+        /** Token issued in the past with expiry also in the past — for expired-token tests. */
         public Builder expired() {
             this.ttlMillis = -60_000L;
             return this;
@@ -181,6 +194,9 @@ public final class TestJwtFactory {
             }
             if (userId != null) {
                 builder.claim("userUuid", userId.toString());
+            }
+            if (permissions != null) {
+                builder.claim("perms", permissions);
             }
             UUID org = organizationId;
             String orgRole = organizationRole;

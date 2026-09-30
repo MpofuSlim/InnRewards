@@ -58,4 +58,18 @@ public interface LoyaltyRefreshTokenRepository extends JpaRepository<LoyaltyRefr
     int revokeAllForPhone(@Param("phoneNumber") String phoneNumber,
                           @Param("now") Instant now,
                           @Param("reason") String reason);
+
+    /**
+     * How many session chains the phone could still renew right now: chains
+     * whose head row is unused, unrevoked and unexpired. What "signed in on N
+     * devices" means to a support agent, and what a support sign-out ends.
+     */
+    @Query("""
+            SELECT COUNT(DISTINCT t.chainId) FROM LoyaltyRefreshToken t
+             WHERE t.phoneNumber = :phoneNumber
+               AND t.revokedAt IS NULL
+               AND t.usedAt IS NULL
+               AND t.expiresAt > :now
+            """)
+    long countActiveChains(@Param("phoneNumber") String phoneNumber, @Param("now") Instant now);
 }

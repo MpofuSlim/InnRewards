@@ -378,6 +378,10 @@ loyalty:
     # payment-service extends it while a payment instrument is live, so the
     # effective window always outlives the code/prompt the customer is shown.
     purchase-order-ttl: ${LOYALTY_VOUCHER_ORDER_TTL:PT30M}
+    # Currencies the tills' own card machines settle in (V54). A voucher order
+    # in any other currency cannot be confirmed as paid by card (confirm-card),
+    # because the machine would charge the same number in its own currency.
+    card-pos-currencies: ${LOYALTY_CARD_POS_CURRENCIES:USD,ZWG}
     fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
     fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
     # Voucher guessing lockout (VoucherGuessGuard): this many unknown or

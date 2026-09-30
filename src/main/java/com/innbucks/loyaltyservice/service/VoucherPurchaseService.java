@@ -21,7 +21,12 @@ import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Voucher purchase orders (V47): a voucher is PAID FOR before it exists.
@@ -40,6 +45,10 @@ import java.util.UUID;
  *   <li><b>Cash</b> — a staff caller who took the money confirms it here
  *       ({@link #confirmCash}); their identity is recorded. Cash never
  *       touches payment-service.</li>
+ *   <li><b>Card machine</b> (V54) — a card swiped on the till's own terminal
+ *       is confirmed the same way ({@link #confirmCardPos}), plus the
+ *       terminal's approval code, and only in a currency the terminals settle
+ *       in. It never touches payment-service either.</li>
  * </ul>
  *
  * <p>Expiry is LAZY (see {@link VoucherPurchaseOrder}): nothing is reserved
@@ -56,6 +65,9 @@ import java.util.UUID;
 public class VoucherPurchaseService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
+    /** A terminal approval (authorisation) code: 4–12 letters or digits. */
+    private static final Pattern APPROVAL_CODE = Pattern.compile("[A-Z0-9]{4,12}");
+    private static final Pattern LAST4 = Pattern.compile("[0-9]{4}");
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
 
     private final VoucherPurchaseOrderRepository orders;
@@ -64,7 +76,9 @@ public class VoucherPurchaseService {
     private final MerchantAuthz merchantAuthz;
     private final SupportedCurrencies supportedCurrencies;
     private final ExchangeRateService fx;
+    private final StaffRegistry staffRegistry;
     private final Duration orderTtl;
+    private final Set<String> cardPosCurrencies;
 
     public VoucherPurchaseService(VoucherPurchaseOrderRepository orders,
                                   VoucherRepository vouchers,
@@ -72,6 +86,7 @@ public class VoucherPurchaseService {
                                   MerchantAuthz merchantAuthz,
                                   SupportedCurrencies supportedCurrencies,
                                   ExchangeRateService fx,
+                                  StaffRegistry staffRegistry,
                                   LoyaltyProperties props) {
         this.orders = orders;
         this.vouchers = vouchers;
@@ -79,7 +94,18 @@ public class VoucherPurchaseService {
         this.merchantAuthz = merchantAuthz;
         this.supportedCurrencies = supportedCurrencies;
         this.fx = fx;
+        this.staffRegistry = staffRegistry;
         this.orderTtl = props.voucher().purchaseOrderTtl();
+        this.cardPosCurrencies = parseCurrencies(props.voucher().cardPosCurrencies());
+    }
+
+    /** Blank (or unbound, in a unit test) falls back to the ZW terminals' USD + ZWG. */
+    static Set<String> parseCurrencies(String csv) {
+        String source = csv == null || csv.isBlank() ? "USD,ZWG" : csv;
+        return Arrays.stream(source.split(","))
+                .map(c -> c.trim().toUpperCase(Locale.ROOT))
+                .filter(c -> !c.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     public Dtos.VoucherPurchaseOrderResponse create(UUID tenantId, Dtos.PurchaseVoucherRequest req) {
@@ -167,7 +193,7 @@ public class VoucherPurchaseService {
     @Transactional(readOnly = true)
     public Dtos.VoucherPurchaseOrderResponse get(UUID tenantId, String orderRef) {
         VoucherPurchaseOrder order = requireTenantOrder(tenantId, orderRef);
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
+        requireCallerMayActOn(tenantId, order);
         return toResponse(order);
     }
 
@@ -176,53 +202,211 @@ public class VoucherPurchaseService {
      * payment proof, so it is gated on the same staff authz as issuing and
      * the confirmer's identity is recorded. Idempotent for a double-click on
      * an order already cash-confirmed; refused when the order was already
-     * paid electronically (the customer must not pay twice).
+     * paid another way (the customer must not pay twice).
      */
     public Dtos.VoucherPurchaseOrderResponse confirmCash(UUID tenantId, String orderRef) {
-        VoucherPurchaseOrder order = orders.lockByOrderRef(orderRef)
-                .filter(o -> o.getTenantId().equals(tenantId))
-                .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
-
+        VoucherPurchaseOrder order = lockConfirmable(tenantId, orderRef);
         if (order.getStatus() == VoucherPurchaseOrder.Status.PAID) {
             if (order.getPaidVia() == VoucherPurchaseOrder.PaidVia.CASH) {
                 return toResponse(order); // double-click replay
             }
             throw LoyaltyException.conflict("ORDER_ALREADY_PAID",
-                    "This order was already paid electronically — do not take cash for it.");
+                    "This order was already paid " + paidHow(order) + " — do not take cash for it.");
         }
+        requireOffSystemPayable(order, "take cash");
+        requireShopStaffNotConfirmingForStaff(order);
+
+        markPaid(order, VoucherPurchaseOrder.PaidVia.CASH, "CASH-" + UUID.randomUUID());
+        order.setCashConfirmedBy(confirmerIdentity());
+        issueForOrder(order);
+        log.info("Voucher purchase order cash-confirmed orderRef={} by={} voucherId={}",
+                order.getOrderRef(), order.getCashConfirmedBy(), order.getVoucherId());
+        return toResponse(order);
+    }
+
+    /**
+     * Staff confirmation of a card swiped on the TILL'S OWN card machine (V54).
+     * The terminal is outside our systems, so — like cash — the cashier's
+     * confirmation is the payment proof, with the same authz, double-payment
+     * guards and expiry rule. Two things cash does not need:
+     *
+     * <ul>
+     *   <li><b>The approval code from the terminal slip is required.</b> It is
+     *       the one fact tying the order to a real card transaction, so finance
+     *       can reconcile each voucher against the acquirer's settlement, and a
+     *       "card" click with no swipe behind it has nothing to show.</li>
+     *   <li><b>Only a currency the terminals settle in</b>
+     *       ({@code loyalty.voucher.card-pos-currencies}). A terminal charges the
+     *       number it is given in its own currency, so a ZAR 100 voucher swiped
+     *       on a USD terminal would take USD 100 — the overcharge the electronic
+     *       rails refuse for the same reason.</li>
+     * </ul>
+     *
+     * A double-click replay with the SAME approval code returns the paid order;
+     * a different code on an already card-paid order is refused, because it
+     * means a second swipe.
+     */
+    public Dtos.VoucherPurchaseOrderResponse confirmCardPos(UUID tenantId, String orderRef,
+                                                           String approvalCode, String last4) {
+        String code = approvalCode == null ? "" : approvalCode.trim().toUpperCase(Locale.ROOT);
+        if (!APPROVAL_CODE.matcher(code).matches()) {
+            throw LoyaltyException.badRequest("APPROVAL_CODE_REQUIRED",
+                    "Enter the approval code printed on the card machine slip (4 to 12 letters or digits).");
+        }
+        String cardLast4 = last4 == null || last4.isBlank() ? null : last4.trim();
+        if (cardLast4 != null && !LAST4.matcher(cardLast4).matches()) {
+            throw LoyaltyException.badRequest("INVALID_CARD_LAST4",
+                    "last4 must be exactly the last four digits of the card, or left out.");
+        }
+
+        VoucherPurchaseOrder order = lockConfirmable(tenantId, orderRef);
+        if (order.getStatus() == VoucherPurchaseOrder.Status.PAID) {
+            if (order.getPaidVia() == VoucherPurchaseOrder.PaidVia.CARD_POS
+                    && code.equals(order.getCardApprovalCode())) {
+                return toResponse(order); // double-click replay
+            }
+            throw LoyaltyException.conflict("ORDER_ALREADY_PAID",
+                    "This order was already paid " + paidHow(order) + " — do not charge the card.");
+        }
+        String currency = order.getCurrency() == null ? "" : order.getCurrency().toUpperCase(Locale.ROOT);
+        if (!cardPosCurrencies.contains(currency)) {
+            throw new LoyaltyException(HttpStatus.UNPROCESSABLE_ENTITY, "CARD_CURRENCY_UNSUPPORTED",
+                    "The card machine can't take payment in " + currency + ". Take cash, or create the "
+                            + "order in " + String.join(" or ", cardPosCurrencies.stream().sorted().toList())
+                            + ".");
+        }
+        requireOffSystemPayable(order, "swipe the card");
+        requireShopStaffNotConfirmingForStaff(order);
+
+        markPaid(order, VoucherPurchaseOrder.PaidVia.CARD_POS, "CARD-" + code + "-" + UUID.randomUUID());
+        order.setCardApprovalCode(code);
+        order.setCardLast4(cardLast4);
+        order.setCashConfirmedBy(confirmerIdentity());
+        issueForOrder(order);
+        log.info("Voucher purchase order card-confirmed orderRef={} by={} voucherId={}",
+                order.getOrderRef(), order.getCashConfirmedBy(), order.getVoucherId());
+        return toResponse(order);
+    }
+
+    /** Lock the order, pin it to the tenant (a foreign order is a plain 404)
+     *  and apply the issue-grade staff authz — shared by every off-system
+     *  confirmation so cash and card cannot drift apart. */
+    private VoucherPurchaseOrder lockConfirmable(UUID tenantId, String orderRef) {
+        VoucherPurchaseOrder order = orders.lockByOrderRef(orderRef)
+                .filter(o -> o.getTenantId().equals(tenantId))
+                .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
+        requireCallerMayActOn(tenantId, order);
+        return order;
+    }
+
+    /**
+     * Merchant authz, plus the OUTLET pin for shop staff: a caller whose token
+     * names a shop (a cashier or shop admin) may read or confirm only orders
+     * created at that shop. Cash taken at one till for an order raised at
+     * another branch lands in a drawer nobody reconciles against it. An order
+     * with no shop (raised by a merchant admin) stays reachable by the
+     * merchant's staff. A foreign-shop order is a plain 404, the same answer
+     * as a missing one.
+     */
+    private void requireCallerMayActOn(UUID tenantId, VoucherPurchaseOrder order) {
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
+        UUID callerShop = CallerDetails.currentShopId();
+        if (callerShop != null && order.getShopId() != null && !callerShop.equals(order.getShopId())) {
+            throw LoyaltyException.notFound("purchase order");
+        }
+    }
+
+    /**
+     * Shop staff (cashiers and shop admins) may sell vouchers at the till, but
+     * may not VOUCH for an off-system payment on a voucher that goes to staff.
+     * A cash or card-machine confirmation is the cashier's word, so without this
+     * a cashier could raise an order to their own phone, or a colleague's, press
+     * "cash received" with nothing in the drawer, and walk away with a voucher.
+     * Refused when the recipient is on the merchant's staff list, or when the
+     * caller's own phone is the recipient, the sender or the payer. The customer
+     * can still pay electronically (EcoCash / InnBucks move real money), or a
+     * merchant admin can confirm. Merchant admins and platform staff are not
+     * subject to it.
+     *
+     * <p>The staff list fails open during a user-service outage (see
+     * {@link StaffRegistry}); the caller's-own-phone check needs no network and
+     * holds throughout.
+     */
+    private void requireShopStaffNotConfirmingForStaff(VoucherPurchaseOrder order) {
+        if (!CallerDetails.hasAnyRole("ROLE_SHOP_USER", "ROLE_SHOP_ADMIN")
+                || CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN")) {
+            return;
+        }
+        String callerPhone = CallerDetails.currentPhoneNumber();
+        if (voucherService.samePhone(callerPhone, order.getAssigneePhone())
+                || voucherService.samePhone(callerPhone, order.getSenderPhone())
+                || voucherService.samePhone(callerPhone, order.getPayerPhone())) {
+            log.warn("Off-system confirmation refused: shop staff on their own voucher orderRef={} by={}",
+                    order.getOrderRef(), confirmerIdentity());
+            throw LoyaltyException.forbidden("SELF_CONFIRM",
+                    "You can't confirm a cash or card payment for a voucher to or from your own phone. "
+                            + "Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.");
+        }
+        if (staffRegistry.isStaffPhone(order.getMerchantId(), order.getAssigneePhone())) {
+            log.warn("Off-system confirmation refused: recipient is merchant staff orderRef={} by={}",
+                    order.getOrderRef(), confirmerIdentity());
+            throw LoyaltyException.forbidden("STAFF_RECIPIENT",
+                    "This voucher is for a staff member, so shop staff can't confirm a cash or card payment "
+                            + "for it. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.");
+        }
+    }
+
+    /** Who confirmed an off-system payment: email, else phone, else account id.
+     *  Cashier accounts may have no email; the record must still name them. */
+    private static String confirmerIdentity() {
+        String email = CallerDetails.currentEmail();
+        if (email != null && !email.isBlank()) return email;
+        String phone = CallerDetails.currentPhoneNumber();
+        if (phone != null && !phone.isBlank()) return phone;
+        UUID userId = CallerDetails.currentUserId();
+        return userId == null ? null : userId.toString();
+    }
+
+    /**
+     * The guards every off-system payment shares, after the paid-already
+     * check: not cancelled, no electronic payment still live, not expired.
+     */
+    private void requireOffSystemPayable(VoucherPurchaseOrder order, String action) {
         if (order.getStatus() == VoucherPurchaseOrder.Status.CANCELLED) {
             throw LoyaltyException.conflict("ORDER_NOT_CONFIRMABLE",
                     "This order was cancelled and can no longer be paid.");
         }
         // An EcoCash prompt, InnBucks code or card checkout for this order may
-        // still be completed by the customer. Taking cash now is how a customer
-        // pays twice: their late approval lands on an already-paid order, is
-        // refused (ORDER_ALREADY_PAID) and becomes a manual refund. Refused
-        // until the instrument's window (instrument TTL + margin, recorded by
-        // extend-expiry) has passed; the console shows the countdown.
+        // still be completed by the customer. Taking money another way now is
+        // how a customer pays twice: their late approval lands on an
+        // already-paid order, is refused (ORDER_ALREADY_PAID) and becomes a
+        // manual refund. Refused until the instrument's window (instrument TTL
+        // + margin, recorded by extend-expiry) has passed; the console shows the
+        // countdown.
         Instant now = Instant.now();
         if (order.electronicPaymentPending(now)) {
             long minutes = Math.max(1, (Duration.between(now, order.getElectronicPaymentUntil()).getSeconds() + 59) / 60);
             throw LoyaltyException.conflict("ELECTRONIC_PAYMENT_PENDING",
                     "An EcoCash, InnBucks or card payment for this order is still waiting for the customer. "
-                            + "Don't take cash now: let the customer finish paying, or wait about " + minutes
+                            + "Don't " + action + " now: let the customer finish paying, or wait about " + minutes
                             + " minute" + (minutes == 1 ? "" : "s") + " for it to lapse and try again.");
         }
-        // Unlike a LATE electronic confirmation (money already moved), cash is
-        // being taken NOW — an expired order is simply re-created, so refusing
-        // costs nothing and keeps the amount/FX snapshot fresh.
-        if (!order.payable(Instant.now())) {
+        // Unlike a LATE electronic confirmation (money already moved), this
+        // money is being taken NOW — an expired order is simply re-created, so
+        // refusing costs nothing and keeps the amount/FX snapshot fresh.
+        if (!order.payable(now)) {
             throw LoyaltyException.conflict("ORDER_EXPIRED",
                     "This purchase order has expired — create a new one and take payment again.");
         }
+    }
 
-        markPaid(order, VoucherPurchaseOrder.PaidVia.CASH, "CASH-" + UUID.randomUUID());
-        order.setCashConfirmedBy(CallerDetails.currentEmail());
-        issueForOrder(order);
-        log.info("Voucher purchase order cash-confirmed orderRef={} by={} voucherId={}",
-                order.getOrderRef(), order.getCashConfirmedBy(), order.getVoucherId());
-        return toResponse(order);
+    private static String paidHow(VoucherPurchaseOrder order) {
+        if (order.getPaidVia() == null) return "";
+        return switch (order.getPaidVia()) {
+            case GATEWAY -> "electronically";
+            case CASH -> "in cash";
+            case CARD_POS -> "on the card machine";
+        };
     }
 
     // ------------------------------------------------------------------
@@ -371,7 +555,8 @@ public class VoucherPurchaseService {
                 order.getAmount(), order.getCurrency(), order.getPayerPhone(),
                 order.getExpiresAt(),
                 order.getPaidVia() == null ? null : order.getPaidVia().name(),
-                order.getPaidAt(), voucher, order.getElectronicPaymentUntil());
+                order.getPaidAt(), voucher, order.getElectronicPaymentUntil(),
+                order.getCardApprovalCode());
     }
 
     private static String firstNonBlank(String... values) {

@@ -1343,6 +1343,44 @@ along via `VoucherService.issueFromOrder` → `finishIssue`).
   later; cash after the window is then the same refund case, now narrowed from
   "any time" to that rare tail. Pinned by the double-payment cases in
   `VoucherPurchaseServiceTest`.
+- **A card swiped on the till's OWN machine is confirmed like cash (V54)** —
+  `POST /loyalty/vouchers/purchase/{ref}/confirm-card`, `paid_via = CARD_POS`.
+  Not the online ZimSwitch card checkout (that is `POST /payments`): the
+  terminal is outside our systems, so the cashier's word is the proof, with
+  cash's authz, double-payment and expiry guards (one shared
+  `requireOffSystemPayable`, so the two cannot drift). Two rules cash does not
+  have, both load-bearing: the **slip's approval code is required** — the only
+  fact that reconciles the voucher against the acquirer's settlement, and what
+  makes a "card" click with no swipe behind it visible — and the order must be
+  priced in a currency the terminals settle in (`loyalty.voucher.card-pos-currencies`,
+  `LOYALTY_CARD_POS_CURRENCIES`, default `USD,ZWG`; else `422
+  CARD_CURRENCY_UNSUPPORTED`), because a terminal charges the number it is given
+  in ITS currency — the same overcharge payment-service's electronic rails
+  refuse. Recorded as its own method, never as CASH: counted as cash, every card
+  sale is a drawer shortage plus an unexplained settlement credit. The PAN is
+  never stored (`card_last4` is optional). `PaidViaCheckConstraintTest` ties the
+  CHECK to the enum — the drift payment-service's V16 and this repo's V52 fixed.
+- **Cashiers (SHOP_USER) sell vouchers through this flow (owner decision,
+  2026-09-30)** — they are the ones at the till. All four endpoints (create,
+  poll, confirm-cash, confirm-card) admit SHOP_USER; the FREE
+  `POST /loyalty/vouchers/issue` stays admin-only, so a cashier can hand out a
+  voucher only against a payment. Three guards make that safe, all in
+  `VoucherPurchaseService`, none in `@PreAuthorize`:
+  (1) **shop pin** (`requireCallerMayActOn`, on get AND on every confirm):
+  a token naming a shop reaches only orders of THAT shop, or orders with no
+  shop (an admin-raised order the merchant's till settles); another shop's
+  order is a 404 like an unknown one, so no cross-shop oracle;
+  (2) **`403 SELF_CONFIRM`**: shop staff (SHOP_USER / SHOP_ADMIN not also
+  holding MERCHANT_ADMIN / SUPER_ADMIN) cannot confirm cash or card on an
+  order whose assignee, sender OR payer is their own phone
+  (`VoucherService.samePhone`, E.164-canonical, so `0771…` = `+263771…`);
+  (3) **`403 STAFF_RECIPIENT`**: nor on one whose assignee is merchant staff
+  (`StaffRegistry.isStaffPhone`, fail-open like every other staff check).
+  Off-system confirmation is the only step where the cashier's word IS the
+  payment; the EcoCash / InnBucks / online-card rails are never refused on
+  these grounds, because the money itself proves the sale. `cash_confirmed_by`
+  records email, else phone, else user id — a till account may have no email.
+  Pinned by the `aCashier_*` cases in `VoucherPurchaseServiceTest`.
 - Config: `loyalty.voucher.purchase-order-ttl` (`LOYALTY_VOUCHER_ORDER_TTL`,
   default PT30M); payment-service extends the window past its instrument TTL
   via extend-expiry (1..60 min, never shortens). No gateway route changes:

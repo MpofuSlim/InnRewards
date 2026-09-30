@@ -197,33 +197,50 @@ class VoucherSenderIdentityTest {
     }
 
     @Test
-    void selfSend_sameSenderAndRecipientPhone_isRefused() {
-        // "Hi Tawanda, Tawanda Mpofu sent you a voucher" — the till put the
-        // customer's own number in both fields. A gift needs two people; a
-        // voucher for the customer themselves leaves the sender blank.
-        assertThatThrownBy(() -> service.issue(TENANT,
-                request("Tawanda Mpofu", RECIPIENT_PHONE, RECIPIENT_PHONE)))
-                .isInstanceOf(com.innbucks.loyaltyservice.exception.LoyaltyException.class)
-                .extracting(e -> ((com.innbucks.loyaltyservice.exception.LoyaltyException) e).getCode())
-                .isEqualTo("SENDER_IS_RECIPIENT");
+    void selfIssue_sameSenderAndRecipientPhone_isIssued_withOneMessage() {
+        // Owner decision (2026-09-30): issuing to yourself shows your name as
+        // both sender and recipient. It used to be refused SENDER_IS_RECIPIENT.
+        Dtos.VoucherResponse resp = service.issue(TENANT,
+                request("Tawanda Mpofu", RECIPIENT_PHONE, RECIPIENT_PHONE));
 
-        verify(vouchers, never()).save(any(Voucher.class));
-        verify(notifications, never()).deliver(any(), anyString());
+        Voucher v = saved();
+        assertThat(resp.senderPhone()).isEqualTo(RECIPIENT_PHONE);
+        assertThat(resp.senderName()).isEqualTo("Tawanda Mpofu");
+        verify(notifications).deliver(v, RECIPIENT_PHONE);
+        // One message, not an identical "copy" to the same phone.
         verify(notifications, never()).deliverSenderCopy(any(), anyString());
     }
 
     @Test
-    void selfSend_isCaughtAcrossSpellingsOfTheSameNumber() {
-        // "0786546765" and "+263786546765" are the same person.
+    void selfIssue_isRecognisedAcrossSpellingsOfTheSameNumber_andTheSenderIsStoredCanonically() {
+        // "0786546765" and "+263786546765" are the same person; the sender is
+        // stored as E.164 so reports show one spelling.
         when(userService.normalizePhone("0786546765")).thenReturn(RECIPIENT_PHONE);
-        when(userService.normalizePhone(RECIPIENT_PHONE)).thenReturn(RECIPIENT_PHONE);
 
-        assertThatThrownBy(() -> service.issue(TENANT,
-                request("Tawanda Mpofu", "0786546765", RECIPIENT_PHONE)))
-                .isInstanceOf(com.innbucks.loyaltyservice.exception.LoyaltyException.class)
-                .extracting(e -> ((com.innbucks.loyaltyservice.exception.LoyaltyException) e).getCode())
-                .isEqualTo("SENDER_IS_RECIPIENT");
-        verify(vouchers, never()).save(any(Voucher.class));
+        service.issue(TENANT, request("Tawanda Mpofu", "0786546765", RECIPIENT_PHONE));
+
+        Voucher v = saved();
+        assertThat(v.getSenderPhone()).isEqualTo(RECIPIENT_PHONE);
+        verify(notifications, never()).deliverSenderCopy(any(), anyString());
+    }
+
+    @Test
+    void aSenderPhoneThatDoesNotParse_isStoredAsTyped_notRefused() {
+        when(userService.normalizePhone("12345")).thenThrow(
+                com.innbucks.loyaltyservice.exception.LoyaltyException.badRequest("BAD_PHONE", "Invalid phone number: 12345"));
+
+        service.issue(TENANT, request("Tawanda Mpofu", " 12345 ", RECIPIENT_PHONE));
+
+        assertThat(saved().getSenderPhone()).isEqualTo("12345");
+    }
+
+    @Test
+    void isSelfIssued_comparesDigits_andIsFalseWhenEitherSideIsMissing() {
+        assertThat(VoucherService.isSelfIssued("+263786546765", "+263786546765")).isTrue();
+        assertThat(VoucherService.isSelfIssued("+263 78 654 6765", "+263786546765")).isTrue();
+        assertThat(VoucherService.isSelfIssued("+263782608767", "+263786546765")).isFalse();
+        assertThat(VoucherService.isSelfIssued(null, "+263786546765")).isFalse();
+        assertThat(VoucherService.isSelfIssued("+263786546765", " ")).isFalse();
     }
 
     @Test

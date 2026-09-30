@@ -67,53 +67,75 @@ class SupportMessageComposerTest {
         assertThat(SupportMessageComposer.smsSegments("a".repeat(460))).isEqualTo(4);
     }
 
-    @ParameterizedTest
+    /**
+     * The shared contract's REFUSE list, verbatim — marketplace pins the same
+     * strings, so one console refuses the same text on both services.
+     */
+    @ParameterizedTest(name = "refused: {0}")
     @ValueSource(strings = {
-            "Visit https://innbucks.co.zw/loyalty",
-            "Visit http://innbucks.co.zw",
-            "Visit https://help.innbucks.co.zw/faq?x=1.",
-            "Visit www.innbucks.co.zw today",
-            "Visit innbucks.co.zw/vouchers",
-            "HTTPS://INNBUCKS.CO.ZW/X",
-            "No link here at all, 3.50/month is not one either",
-            "Plain innbucks.co.zw with no path is not a link by the contract's definition"
+            "Pay at https://bit.ly/x",
+            "see www.evil.example now",
+            "go to evil.example",
+            "email refunds@gmail.com",
+            "http://10.0.0.1/pay",
+            "open 10.0.0.1/pay",
+            "https://innbucks.co.zw@evil.example/x",
+            "innbucks.co.zw.evil.example/x",
+            "innbucks.c\u043e.zw/track",   // Cyrillic o: SEEN as a host, and refused
+            "Thanks.Your order is ready"     // the accepted false positive
     })
-    @DisplayName("allowed hosts, their subdomains, and link-free text pass")
-    void allowed(String text) {
+    void refused(String text) {
+        assertThat(SupportMessageComposer.firstDisallowedHost(text, ALLOWED)).isPresent();
+    }
+
+    /** The shared contract's PASS list, verbatim. */
+    @ParameterizedTest(name = "passes: {0}")
+    @ValueSource(strings = {
+            "Track at https://innbucks.co.zw/track",
+            "See www.innbucks.co.zw.",
+            "shop.innbucks.co.zw/deals",
+            "Write to support@innbucks.co.zw",
+            "Your order MKT-8B3E5D7F9A1C costs USD 25.99, e.g. today.",
+            "Collect after 3.00pm",
+            "It is 1.5kg"
+    })
+    void passes(String text) {
         assertThat(SupportMessageComposer.firstDisallowedHost(text, ALLOWED)).isEmpty();
     }
 
     @Test
-    @DisplayName("any other host is named, in every URL-like form")
-    void disallowedHosts_areNamed() {
-        assertThat(SupportMessageComposer.firstDisallowedHost("Go to https://evil.example/pay", ALLOWED))
+    @DisplayName("the refused host is the one a browser or mail client would actually reach")
+    void theRefusedHostIsTheRealDestination() {
+        assertThat(SupportMessageComposer.firstDisallowedHost("email refunds@gmail.com", ALLOWED))
+                .contains("gmail.com");
+        assertThat(SupportMessageComposer.firstDisallowedHost("https://innbucks.co.zw@evil.example/x", ALLOWED))
                 .contains("evil.example");
-        assertThat(SupportMessageComposer.firstDisallowedHost("Go to www.evil.example", ALLOWED))
-                .contains("www.evil.example");
-        assertThat(SupportMessageComposer.firstDisallowedHost("Go to evil.example/pay now", ALLOWED))
+        assertThat(SupportMessageComposer.firstDisallowedHost("innbucks.co.zw@evil.example", ALLOWED))
                 .contains("evil.example");
+        assertThat(SupportMessageComposer.firstDisallowedHost("open 10.0.0.1/pay", ALLOWED))
+                .contains("10.0.0.1");
+        assertThat(SupportMessageComposer.firstDisallowedHost("ftp://files.evil.example/a", ALLOWED))
+                .contains("files.evil.example");
+        assertThat(SupportMessageComposer.firstDisallowedHost("Thanks.Your order is ready", ALLOWED))
+                .contains("thanks.your");
         assertThat(SupportMessageComposer.firstDisallowedHost("ok https://innbucks.co.zw then https://bit.ly/x", ALLOWED))
                 .contains("bit.ly");
     }
 
     @Test
-    @DisplayName("look-alikes of the allowed host are refused: suffix tricks, userinfo, and full-width characters")
+    @DisplayName("look-alikes of the allowed host are refused: suffix tricks and full-width characters")
     void lookAlikes_areRefused() {
         // A different registrable domain that merely ENDS in our name.
         assertThat(SupportMessageComposer.firstDisallowedHost("https://evilinnbucks.co.zw/", ALLOWED))
                 .contains("evilinnbucks.co.zw");
-        // Our name as a subdomain of someone else's.
-        assertThat(SupportMessageComposer.firstDisallowedHost("https://innbucks.co.zw.evil.example/", ALLOWED))
-                .contains("innbucks.co.zw.evil.example");
-        // userinfo: a browser opens evil.example.
-        assertThat(SupportMessageComposer.firstDisallowedHost("https://innbucks.co.zw@evil.example/login", ALLOWED))
-                .contains("evil.example");
+        assertThat(SupportMessageComposer.firstDisallowedHost("evilinnbucks.co.zw", ALLOWED))
+                .contains("evilinnbucks.co.zw");
         // Full-width letters, NFKC-folded before the check.
-        assertThat(SupportMessageComposer.firstDisallowedHost("ｈｔｔｐｓ://ｅｖｉｌ.example/x", ALLOWED))
+        assertThat(SupportMessageComposer.firstDisallowedHost("\uff48\uff54\uff54\uff50\uff53://\uff45\uff56\uff49\uff4c.example/x", ALLOWED))
                 .contains("evil.example");
-        // A scheme with no host at all.
-        assertThat(SupportMessageComposer.firstDisallowedHost("click http:// now", ALLOWED))
-                .contains("(no host)");
+        // A query string that happens to contain a URL does not change the host.
+        assertThat(SupportMessageComposer.firstDisallowedHost("evil.example/r?u=https://innbucks.co.zw", ALLOWED))
+                .contains("evil.example");
     }
 
     @Test

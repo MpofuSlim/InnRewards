@@ -43,7 +43,8 @@ import java.util.UUID;
  * <p>The order of a send is the contract's, and each step is load-bearing:
  * <ol>
  *   <li>Validate everything — channel provisioned (503 {@code channel_unavailable}
- *       before anything is written), body, links, length.</li>
+ *       before anything is written; SMS_THEN_WHATSAPP needs either channel),
+ *       body, links, length.</li>
  *   <li>CLAIM: a PENDING {@code support_message} row, after both rate limits,
  *       in its own short transaction. That row is what makes the attempt
  *       count.</li>
@@ -101,7 +102,7 @@ public class SupportMessageService {
         requireWithinLength(channel, rendered);
         SupportMessage claimed = ledger.claim(agent, new SupportMessageLedger.Draft(customer.phone(),
                 SupportMessage.ROLE_CUSTOMER, SupportMessage.KIND_CUSTOM, channel,
-                rendered.primaryText(channel), SupportActivity.SUBJECT_PHONE, customer.phone()));
+                legsFor(channel).firstText(rendered), SupportActivity.SUBJECT_PHONE, customer.phone()));
         return deliverAndComplete(agent, claimed, customer.phone(), rendered,
                 SupportActivityService.detail("lookupId", lookupId));
     }
@@ -199,27 +200,16 @@ public class SupportMessageService {
     /** Runs with NO transaction open: the rows are claimed before and completed after. */
     private Delivery deliver(SupportMessage.Channel channel, String recipient,
                              SupportMessageComposer.Rendered rendered, String reference) {
-        switch (channel) {
-            case SMS -> {
-                return trySms(recipient, rendered, reference)
-                        ? sent(SupportMessage.DeliveredVia.SMS, rendered.smsText())
-                        : failed(rendered.smsText(), "sms_failed");
-            }
-            case WHATSAPP -> {
-                return tryWhatsApp(recipient, rendered)
-                        ? sent(SupportMessage.DeliveredVia.WHATSAPP, rendered.whatsappText())
-                        : failed(rendered.whatsappText(), "whatsapp_failed");
-            }
-            case SMS_THEN_WHATSAPP -> {
-                if (trySms(recipient, rendered, reference)) {
-                    return sent(SupportMessage.DeliveredVia.SMS, rendered.smsText());
-                }
-                return tryWhatsApp(recipient, rendered)
-                        ? sent(SupportMessage.DeliveredVia.WHATSAPP, rendered.whatsappText())
-                        : failed(rendered.smsText(), "sms_and_whatsapp_failed");
-            }
-            default -> throw new IllegalStateException("Unhandled channel " + channel);
+        Legs legs = legsFor(channel);
+        if (legs.sms() && trySms(recipient, rendered, reference)) {
+            return sent(SupportMessage.DeliveredVia.SMS, rendered.smsText());
         }
+        if (legs.whatsApp() && tryWhatsApp(recipient, rendered)) {
+            return sent(SupportMessage.DeliveredVia.WHATSAPP, rendered.whatsappText());
+        }
+        String failureCode = legs.sms() && legs.whatsApp() ? "sms_and_whatsapp_failed"
+                : legs.sms() ? "sms_failed" : "whatsapp_failed";
+        return failed(legs.firstText(rendered), failureCode);
     }
 
     private boolean trySms(String recipient, SupportMessageComposer.Rendered rendered, String reference) {
@@ -254,23 +244,49 @@ public class SupportMessageService {
     // ---- Validation ----
 
     /**
-     * 503 before anything is written. SMS_THEN_WHATSAPP needs BOTH: the agent
-     * chose a fallback, and a fallback that cannot happen is not one.
+     * 503 before anything is written. SMS and WHATSAPP need their own channel;
+     * SMS_THEN_WHATSAPP needs EITHER — it uses whichever legs this cell has, in
+     * order, and is unavailable only when neither is provisioned.
      */
     private void requireChannelAvailable(SupportMessage.Channel channel) {
-        boolean smsNeeded = channel != SupportMessage.Channel.WHATSAPP;
-        boolean whatsAppNeeded = channel != SupportMessage.Channel.SMS;
-        if (smsNeeded && !sms.isConfigured()) {
-            throw unavailable("SMS");
-        }
-        if (whatsAppNeeded && !whatsApp.isConfigured()) {
-            throw unavailable("WHATSAPP");
+        switch (channel) {
+            case SMS -> {
+                if (!sms.isConfigured()) throw unavailable("SMS is not configured on this cell.");
+            }
+            case WHATSAPP -> {
+                if (!whatsApp.isConfigured()) throw unavailable("WHATSAPP is not configured on this cell.");
+            }
+            case SMS_THEN_WHATSAPP -> {
+                if (!sms.isConfigured() && !whatsApp.isConfigured()) {
+                    throw unavailable("Neither SMS nor WHATSAPP is configured on this cell.");
+                }
+            }
         }
     }
 
-    private static LoyaltyException unavailable(String which) {
-        return LoyaltyException.serviceUnavailable("channel_unavailable",
-                which + " is not configured on this cell. Choose another channel.");
+    private static LoyaltyException unavailable(String what) {
+        return LoyaltyException.serviceUnavailable("channel_unavailable", what + " Choose another channel.");
+    }
+
+    /**
+     * The legs a send will actually attempt, in order. SMS_THEN_WHATSAPP tries
+     * SMS when SMS is provisioned, and WhatsApp when WhatsApp is — after a
+     * failed SMS, or directly when SMS is not provisioned.
+     */
+    private record Legs(boolean sms, boolean whatsApp) {
+
+        /** The text that goes out first — what is stored at claim and shown by the preview. */
+        String firstText(SupportMessageComposer.Rendered rendered) {
+            return sms ? rendered.smsText() : rendered.whatsappText();
+        }
+    }
+
+    private Legs legsFor(SupportMessage.Channel channel) {
+        return switch (channel) {
+            case SMS -> new Legs(true, false);
+            case WHATSAPP -> new Legs(false, true);
+            case SMS_THEN_WHATSAPP -> new Legs(sms.isConfigured(), whatsApp.isConfigured());
+        };
     }
 
     /** Strip HTML, trim, refuse empty, check links, append the signature. */
@@ -282,8 +298,9 @@ public class SupportMessageService {
         }
         SupportMessageComposer.firstDisallowedHost(body, props.messages().allowedLinkHosts()).ifPresent(host -> {
             throw new LoyaltyDataException(HttpStatus.BAD_REQUEST, "link_not_allowed",
-                    "Links to " + host + " are not allowed in a support message. Allowed: "
-                            + String.join(", ", props.messages().allowedLinkHosts()) + ".",
+                    "Links in a support message may only point at "
+                            + String.join(", ", props.messages().allowedLinkHosts()) + " - '" + host
+                            + "' is not one of them. If it is not meant as a link, add a space after the full stop.",
                     Map.of("host", host));
         });
         return SupportMessageComposer.withSignature(body, props.messages().signature());
@@ -311,8 +328,10 @@ public class SupportMessageService {
 
     private SupportDtos.PreviewResponse previewOf(SupportMessage.Channel channel, String role, String phone,
                                                   SupportMessageComposer.Rendered rendered) {
-        boolean whatsappOnly = channel == SupportMessage.Channel.WHATSAPP;
-        String text = rendered.primaryText(channel);
+        // The FIRST leg this cell will actually use: SMS_THEN_WHATSAPP on a cell
+        // with no SMS goes straight to WhatsApp, so that is what is previewed.
+        boolean whatsappOnly = !legsFor(channel).sms();
+        String text = whatsappOnly ? rendered.whatsappText() : rendered.smsText();
         int max = whatsappOnly ? props.messages().whatsappMaxCharacters() : props.messages().smsMaxCharacters();
         return new SupportDtos.PreviewResponse(channel.name(), role, MsisdnMasking.mask(phone), text,
                 text.length(), max,

@@ -2024,21 +2024,33 @@ builds the same surface; change them only in lock-step.
   lookups match every spelling of the number (`PhoneSpellings`: `+263…`,
   `263…`, `0…`, bare national); spaces/dashes are not matched.
 - **Record-bound messaging** (`SupportMessageService`, contract §4). Channels
-  SMS / WHATSAPP / SMS_THEN_WHATSAPP (WhatsApp only if the SMS fails, and both
-  must be provisioned). Body HTML-stripped, signed `- InnBucks Loyalty Support`
+  SMS / WHATSAPP / SMS_THEN_WHATSAPP. The last needs EITHER channel: it tries
+  SMS when SMS is provisioned, and WhatsApp when WhatsApp is — after a failed
+  SMS, or directly when the cell has no SMS — and is 503 only when neither is;
+  `failureCode` names what was tried (`sms_failed` / `whatsapp_failed` /
+  `sms_and_whatsapp_failed`). Body HTML-stripped, signed `- InnBucks Loyalty Support`
   on a new line, capped on the FINAL text: 459 SMS characters after
   `SmsTextSanitizer` (three GSM-7 segments), 1000 WhatsApp. **The sanitiser
   turns `:` and `/` into spaces, so a full URL never survives SMS** — the
-  preview shows the agent that. Links (`http(s)://`, `www.`, `host.tld/…`) must
-  point at `allowed-link-hosts` or a subdomain (userinfo, look-alike suffixes and
-  full-width characters are handled; a bare `host.tld` with no scheme or path is
-  NOT a link by the contract's definition). Order is load-bearing: validate
+  preview shows the agent that. **Link detection is STRICT and
+  character-identical to marketplace's** (`SupportMessageComposer.URL_LIKE`):
+  any `scheme://`, `www.`, an IPv4 address (bare or with a path), and a bare
+  `name.tld` with or without a path — labels are Unicode letters, so a Cyrillic
+  look-alike (`innbucks.cо.zw`) is SEEN and refused, never skipped — and an
+  e-mail address is judged by its domain. The host is taken after the LAST `@`
+  of every token (so `innbucks.co.zw@evil.example` is `evil.example`) and must be
+  an `allowed-link-host` or a subdomain of one. NFKC runs first, so full-width
+  characters cannot hide a link. Accepted false positive: a missing space after
+  a full stop (`Thanks.Your`) reads as a domain, and the refusal tells the agent
+  to add the space. `SupportProperties` refuses to BOOT on an allowed host that
+  is not plain ASCII (`IDN.toASCII` round-trip) or carries a path, and on a
+  WhatsApp cap above the gateway's own 1600. Order is load-bearing: validate
   (503 `channel_unavailable` before any row) → claim a PENDING row (both limits:
   60/agent/rolling hour, 5/recipient/rolling 24h, every attempt, every kind) →
   gateway call OUTSIDE any transaction → complete the row + `MESSAGE_SENT`. The
   claim takes two Postgres advisory locks (agent, then recipient — fixed order,
   no cycle) so two concurrent sends cannot both squeeze under a limit. All
-  channels failing is 502 `message_not_delivered` carrying the FAILED record. A
+  attempted channels failing is 502 `message_not_delivered` carrying the FAILED record. A
   process dying between claim and complete leaves a PENDING row that still
   counts. **Preview never refuses on length** — it reports `characters` vs
   `maxCharacters` (the send refuses, 400 `message_too_long`); it does refuse a

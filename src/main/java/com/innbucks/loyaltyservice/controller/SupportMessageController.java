@@ -64,8 +64,8 @@ public class SupportMessageController {
                     Typed "Your refund is done: see innbucks.co.zw/help" and asked for SMS, the example \
                     below is what the customer's phone shows.
 
-                    Returns what the customer would receive on the channel's FIRST leg: for SMS and \
-                    SMS_THEN_WHATSAPP, the text after GSM transliteration (`transliterated` says whether \
+                    Returns what the customer would receive on the channel's FIRST leg on this cell: for SMS \
+                    and SMS_THEN_WHATSAPP (when SMS is provisioned), the text after GSM transliteration (`transliterated` says whether \
                     the sanitiser changed anything — it turns `:` and `/` into spaces, so a full URL does \
                     not survive SMS); for WHATSAPP, the text as typed. The signature is included.
 
@@ -96,7 +96,7 @@ public class SupportMessageController {
                             @ExampleObject(name = "Link not allowed", value = """
                                     {
                                       "code": "link_not_allowed",
-                                      "message": "Links to evil.example are not allowed in a support message. Allowed: innbucks.co.zw.",
+                                      "message": "Links in a support message may only point at innbucks.co.zw - 'evil.example' is not one of them. If it is not meant as a link, add a space after the full stop.",
                                       "data": { "host": "evil.example" }
                                     }"""),
                             @ExampleObject(name = "Empty", value = """
@@ -125,14 +125,19 @@ public class SupportMessageController {
                     The recipient is ALWAYS the looked-up customer's phone. The body is HTML-stripped, \
                     checked for links (each must point at an allowed host or a subdomain of one), \
                     signed on a new line, and capped on its FINAL text: 459 characters for SMS (three \
-                    GSM-7 segments, after transliteration), 1000 for WhatsApp, both for SMS_THEN_WHATSAPP.
+                    GSM-7 segments, after transliteration), 1000 for WhatsApp, both for SMS_THEN_WHATSAPP. \
+                    A link is any scheme://, www., IPv4 address, bare name.tld or e-mail domain — so a \
+                    missing space after a full stop ("Thanks.Your") reads as one; the refusal says so.
 
                     Order: validate (503 channel_unavailable before anything is written) -> a PENDING row \
                     claims the rate-limit slot (60 per agent per rolling hour, 5 per customer per rolling \
                     24h, every attempt and every kind counted) -> the gateway is called outside any \
-                    transaction -> the row is completed. SMS_THEN_WHATSAPP tries WhatsApp only if the SMS \
-                    fails. All channels failing is a 502 whose data is the FAILED record. Writes a \
-                    MESSAGE_SENT activity row either way.""")
+                    transaction -> the row is completed. SMS_THEN_WHATSAPP uses whichever channels this \
+                    cell has, in order: SMS when SMS is provisioned, then WhatsApp (after a failed SMS, or \
+                    directly when SMS is not provisioned). All attempted channels failing is a 502 whose \
+                    data is the FAILED record (failureCode sms_failed / whatsapp_failed / \
+                    sms_and_whatsapp_failed, naming what was tried). Writes a MESSAGE_SENT activity row \
+                    either way.""")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Sent",
                     content = @Content(mediaType = "application/json",
@@ -143,7 +148,7 @@ public class SupportMessageController {
                             @ExampleObject(name = "Link not allowed", value = """
                                     {
                                       "code": "link_not_allowed",
-                                      "message": "Links to evil.example are not allowed in a support message. Allowed: innbucks.co.zw.",
+                                      "message": "Links in a support message may only point at innbucks.co.zw - 'evil.example' is not one of them. If it is not meant as a link, add a space after the full stop.",
                                       "data": { "host": "evil.example" }
                                     }"""),
                             @ExampleObject(name = "Too long", value = """
@@ -176,7 +181,7 @@ public class SupportMessageController {
                             @ExampleObject(name = "Agent", value = RATE_LIMITED_AGENT)})),
             @ApiResponse(responseCode = "502", description = "Every channel failed; the FAILED record is in data",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_DELIVERED))),
-            @ApiResponse(responseCode = "503", description = "The requested channel is not provisioned on this cell; nothing written",
+            @ApiResponse(responseCode = "503", description = "The requested channel is not provisioned on this cell (for SMS_THEN_WHATSAPP: neither is); nothing written",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = CHANNEL_UNAVAILABLE)))
     })
     public ResponseEntity<ApiResult<SupportDtos.MessageResponse>> send(

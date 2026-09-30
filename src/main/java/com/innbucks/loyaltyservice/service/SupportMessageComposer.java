@@ -28,13 +28,20 @@ import java.util.regex.Pattern;
  *
  * <p><b>Links</b> are the one content rule: an agent types free text to a
  * customer on the platform's own number, and a link to anywhere but our own
- * domain is the shape of a phishing message. A URL-like token —
- * {@code http://}, {@code https://}, {@code www.}, or {@code host.tld/...} —
- * must point at an allowed host or a subdomain of one. Checked on the text the
- * agent typed, NFKC-normalised first so full-width look-alike characters cannot
- * dress a link up as plain text. A bare {@code host.tld} with no scheme,
- * {@code www.} or path is NOT detected — the shared contract's definition,
- * deliberately matched to marketplace's.
+ * domain is the shape of a phishing message. Detection is deliberately
+ * STRICT and character-identical to marketplace-service's, so one console
+ * refuses the same text on both services. A URL-like token is any
+ * {@code scheme://…}, {@code www.…}, an IPv4 address (bare or with a path), or
+ * a bare {@code name.tld} with or without a path — labels are Unicode
+ * letters/digits, so a Cyrillic look-alike such as {@code innbucks.cо.zw} is
+ * SEEN and refused rather than skipped. An e-mail address is judged by its
+ * domain. Every host must be an allowed host or a subdomain of one. Checked on
+ * the text the agent typed, NFKC-normalised first so full-width characters
+ * cannot dress a link up as plain text.
+ *
+ * <p>The accepted false positive: a missing space after a full stop
+ * ({@code Thanks.Your order}) reads as a domain. The refusal tells the agent to
+ * add the space.
  */
 public final class SupportMessageComposer {
 
@@ -43,10 +50,14 @@ public final class SupportMessageComposer {
     static final int SMS_SINGLE_SEGMENT = 160;
     static final int SMS_MULTIPART_SEGMENT = 153;
 
+    /** Marketplace-service's pattern, verbatim — keep the two in lock-step. */
     private static final Pattern URL_LIKE = Pattern.compile(
-            "(?i)(?:https?://\\S*"
-                    + "|\\bwww\\.\\S+"
-                    + "|\\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\\.[a-z]{2,}/\\S*)");
+            "(?iU)(?:[a-z][a-z0-9+.-]*://\\S+|www\\.\\S+|\\b\\d{1,3}(?:\\.\\d{1,3}){3}\\b\\S*"
+                    + "|[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?"
+                    + "(?:\\.[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?)*\\.\\p{L}{2,}\\b\\S*)");
+
+    /** A token that starts with its own scheme — only then is {@code ://} a scheme separator. */
+    private static final Pattern LEADING_SCHEME = Pattern.compile("(?i)^[a-z][a-z0-9+.-]*://");
 
     private static final String TRAILING_PUNCTUATION = ".,;:!?)]}'\">";
 
@@ -98,24 +109,19 @@ public final class SupportMessageComposer {
     }
 
     /**
-     * The host a link actually goes to. For a scheme URL that is the authority
-     * minus any {@code user@} prefix and port — so
-     * {@code https://innbucks.co.zw@evil.example/} is {@code evil.example}, which
-     * is what a browser would open.
+     * The host a link actually goes to: past any leading {@code scheme://}, cut
+     * at {@code / ? # \\}, then whatever follows the LAST {@code @} — for every
+     * token, not only scheme URLs, so {@code innbucks.co.zw@evil.example} is
+     * {@code evil.example}, which is what a browser or mail client would open —
+     * minus port and trailing punctuation, lower-cased.
      */
     static String hostOf(String token) {
-        String t = token;
-        String lower = t.toLowerCase(Locale.ROOT);
-        String authority;
-        if (lower.startsWith("http://") || lower.startsWith("https://")) {
-            String rest = t.substring(t.indexOf("//") + 2);
-            authority = cut(rest, "/?#\\");
-            int at = authority.lastIndexOf('@');
-            if (at >= 0) {
-                authority = authority.substring(at + 1);
-            }
-        } else {
-            authority = cut(t, "/?#\\");
+        Matcher scheme = LEADING_SCHEME.matcher(token);
+        String rest = scheme.find() ? token.substring(scheme.end()) : token;
+        String authority = cut(rest, "/?#\\");
+        int at = authority.lastIndexOf('@');
+        if (at >= 0) {
+            authority = authority.substring(at + 1);
         }
         int colon = authority.indexOf(':');
         if (colon >= 0) {

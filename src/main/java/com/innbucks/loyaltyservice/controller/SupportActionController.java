@@ -111,7 +111,7 @@ public class SupportActionController {
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = RATE_LIMITED))),
             @ApiResponse(responseCode = "502", description = "Every channel failed; the FAILED record is in data",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_DELIVERED))),
-            @ApiResponse(responseCode = "503", description = "The channel is not provisioned on this cell",
+            @ApiResponse(responseCode = "503", description = "The channel is not provisioned on this cell (for SMS_THEN_WHATSAPP: neither is)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = CHANNEL_UNAVAILABLE)))
     })
     public ResponseEntity<ApiResult<SupportDtos.MessageResponse>> resendVoucher(

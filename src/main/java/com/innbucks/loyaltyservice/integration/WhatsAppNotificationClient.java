@@ -27,7 +27,8 @@ public class WhatsAppNotificationClient {
 
     private static final String CUSTOM_NOTIFICATION_PATH = "/api/messages/custom-notification";
     private static final String API_KEY_HEADER = "x-api-key";
-    static final int MAX_MESSAGE_LENGTH = 1600;
+    /** The gateway's own cap; {@code SupportProperties} refuses to boot with a support cap above it. */
+    public static final int MAX_MESSAGE_LENGTH = 1600;
 
     private final RestClient restClient;
     private final WhatsAppProperties properties;

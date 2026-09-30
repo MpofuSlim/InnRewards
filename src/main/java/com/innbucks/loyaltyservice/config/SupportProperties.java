@@ -53,7 +53,8 @@ public record SupportProperties(Duration lookupTtl, Messages messages) {
                            Integer perRecipientPerDay) {
 
         /** The WhatsApp gateway refuses anything longer; a configured cap above it could never be met. */
-        public static final int WHATSAPP_GATEWAY_CAP = 1600;
+        public static final int WHATSAPP_GATEWAY_CAP =
+                com.innbucks.loyaltyservice.integration.WhatsAppNotificationClient.MAX_MESSAGE_LENGTH;
 
         public Messages {
             signature = signature == null ? "- InnBucks Loyalty Support" : signature.strip();
@@ -67,7 +68,10 @@ public record SupportProperties(Duration lookupTtl, Messages messages) {
             }
             if (whatsappMaxCharacters < 1 || whatsappMaxCharacters > WHATSAPP_GATEWAY_CAP) {
                 throw new IllegalArgumentException("loyalty.support.messages.whatsapp-max-characters must be 1.."
-                        + WHATSAPP_GATEWAY_CAP);
+                        + WHATSAPP_GATEWAY_CAP + " (the WhatsApp gateway's own cap), was " + whatsappMaxCharacters);
+            }
+            for (String host : allowedLinkHosts) {
+                requirePlainAsciiHost(host);
             }
             if (perAgentPerHour < 1 || perRecipientPerDay < 1) {
                 throw new IllegalArgumentException("loyalty.support.messages limits must be at least 1");
@@ -76,6 +80,26 @@ public record SupportProperties(Duration lookupTtl, Messages messages) {
 
         public static Messages defaults() {
             return new Messages(null, null, null, null, null, null);
+        }
+
+        /**
+         * An allowed link host must be a plain ASCII host name: no path, and
+         * already in its IDNA ASCII form. Otherwise a look-alike (a Cyrillic
+         * {@code о} in {@code innbucks.cо.zw}) could be configured as allowed,
+         * which is the one thing the allow-list exists to stop.
+         */
+        static void requirePlainAsciiHost(String host) {
+            String ascii;
+            try {
+                ascii = java.net.IDN.toASCII(host);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "loyalty.support.messages.allowed-link-hosts has an invalid host: '" + host + "'", e);
+            }
+            if (!host.equals(ascii) || host.indexOf('/') >= 0) {
+                throw new IllegalArgumentException("loyalty.support.messages.allowed-link-hosts must be plain ASCII "
+                        + "host names with no path; '" + host + "' is not");
+            }
         }
 
         private static List<String> normaliseHosts(List<String> hosts) {

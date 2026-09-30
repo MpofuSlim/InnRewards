@@ -152,6 +152,9 @@ class SupportMessageFlowTest extends SupportTestBase {
                         .content(body("WHATSAPP", "Claim your prize at https://evil.example/claim")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("link_not_allowed"))
+                .andExpect(jsonPath("$.message").value("Links in a support message may only point at innbucks.co.zw"
+                        + " - 'evil.example' is not one of them. If it is not meant as a link, add a space after"
+                        + " the full stop."))
                 .andExpect(jsonPath("$.data.host").value("evil.example"));
         assertThat(rowsTo(c.phone())).isZero();
     }
@@ -162,14 +165,65 @@ class SupportMessageFlowTest extends SupportTestBase {
         Ctx c = customer();
         when(whatsApp.isConfigured()).thenReturn(false);
 
-        for (String channel : List.of("WHATSAPP", "SMS_THEN_WHATSAPP")) {
-            mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
-                            .contentType(MediaType.APPLICATION_JSON).content(body(channel, "Hello")))
-                    .andExpect(status().isServiceUnavailable())
-                    .andExpect(jsonPath("$.code").value("channel_unavailable"));
-        }
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("WHATSAPP", "Hello")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("channel_unavailable"));
+        // SMS_THEN_WHATSAPP needs EITHER channel: only when neither is there is it a 503.
+        when(sms.isConfigured()).thenReturn(false);
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", "Hello")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("channel_unavailable"))
+                .andExpect(jsonPath("$.message").value("Neither SMS nor WHATSAPP is configured on this cell. "
+                        + "Choose another channel."));
         assertThat(rowsTo(c.phone())).isZero();
         assertThat(actionsOf(c.agent())).containsExactly("CUSTOMER_LOOKUP");
+    }
+
+    @Test
+    @DisplayName("SMS_THEN_WHATSAPP on a cell with NO WhatsApp still sends by SMS; a failed SMS is then sms_failed")
+    void smsThenWhatsApp_withoutWhatsApp_usesSmsAlone() throws Exception {
+        Ctx c = customer();
+        when(whatsApp.isConfigured()).thenReturn(false);
+
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", "Hello")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.deliveredVia").value("SMS"));
+
+        doThrow(new NotificationDeliveryException("sms down")).when(sms).sendSms(eq(c.phone()), anyString(), anyString());
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", "Hello again")))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.data.failureCode").value("sms_failed"));
+        verify(whatsApp, never()).sendCustomNotification(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("SMS_THEN_WHATSAPP on a cell with NO SMS goes straight to WhatsApp; a failure there is whatsapp_failed")
+    void smsThenWhatsApp_withoutSms_goesStraightToWhatsApp() throws Exception {
+        Ctx c = customer();
+        when(sms.isConfigured()).thenReturn(false);
+
+        mockMvc.perform(post(c.path() + "/preview").header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", "Sorry — fixed!")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.text").value("Sorry — fixed!\n- InnBucks Loyalty Support"))
+                .andExpect(jsonPath("$.data.maxCharacters").value(1000))
+                .andExpect(jsonPath("$.data.smsSegments").doesNotExist());
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", "Sorry — fixed!")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.deliveredVia").value("WHATSAPP"))
+                .andExpect(jsonPath("$.data.text").value("Sorry — fixed!\n- InnBucks Loyalty Support"));
+        verify(sms, never()).sendSms(anyString(), anyString(), anyString());
+
+        doThrow(new NotificationDeliveryException("wa down")).when(whatsApp).sendCustomNotification(eq(c.phone()), anyString());
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", "Hello")))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.data.failureCode").value("whatsapp_failed"));
     }
 
     @Test

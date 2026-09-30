@@ -48,7 +48,8 @@ public final class SupportDtos {
 
     public record MessageRequest(
             @Schema(example = "SMS_THEN_WHATSAPP",
-                    description = "SMS, WHATSAPP, or SMS_THEN_WHATSAPP (WhatsApp only if the SMS fails).")
+                    description = "SMS, WHATSAPP, or SMS_THEN_WHATSAPP (SMS first when provisioned; WhatsApp after "
+                            + "a failed SMS, or directly when this cell has no SMS).")
             @NotNull SupportMessage.Channel channel,
             @Schema(example = "Hi, your points adjustment has been applied. Check your balance in the app.",
                     description = "What the agent typed. HTML is stripped; the signature is appended on "

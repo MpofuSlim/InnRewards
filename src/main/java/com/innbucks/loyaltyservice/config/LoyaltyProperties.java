@@ -58,16 +58,31 @@ public record LoyaltyProperties(
      *                         payable before it lapses. payment-service
      *                         extends it while a payment instrument is live.
      */
+    /**
+     * @param cardPosCurrencies comma-separated currencies the tills' own card
+     *                          machines settle in (V54, default {@code USD,ZWG}).
+     *                          A voucher order priced in anything else cannot be
+     *                          confirmed as paid by card: the machine would charge
+     *                          the same number in its own currency.
+     */
     public record Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold,
-                          int fraudWindowSeconds, java.time.Duration purchaseOrderTtl) {
+                          int fraudWindowSeconds, java.time.Duration purchaseOrderTtl,
+                          String cardPosCurrencies) {
         public Voucher {
             if (purchaseOrderTtl == null) purchaseOrderTtl = java.time.Duration.ofMinutes(30);
+            if (cardPosCurrencies == null || cardPosCurrencies.isBlank()) cardPosCurrencies = "USD,ZWG";
+        }
+
+        /** Back-compat for callers built against the V47 arity. */
+        public Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold,
+                       int fraudWindowSeconds, java.time.Duration purchaseOrderTtl) {
+            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, purchaseOrderTtl, null);
         }
 
         /** Back-compat for callers built against the pre-V47 arity. */
         public Voucher(String secret, int defaultValidityDays,
                        int fraudVelocityThreshold, int fraudWindowSeconds) {
-            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, null);
+            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, null, null);
         }
     }
 

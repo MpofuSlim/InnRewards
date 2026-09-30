@@ -54,6 +54,29 @@ class VoucherPurchaseControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
+    void post_confirm_card_without_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/vouchers/purchase/{ref}/confirm-card", "VCH-4F9A1C22B7D3")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"approvalCode\": \"A1B2C3\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void post_confirm_card_as_customer_or_cashier_returns_403() throws Exception {
+        // A card-machine confirmation IS the payment proof, so it carries the
+        // same staff gate as cash: no customer, and no SHOP_USER till token.
+        for (String role : new String[] {"CUSTOMER", "SHOP_USER"}) {
+            String token = TestJwtFactory.builder(role.toLowerCase() + "@test.local")
+                    .role(role).phoneNumber("+263770000111").sign(jwtSecret);
+            mockMvc.perform(post("/loyalty/vouchers/purchase/{ref}/confirm-card", "VCH-4F9A1C22B7D3")
+                            .header("Authorization", bearer(token))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"approvalCode\": \"A1B2C3\"}"))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
     void get_purchase_without_token_returns_401() throws Exception {
         mockMvc.perform(get("/loyalty/vouchers/purchase/{ref}", "VCH-4F9A1C22B7D3"))
                 .andExpect(status().isUnauthorized());

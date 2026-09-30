@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.dto.VoucherReportDtos.RedemptionDetail;
 import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherDetail;
 import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherReport;
 import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherSummary;
+import com.innbucks.loyaltyservice.dto.VoucherReportFilters;
 import com.innbucks.loyaltyservice.entity.Campaign;
 import com.innbucks.loyaltyservice.entity.Invoice;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
@@ -787,6 +788,16 @@ public class ReportingService {
 
     /** Platform-wide voucher report across every real tenant. The internal
      *  ticketing container tenant is excluded, matching the operator dashboard. */
+    /** {@link #vouchersForOperator(Voucher.Status, LocalDate, LocalDate, Pageable)} with the optional
+     *  report filters (a {@code merchantId} / {@code shopId} filter narrows the platform view). */
+    public VoucherReport vouchersForOperator(Voucher.Status status, LocalDate from, LocalDate to,
+                                             VoucherReportFilters filters, Pageable pageable) {
+        VoucherReportFilters f = filters == null ? VoucherReportFilters.none() : filters;
+        return voucherReport("OPERATOR", null, null,
+                null, TicketingLoyaltyService.TICKETING_TENANT_ID, f.merchantId(), f.shopId(),
+                null, status, from, to, pageable, f);
+    }
+
     public VoucherReport vouchersForOperator(Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
         return voucherReport("OPERATOR", null, null,
                 null, TicketingLoyaltyService.TICKETING_TENANT_ID, null, null,
@@ -795,6 +806,16 @@ public class ReportingService {
 
     /** Every voucher in one tenant that the caller's merchant scope admits
      *  ({@code null} = every merchant). */
+    /** The tenant voucher report with the optional filters. A {@code merchantId}
+     *  / {@code shopId} filter must already be ownership-checked by the caller. */
+    public VoucherReport vouchersForTenant(UUID tenantId, Set<UUID> merchantScope, Voucher.Status status,
+                                           LocalDate from, LocalDate to, VoucherReportFilters filters,
+                                           Pageable pageable) {
+        VoucherReportFilters f = filters == null ? VoucherReportFilters.none() : filters;
+        return voucherReport("TENANT", tenantId, tenantName(tenantId),
+                tenantId, null, f.merchantId(), f.shopId(), merchantScope, status, from, to, pageable, f);
+    }
+
     public VoucherReport vouchersForTenant(UUID tenantId, Set<UUID> merchantScope, Voucher.Status status,
                                            LocalDate from, LocalDate to, Pageable pageable) {
         return voucherReport("TENANT", tenantId, tenantName(tenantId),
@@ -810,6 +831,17 @@ public class ReportingService {
 
     /** Vouchers under one merchant. Guarded: a merchant in another tenant throws
      *  CROSS_TENANT (403) before any row is read. */
+    /** One merchant's vouchers with the optional filters (the path's merchant wins
+     *  over a {@code merchantId} filter; a {@code shopId} filter narrows within it). */
+    public VoucherReport vouchersForMerchant(UUID tenantId, UUID merchantId, Voucher.Status status,
+                                             LocalDate from, LocalDate to, VoucherReportFilters filters,
+                                             Pageable pageable) {
+        Merchant m = merchantService.requireMerchant(tenantId, merchantId);
+        VoucherReportFilters f = filters == null ? VoucherReportFilters.none() : filters;
+        return voucherReport("MERCHANT", merchantId, m.getName(),
+                tenantId, null, merchantId, f.shopId(), null, status, from, to, pageable, f);
+    }
+
     public VoucherReport vouchersForMerchant(UUID tenantId, UUID merchantId, Voucher.Status status,
                                              LocalDate from, LocalDate to, Pageable pageable) {
         Merchant m = merchantService.requireMerchant(tenantId, merchantId);
@@ -818,6 +850,15 @@ public class ReportingService {
     }
 
     /** Vouchers issued from one outlet. Guarded via ShopService.requireShop. */
+    /** One outlet's vouchers with the optional filters (the path's shop wins). */
+    public VoucherReport vouchersForShop(UUID tenantId, UUID shopId, Voucher.Status status,
+                                         LocalDate from, LocalDate to, VoucherReportFilters filters,
+                                         Pageable pageable) {
+        Shop sh = shopService.requireShop(tenantId, shopId);
+        return voucherReport("SHOP", shopId, sh.getName(),
+                tenantId, null, null, shopId, null, status, from, to, pageable, filters);
+    }
+
     public VoucherReport vouchersForShop(UUID tenantId, UUID shopId, Voucher.Status status,
                                          LocalDate from, LocalDate to, Pageable pageable) {
         Shop s = shopService.requireShop(tenantId, shopId);
@@ -909,14 +950,22 @@ public class ReportingService {
                 nameOf(v.getMerchantId(), id -> merchants.findById(id).map(Merchant::getName).orElse(null)),
                 nameOf(v.getShopId(), id -> shops.findById(id).map(Shop::getName).orElse(null)),
                 nameOf(v.getTemplateId(), id -> voucherTemplates.findById(id).map(VoucherTemplate::getName).orElse(null)),
-                reds.size(), reds);
+                reds.size(), reds, purchaseInfo(List.of(voucherId)).get(voucherId));
     }
 
     private VoucherReport voucherReport(String level, UUID scopeId, String scopeName,
                                         UUID tenantId, UUID excludeTenantId, UUID merchantId, UUID shopId,
                                         Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
         return voucherReport(level, scopeId, scopeName, tenantId, excludeTenantId, merchantId, shopId,
-                null, status, from, to, pageable);
+                null, status, from, to, pageable, null);
+    }
+
+    private VoucherReport voucherReport(String level, UUID scopeId, String scopeName,
+                                        UUID tenantId, UUID excludeTenantId, UUID merchantId, UUID shopId,
+                                        Set<UUID> merchantScope,
+                                        Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
+        return voucherReport(level, scopeId, scopeName, tenantId, excludeTenantId, merchantId, shopId,
+                merchantScope, status, from, to, pageable, null);
     }
 
     /** @param merchantScope the merchants a scoped caller may read ({@code null}
@@ -924,24 +973,160 @@ public class ReportingService {
     private VoucherReport voucherReport(String level, UUID scopeId, String scopeName,
                                         UUID tenantId, UUID excludeTenantId, UUID merchantId, UUID shopId,
                                         Set<UUID> merchantScope,
-                                        Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable) {
+                                        Voucher.Status status, LocalDate from, LocalDate to, Pageable pageable,
+                                        VoucherReportFilters filters) {
         Instant fromI = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : Instant.EPOCH;
         Instant toI = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
                 : Instant.now().plus(1, ChronoUnit.DAYS);
         if (fromI.isAfter(toI)) {
             throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
         }
-        VoucherSummary summary = summarise(merchantScope == null
+        boolean filtered = filters != null && !filters.isEmpty();
+        // Filtered: the summary comes from the same Specification as the rows
+        // (minus status, so the tabs keep counting the other statuses).
+        VoucherSummary summary = summarise(filtered
+                ? vouchers.summaryByStatus(filter(tenantId, excludeTenantId, merchantId, shopId, null, fromI, toI)
+                        .and(inMerchants(merchantScope)).and(reportFilters(filters)))
+                : merchantScope == null
                 ? vouchers.reportSummaryByStatus(tenantId, excludeTenantId, merchantId, shopId, fromI, toI)
                 : merchantScope.isEmpty() ? List.of()
                 : vouchers.reportSummaryByStatusForMerchants(tenantId, merchantScope, fromI, toI));
         Specification<Voucher> spec = filter(tenantId, excludeTenantId, merchantId, shopId, status, fromI, toI)
-                .and(inMerchants(merchantScope));
+                .and(inMerchants(merchantScope)).and(reportFilters(filters));
         Pageable effective = pageable.getSort().isSorted() ? pageable
                 : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
                         Sort.by(Sort.Direction.DESC, "issuedAt"));
         Page<VoucherDetail> details = enrich(vouchers.findAll(spec, effective));
         return new VoucherReport(level, scopeId, scopeName, fromI, toI, summary, PageResponse.from(details));
+    }
+
+    /**
+     * The optional report filters as one Specification ({@code null} or empty =
+     * no narrowing). Every predicate is appended only when its filter is set —
+     * never a nullable bind. Text matches escape LIKE wildcards, so a {@code %}
+     * typed into the search box is literal.
+     */
+    private Specification<Voucher> reportFilters(VoucherReportFilters f) {
+        return (root, query, cb) -> {
+            if (f == null || f.isEmpty()) return cb.conjunction();
+            List<Predicate> p = new ArrayList<>();
+            if (f.merchantId() != null) p.add(cb.equal(root.get("merchantId"), f.merchantId()));
+            if (f.shopId() != null) p.add(cb.equal(root.get("shopId"), f.shopId()));
+            if (notBlank(f.currency())) {
+                p.add(cb.equal(root.get("currency"), f.currency().strip().toUpperCase(java.util.Locale.ROOT)));
+            }
+            if (f.paymentMethod() != null) {
+                p.add(paymentMethodPredicate(f.paymentMethod(), root, query, cb));
+            }
+            if (notBlank(f.issuedBy())) {
+                String term = f.issuedBy().strip().toLowerCase(java.util.Locale.ROOT);
+                List<Predicate> any = new ArrayList<>();
+                any.add(cb.like(cb.lower(root.get("issuerEmail")), contains(term), '\\'));
+                String digits = term.replaceAll("[^0-9]", "");
+                if (digits.length() >= 4) any.add(cb.like(root.get("issuerPhone"), contains(digits), '\\'));
+                p.add(cb.or(any.toArray(new Predicate[0])));
+            }
+            if (notBlank(f.phone())) {
+                String digits = f.phone().replaceAll("[^0-9]", "");
+                if (digits.isEmpty()) {
+                    p.add(cb.disjunction());
+                } else {
+                    // The national number, so 0777… and +263777… match each other
+                    // (and sender phones stored as typed before V56).
+                    String tail = digits.length() > 9 ? digits.substring(digits.length() - 9) : digits;
+                    p.add(cb.or(cb.like(root.get("assigneePhone"), endsWith(tail), '\\'),
+                            cb.like(root.get("senderPhone"), endsWith(tail), '\\')));
+                }
+            }
+            if (notBlank(f.q())) {
+                String term = f.q().strip().toLowerCase(java.util.Locale.ROOT);
+                List<Predicate> any = new ArrayList<>();
+                any.add(cb.like(cb.lower(root.get("assigneeName")), contains(term), '\\'));
+                any.add(cb.like(cb.lower(root.get("senderName")), contains(term), '\\'));
+                any.add(cb.like(cb.lower(root.get("issuerEmail")), contains(term), '\\'));
+                String code = term.replaceAll("[^0-9a-z]", "").toUpperCase(java.util.Locale.ROOT);
+                if (code.length() >= 4) any.add(cb.like(root.get("code"), contains(code), '\\'));
+                String digits = term.replaceAll("[^0-9]", "");
+                if (digits.length() >= 4) {
+                    any.add(cb.like(root.get("assigneePhone"), contains(digits), '\\'));
+                    any.add(cb.like(root.get("senderPhone"), contains(digits), '\\'));
+                }
+                p.add(cb.or(any.toArray(new Predicate[0])));
+            }
+            if (f.bulk() != null) {
+                p.add(f.bulk() ? cb.isNotNull(root.get("batchId")) : cb.isNull(root.get("batchId")));
+            }
+            if (f.batchId() != null) p.add(cb.equal(root.get("batchId"), f.batchId()));
+            if (notBlank(f.campaign())) p.add(cb.equal(root.get("campaignSource"), f.campaign().strip()));
+            if (f.expiresFrom() != null) {
+                p.add(cb.greaterThanOrEqualTo(root.<Instant>get("expiresAt"), startOfDay(f.expiresFrom())));
+            }
+            if (f.expiresTo() != null) {
+                p.add(cb.lessThan(root.<Instant>get("expiresAt"), startOfDay(f.expiresTo().plusDays(1))));
+            }
+            if (f.redeemedFrom() != null) {
+                p.add(cb.greaterThanOrEqualTo(root.<Instant>get("redeemedAt"), startOfDay(f.redeemedFrom())));
+            }
+            if (f.redeemedTo() != null) {
+                p.add(cb.lessThan(root.<Instant>get("redeemedAt"), startOfDay(f.redeemedTo().plusDays(1))));
+            }
+            if (f.minValue() != null) p.add(cb.greaterThanOrEqualTo(root.<BigDecimal>get("value"), f.minValue()));
+            if (f.maxValue() != null) p.add(cb.lessThanOrEqualTo(root.<BigDecimal>get("value"), f.maxValue()));
+            return cb.and(p.toArray(new Predicate[0]));
+        };
+    }
+
+    /** FREE = no purchase order behind the voucher; anything else = a PAID order
+     *  of that kind (EXISTS, correlated — a NOT IN over a nullable column would
+     *  silently match nothing). */
+    private static Predicate paymentMethodPredicate(VoucherReportFilters.PaymentMethod method,
+                                                    jakarta.persistence.criteria.Root<Voucher> root,
+                                                    jakarta.persistence.criteria.CriteriaQuery<?> query,
+                                                    jakarta.persistence.criteria.CriteriaBuilder cb) {
+        var sq = query.subquery(UUID.class);
+        var o = sq.from(com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder.class);
+        List<Predicate> w = new ArrayList<>();
+        w.add(cb.equal(o.get("voucherId"), root.get("id")));
+        switch (method) {
+            case FREE -> { }
+            case CASH -> w.add(cb.equal(o.get("paidVia"),
+                    com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder.PaidVia.CASH));
+            case CARD_POS -> w.add(cb.equal(o.get("paidVia"),
+                    com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder.PaidVia.CARD_POS));
+            case ONLINE -> w.add(cb.equal(o.get("paidVia"),
+                    com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder.PaidVia.GATEWAY));
+            case INNBUCKS, ECOCASH, ONLINE_CARD -> {
+                w.add(cb.equal(o.get("paidVia"),
+                        com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder.PaidVia.GATEWAY));
+                w.add(cb.equal(o.get("paymentRail"), switch (method) {
+                    case INNBUCKS -> "INNBUCKS_CODE";
+                    case ECOCASH -> "ECOCASH";
+                    default -> "ZIMSWITCH_CARD";
+                }));
+            }
+        }
+        sq.select(o.get("id")).where(w.toArray(new Predicate[0]));
+        return method == VoucherReportFilters.PaymentMethod.FREE ? cb.not(cb.exists(sq)) : cb.exists(sq);
+    }
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    private static Instant startOfDay(LocalDate d) {
+        return d.atStartOfDay().toInstant(ZoneOffset.UTC);
+    }
+
+    private static String escapeLike(String s) {
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    private static String contains(String s) {
+        return "%" + escapeLike(s) + "%";
+    }
+
+    private static String endsWith(String s) {
+        return "%" + escapeLike(s);
     }
 
     /** Narrows to a merchant scope: {@code null} = no narrowing, empty = no rows. */
@@ -975,10 +1160,12 @@ public class ReportingService {
                 ids -> shops.findAllById(ids), Shop::getId, Shop::getName);
         Map<UUID, String> tNames = bulkNames(idset(content, Voucher::getTemplateId),
                 ids -> voucherTemplates.findAllById(ids), VoucherTemplate::getId, VoucherTemplate::getName);
-        Map<UUID, Long> redCounts = redemptionCounts(content.stream().map(Voucher::getId).toList());
+        List<UUID> ids = content.stream().map(Voucher::getId).toList();
+        Map<UUID, Long> redCounts = redemptionCounts(ids);
+        Map<UUID, PurchaseInfo> purchases = purchaseInfo(ids);
         return page.map(v -> toDetail(v,
                 mNames.get(v.getMerchantId()), sNames.get(v.getShopId()), tNames.get(v.getTemplateId()),
-                redCounts.getOrDefault(v.getId(), 0L), null));
+                redCounts.getOrDefault(v.getId(), 0L), null, purchases.get(v.getId())));
     }
 
     private Map<UUID, Long> redemptionCounts(List<UUID> voucherIds) {
@@ -1034,6 +1221,12 @@ public class ReportingService {
 
     private static VoucherDetail toDetail(Voucher v, String merchantName, String shopName, String templateName,
                                           long redemptionCount, List<RedemptionDetail> redemptions) {
+        return toDetail(v, merchantName, shopName, templateName, redemptionCount, redemptions, null);
+    }
+
+    private static VoucherDetail toDetail(Voucher v, String merchantName, String shopName, String templateName,
+                                          long redemptionCount, List<RedemptionDetail> redemptions,
+                                          PurchaseInfo purchase) {
         boolean expired = v.getExpiresAt() != null
                 && v.getExpiresAt().isBefore(Instant.now())
                 && v.getStatus() != Voucher.Status.REDEEMED
@@ -1056,7 +1249,38 @@ public class ReportingService {
                 expired,
                 v.getSenderName(), v.getSenderPhone(),
                 v.getTransferredAt(), v.getTransferredFromUserId(), v.getTransferredFromPhone(),
-                redemptionCount, redemptions);
+                redemptionCount, redemptions,
+                (purchase == null ? VoucherReportFilters.PaymentMethod.FREE : purchase.method()).name(),
+                purchase == null ? null : purchase.orderRef());
+    }
+
+    /** How one voucher was paid for, read from its purchase order. */
+    private record PurchaseInfo(String orderRef, VoucherReportFilters.PaymentMethod method) {}
+
+    /** The report's payment method for a paid order: the rail when known
+     *  (recorded from V56), else ONLINE for an electronic payment. */
+    static VoucherReportFilters.PaymentMethod methodOf(Object paidVia, Object rail) {
+        String via = paidVia == null ? null : paidVia.toString();
+        if ("CASH".equals(via)) return VoucherReportFilters.PaymentMethod.CASH;
+        if ("CARD_POS".equals(via)) return VoucherReportFilters.PaymentMethod.CARD_POS;
+        String r = rail == null ? "" : rail.toString();
+        return switch (r) {
+            case "INNBUCKS_CODE" -> VoucherReportFilters.PaymentMethod.INNBUCKS;
+            case "ECOCASH" -> VoucherReportFilters.PaymentMethod.ECOCASH;
+            case "ZIMSWITCH_CARD" -> VoucherReportFilters.PaymentMethod.ONLINE_CARD;
+            default -> VoucherReportFilters.PaymentMethod.ONLINE;
+        };
+    }
+
+    /** One query per page: the purchase order behind each voucher, if any. */
+    private Map<UUID, PurchaseInfo> purchaseInfo(List<UUID> voucherIds) {
+        Map<UUID, PurchaseInfo> out = new HashMap<>();
+        if (voucherIds.isEmpty()) return out;
+        for (Object[] row : vouchers.purchaseInfoForVouchers(voucherIds)) {
+            if (row[0] == null || row[2] == null) continue;   // an unpaid order carries no voucher
+            out.put((UUID) row[0], new PurchaseInfo((String) row[1], methodOf(row[2], row[3])));
+        }
+        return out;
     }
 
     private static RedemptionDetail toRedemption(VoucherRedemption r) {
@@ -1086,7 +1310,8 @@ public class ReportingService {
                     + "issuerUserId,issuerPhone,issuerEmail,receiverUserId,receiverPhone,receiverName,"
                     + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
                     + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount,"
-                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\n";
+                    + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone,"
+                    + "paymentMethod,orderRef\n";
 
     /**
      * CSV export — one fully-detailed row per voucher. {@code level} selects the
@@ -1103,6 +1328,13 @@ public class ReportingService {
      *        levels are ownership-checked by the controller instead. */
     public String voucherCsv(String level, UUID tenantId, UUID scopeId, Set<UUID> merchantScope,
                              Voucher.Status status, LocalDate from, LocalDate to) {
+        return voucherCsv(level, tenantId, scopeId, merchantScope, status, from, to, null);
+    }
+
+    /** The CSV export with the same optional filters as the JSON reports. */
+    public String voucherCsv(String level, UUID tenantId, UUID scopeId, Set<UUID> merchantScope,
+                             Voucher.Status status, LocalDate from, LocalDate to,
+                             VoucherReportFilters filters) {
         UUID excludeTenantId = null, filterTenantId = null, merchantId = null, shopId = null;
         switch (level == null ? "" : level.toUpperCase()) {
             case "OPERATOR" -> excludeTenantId = TicketingLoyaltyService.TICKETING_TENANT_ID;
@@ -1125,8 +1357,13 @@ public class ReportingService {
                 : Instant.now().plus(1, ChronoUnit.DAYS);
         if (fromI.isAfter(toI)) throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
 
+        // The level's own merchant/shop wins; otherwise a filter may name one.
+        if (filters != null) {
+            if (merchantId == null) merchantId = filters.merchantId();
+            if (shopId == null) shopId = filters.shopId();
+        }
         Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI)
-                .and(inMerchants(merchantScope));
+                .and(inMerchants(merchantScope)).and(reportFilters(filters));
         StringBuilder sb = new StringBuilder(VOUCHER_CSV_HEADER);
         int pageNum = 0;
         int pageSize = 500;
@@ -1171,7 +1408,9 @@ public class ReportingService {
                         .append(csvField(d.senderPhone())).append(',')
                         .append(csvField(d.transferredAt())).append(',')
                         .append(csvField(d.transferredFromUserId())).append(',')
-                        .append(csvField(d.transferredFromPhone()))
+                        .append(csvField(d.transferredFromPhone())).append(',')
+                        .append(csvField(d.paymentMethod())).append(',')
+                        .append(csvField(d.orderRef()))
                         .append('\n');
             }
             if (page.isLast()) break;

@@ -108,7 +108,11 @@ public class InternalVoucherOrderController {
             String paymentRef = req == null || req.get("paymentRef") == null
                     ? null : req.get("paymentRef").toString();
             long amountCents = req == null ? 0L : asLong(req.get("amountCents"));
-            return ResponseEntity.ok(body(purchases.internalConfirmPayment(orderRef, paymentRef, amountCents)));
+            // Optional (V56): the rail payment-service collected on.
+            String paymentRail = req == null || req.get("paymentRail") == null
+                    ? null : req.get("paymentRail").toString();
+            return ResponseEntity.ok(body(purchases.internalConfirmPayment(
+                    orderRef, paymentRef, amountCents, paymentRail)));
         } catch (LoyaltyException e) {
             return ResponseEntity.status(e.getStatus())
                     .body(Map.of("code", e.getCode(), "message", e.getMessage()));

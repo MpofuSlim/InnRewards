@@ -530,4 +530,64 @@ class ReportingServiceTest {
         assertEquals(v.getId(),
                 reporting.voucherDetail(TENANT_A, "9087876598764566", java.util.Set.of(MERCHANT_MINE)).id());
     }
+
+    // ----- voucher report filters (the real queries are pinned by VoucherReportFiltersIT) -----
+
+    @Test
+    void methodOf_mapsThePaidOrderToTheReportsPaymentMethod() {
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.CASH,
+                ReportingService.methodOf("CASH", null));
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.CARD_POS,
+                ReportingService.methodOf("CARD_POS", null));
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.ECOCASH,
+                ReportingService.methodOf("GATEWAY", "ECOCASH"));
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.INNBUCKS,
+                ReportingService.methodOf("GATEWAY", "INNBUCKS_CODE"));
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.ONLINE_CARD,
+                ReportingService.methodOf("GATEWAY", "ZIMSWITCH_CARD"));
+        // Confirmed before rails were recorded, or a rail added later.
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.ONLINE,
+                ReportingService.methodOf("GATEWAY", null));
+        assertEquals(com.innbucks.loyaltyservice.dto.VoucherReportFilters.PaymentMethod.ONLINE,
+                ReportingService.methodOf("GATEWAY", "SOME_NEW_RAIL"));
+    }
+
+    @Test
+    void aFilteredReport_summarisesThroughTheSameSpecification_notTheFixedQuery() {
+        when(vouchers.summaryByStatus(any())).thenReturn(List.of());
+        when(vouchers.findAll(any(Specification.class), any(PageRequest.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of()));
+        var filters = new com.innbucks.loyaltyservice.dto.VoucherReportFilters.Builder().currency("USD").build();
+
+        reporting.vouchersForTenant(TENANT_A, null, null, null, null, filters, PageRequest.of(0, 20));
+
+        verify(vouchers).summaryByStatus(any());
+        verify(vouchers, never()).reportSummaryByStatus(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anUnfilteredReport_keepsTheOriginalSummaryQuery() {
+        when(vouchers.reportSummaryByStatus(any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(vouchers.findAll(any(Specification.class), any(PageRequest.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of()));
+
+        reporting.vouchersForTenant(TENANT_A, null, null, null, null,
+                com.innbucks.loyaltyservice.dto.VoucherReportFilters.none(), PageRequest.of(0, 20));
+
+        verify(vouchers, never()).summaryByStatus(any());
+    }
+
+    @Test
+    void aVoucherWithNoPurchaseOrder_isFree_andOneWithAnOrderCarriesItsRef() {
+        Voucher v = codedVoucher(TENANT_A, "9087876598764566");
+        when(vouchers.findById(v.getId())).thenReturn(Optional.of(v));
+        assertEquals("FREE", reporting.voucherDetail(TENANT_A, v.getId()).paymentMethod());
+
+        when(vouchers.purchaseInfoForVouchers(List.of(v.getId()))).thenReturn(List.<Object[]>of(
+                new Object[] {v.getId(), "VCH-4F9A1C22B7D3",
+                        com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder.PaidVia.GATEWAY, "ECOCASH"}));
+        var d = reporting.voucherDetail(TENANT_A, v.getId());
+        assertEquals("ECOCASH", d.paymentMethod());
+        assertEquals("VCH-4F9A1C22B7D3", d.orderRef());
+    }
 }

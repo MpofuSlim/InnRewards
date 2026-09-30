@@ -76,6 +76,13 @@ public class ReportingController {
         return merchantAuthz.readableMerchants(tenantId);
     }
 
+    /** A merchant or shop named in the report filters must be the caller's. */
+    private void requireFilterOwnership(UUID tenantId, com.innbucks.loyaltyservice.dto.VoucherReportFilters f) {
+        if (f == null) return;
+        if (f.shopId() != null) merchantAuthz.requireCallerAccessesShop(tenantId, f.shopId());
+        if (f.merchantId() != null) merchantAuthz.requireCallerAdministersMerchant(tenantId, f.merchantId());
+    }
+
     /** Resolves the tenant AND enforces the caller may access {@code shopId}. */
     private UUID shopAuthzTenant(UUID shopId) {
         UUID tenantId = tenantContext.requireTenantId();
@@ -1285,7 +1292,9 @@ public class ReportingController {
                       "transferredFromUserId": null,
                       "transferredFromPhone": null,
                       "redemptionCount": 1,
-                      "redemptions": null
+                      "redemptions": null,
+                      "paymentMethod": "ECOCASH",
+                      "orderRef": "VCH-4F9A1C22B7D3"
                     }
                   ],
                   "page": 0, "size": 20, "totalElements": 612, "totalPages": 31, "first": true, "last": false
@@ -1320,14 +1329,20 @@ public class ReportingController {
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             @ParameterObject Pageable pageable) {
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForOperator(status, from, to, pageable)));
+                reporting.vouchersForOperator(status, from, to, filters, pageable)));
     }
 
     @GetMapping("/vouchers/tenant")
     @Operation(summary = "Voucher report — current tenant",
-            description = "Every voucher for the X-Tenant-Id tenant, with summary aggregates + paginated detail." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
+            description = "Every voucher for the X-Tenant-Id tenant, with summary aggregates + paginated detail. " +
+                          "Optional filters (all combine with AND, summary honours all but `status`): merchantId, " +
+                          "shopId, currency, paymentMethod (FREE / ONLINE / INNBUCKS / ECOCASH / ONLINE_CARD / CASH / " +
+                          "CARD_POS), issuedBy, phone (recipient or sender, any spelling), q (code / name / phone / " +
+                          "issuer email), bulk, batchId, campaign, expiresFrom/expiresTo, redeemedFrom/redeemedTo, " +
+                          "minValue/maxValue. Sort with `sort=issuedAt,desc` / `value` / `expiresAt` / `redeemedAt`." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(
             responseCode = "200", description = "Report retrieved",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -1337,11 +1352,13 @@ public class ReportingController {
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             @ParameterObject Pageable pageable) {
         UUID tenantId = tenantContext.requireTenantId();
+        requireFilterOwnership(tenantId, filters);
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
                 reporting.vouchersForTenant(tenantId, merchantAuthz.readableMerchants(tenantId),
-                        status, from, to, pageable)));
+                        status, from, to, filters, pageable)));
     }
 
     @GetMapping("/vouchers/merchant/{merchantId}")
@@ -1368,10 +1385,14 @@ public class ReportingController {
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             @ParameterObject Pageable pageable) {
+        UUID tenantId = merchantAuthzTenant(merchantId);
+        if (filters != null && filters.shopId() != null) {
+            merchantAuthz.requireCallerAccessesShop(tenantId, filters.shopId());
+        }
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForMerchant(
-                        merchantAuthzTenant(merchantId), merchantId, status, from, to, pageable)));
+                reporting.vouchersForMerchant(tenantId, merchantId, status, from, to, filters, pageable)));
     }
 
     @GetMapping("/vouchers/shop/{shopId}")
@@ -1405,9 +1426,10 @@ public class ReportingController {
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             @ParameterObject Pageable pageable) {
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForShop(shopAuthzTenant(shopId), shopId, status, from, to, pageable)));
+                reporting.vouchersForShop(shopAuthzTenant(shopId), shopId, status, from, to, filters, pageable)));
     }
 
     @GetMapping("/vouchers/detail/{id}")
@@ -1473,7 +1495,9 @@ public class ReportingController {
                                             "deviceFingerprint": "fp-deadbeef-0001",
                                             "reason": null
                                           }
-                                        ]
+                                        ],
+                                        "paymentMethod": "ECOCASH",
+                                        "orderRef": "VCH-4F9A1C22B7D3"
                                       }
                                     }
                                     """))),
@@ -1513,23 +1537,21 @@ public class ReportingController {
                     + "Tawanda Mpofu,+263782608767,,,\\n"))))
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<String> vouchersExport(
-            @RequestParam(required = false) UUID merchantId,
-            @RequestParam(required = false) UUID shopId,
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters) {
         UUID tenantId = tenantContext.requireTenantId();
+        // merchantId / shopId are two of the filters (same query names as before).
+        UUID merchantId = filters == null ? null : filters.merchantId();
+        UUID shopId = filters == null ? null : filters.shopId();
         String level = shopId != null ? "SHOP" : merchantId != null ? "MERCHANT" : "TENANT";
         UUID scopeId = shopId != null ? shopId : merchantId;
         // A named shop or merchant must be the caller's; the tenant level is
         // narrowed to the caller's merchants.
-        if (shopId != null) {
-            merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
-        } else if (merchantId != null) {
-            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
-        }
+        requireFilterOwnership(tenantId, filters);
         java.util.Set<UUID> scope = "TENANT".equals(level) ? merchantAuthz.readableMerchants(tenantId) : null;
-        String csv = reporting.voucherCsv(level, tenantId, scopeId, scope, status, from, to);
+        String csv = reporting.voucherCsv(level, tenantId, scopeId, scope, status, from, to, filters);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
                 .header("Content-Disposition", "attachment; filename=\"vouchers.csv\"")
                 .body(csv);
@@ -1548,8 +1570,9 @@ public class ReportingController {
     public ResponseEntity<String> vouchersExportOperator(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        String csv = reporting.voucherCsv("OPERATOR", null, null, status, from, to);
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters) {
+        String csv = reporting.voucherCsv("OPERATOR", null, null, null, status, from, to, filters);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
                 .header("Content-Disposition", "attachment; filename=\"vouchers-operator.csv\"")
                 .body(csv);

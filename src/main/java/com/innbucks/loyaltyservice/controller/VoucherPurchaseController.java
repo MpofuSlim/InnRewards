@@ -69,7 +69,9 @@ public class VoucherPurchaseController {
                     + "`payerPhone` (the EcoCash PIN-prompt target) defaults to the sender's phone, else the "
                     + "assignee's. The order stays payable for 30 minutes by default; payment-service extends "
                     + "that while a code/prompt is live. The caller must administer the issuing merchant "
-                    + "(SUPER_ADMIN exempt; SHOP_ADMIN pinned to the merchant in their JWT).")
+                    + "(SUPER_ADMIN exempt; SHOP_ADMIN and SHOP_USER (cashiers) pinned to the merchant in their JWT). "
+                    + "Cashiers sell vouchers through this paid flow; the free POST /loyalty/vouchers/issue stays "
+                    + "admin-only.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201", description = "Order created — collect payment next",
@@ -150,7 +152,7 @@ public class VoucherPurchaseController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> create(
             @Valid @RequestBody Dtos.PurchaseVoucherRequest req) {
         Dtos.VoucherPurchaseOrderResponse data =
@@ -228,7 +230,7 @@ public class VoucherPurchaseController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> get(
             @PathVariable String orderRef) {
         return ResponseEntity.ok(ApiResult.ok("Purchase order",
@@ -238,7 +240,9 @@ public class VoucherPurchaseController {
     @PostMapping("/{orderRef}/confirm-cash")
     @Operation(summary = "Confirm a CASH payment and issue the voucher",
             description = "The cashier has the money in hand — their confirmation IS the payment proof, so "
-                    + "this is gated on the same staff roles as issuing and records WHO confirmed. Issues "
+                    + "it records WHO confirmed. Cashiers (SHOP_USER) may confirm, for orders raised at their "
+                    + "own shop, except on a voucher to, from or paid by their own phone or to a staff member "
+                    + "(403 SELF_CONFIRM / STAFF_RECIPIENT). Issues "
                     + "the voucher immediately — the recipient's WhatsApp/SMS goes out, and the sender gets "
                     + "their own confirmation copy only when the ORDER named an explicit `senderPhone` (it is "
                     + "never filled in from the confirming cashier's token). Idempotent "
@@ -341,6 +345,35 @@ public class VoucherPurchaseController {
                                             }
                                             """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Shop staff (a cashier or shop admin) confirming a cash payment on a voucher "
+                            + "to, from or paid by their own phone, or for a recipient on the merchant's staff "
+                            + "list; or a caller outside this merchant",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Shop staff on their own voucher", value = """
+                                            {
+                                              "code": "SELF_CONFIRM",
+                                              "message": "You can't confirm a cash or card payment for a voucher to or from your own phone. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Recipient is a staff member", value = """
+                                            {
+                                              "code": "STAFF_RECIPIENT",
+                                              "message": "This voucher is for a staff member, so shop staff can't confirm a cash or card payment for it. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404", description = "Unknown order in this tenant",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -352,7 +385,7 @@ public class VoucherPurchaseController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> confirmCash(
             @PathVariable String orderRef) {
         return ResponseEntity.ok(ApiResult.ok("Cash payment confirmed — voucher issued",
@@ -482,6 +515,35 @@ public class VoucherPurchaseController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Shop staff (a cashier or shop admin) confirming a card-machine payment on a voucher "
+                            + "to, from or paid by their own phone, or for a recipient on the merchant's staff "
+                            + "list; or a caller outside this merchant",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Shop staff on their own voucher", value = """
+                                            {
+                                              "code": "SELF_CONFIRM",
+                                              "message": "You can't confirm a cash or card payment for a voucher to or from your own phone. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Recipient is a staff member", value = """
+                                            {
+                                              "code": "STAFF_RECIPIENT",
+                                              "message": "This voucher is for a staff member, so shop staff can't confirm a cash or card payment for it. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404", description = "Unknown order in this tenant",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -493,7 +555,7 @@ public class VoucherPurchaseController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> confirmCard(
             @PathVariable String orderRef,
             @Valid @RequestBody Dtos.ConfirmCardPaymentRequest req) {

@@ -62,18 +62,48 @@ class VoucherPurchaseControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void post_confirm_card_as_customer_or_cashier_returns_403() throws Exception {
+    void post_confirm_card_as_customer_returns_403() throws Exception {
         // A card-machine confirmation IS the payment proof, so it carries the
-        // same staff gate as cash: no customer, and no SHOP_USER till token.
-        for (String role : new String[] {"CUSTOMER", "SHOP_USER"}) {
-            String token = TestJwtFactory.builder(role.toLowerCase() + "@test.local")
-                    .role(role).phoneNumber("+263770000111").sign(jwtSecret);
-            mockMvc.perform(post("/loyalty/vouchers/purchase/{ref}/confirm-card", "VCH-4F9A1C22B7D3")
-                            .header("Authorization", bearer(token))
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"approvalCode\": \"A1B2C3\"}"))
-                    .andExpect(status().isForbidden());
-        }
+        // same staff gate as cash: no customer.
+        String token = TestJwtFactory.builder("customer@test.local")
+                .role("CUSTOMER").phoneNumber("+263770000111").sign(jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/purchase/{ref}/confirm-card", "VCH-4F9A1C22B7D3")
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"approvalCode\": \"A1B2C3\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void cashier_passes_the_role_gate_on_every_paid_sale_endpoint() throws Exception {
+        // Cashiers sell vouchers at the till: the role gate admits SHOP_USER on
+        // create, poll, confirm-cash and confirm-card. What a cashier may NOT
+        // confirm (their own phone, a colleague, another shop) is decided in the
+        // service, not here — so with the service mocked, each call is a 200.
+        String token = TestJwtFactory.builder("cashier@test.local")
+                .role("SHOP_USER").phoneNumber("+263770000111").sign(jwtSecret);
+        String tenant = newTenant("till").toString();
+        joinTenant(java.util.UUID.fromString(tenant), "cashier@test.local");
+        mockMvc.perform(post("/loyalty/vouchers/purchase")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\": 5.00}"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(get("/loyalty/vouchers/purchase/{ref}", "VCH-4F9A1C22B7D3")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/loyalty/vouchers/purchase/{ref}/confirm-cash", "VCH-4F9A1C22B7D3")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/loyalty/vouchers/purchase/{ref}/confirm-card", "VCH-4F9A1C22B7D3")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"approvalCode\": \"A1B2C3\"}"))
+                .andExpect(status().isOk());
     }
 
     @Test

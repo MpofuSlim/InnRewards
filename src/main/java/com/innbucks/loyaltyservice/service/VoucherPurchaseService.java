@@ -76,6 +76,7 @@ public class VoucherPurchaseService {
     private final MerchantAuthz merchantAuthz;
     private final SupportedCurrencies supportedCurrencies;
     private final ExchangeRateService fx;
+    private final StaffRegistry staffRegistry;
     private final Duration orderTtl;
     private final Set<String> cardPosCurrencies;
 
@@ -85,6 +86,7 @@ public class VoucherPurchaseService {
                                   MerchantAuthz merchantAuthz,
                                   SupportedCurrencies supportedCurrencies,
                                   ExchangeRateService fx,
+                                  StaffRegistry staffRegistry,
                                   LoyaltyProperties props) {
         this.orders = orders;
         this.vouchers = vouchers;
@@ -92,6 +94,7 @@ public class VoucherPurchaseService {
         this.merchantAuthz = merchantAuthz;
         this.supportedCurrencies = supportedCurrencies;
         this.fx = fx;
+        this.staffRegistry = staffRegistry;
         this.orderTtl = props.voucher().purchaseOrderTtl();
         this.cardPosCurrencies = parseCurrencies(props.voucher().cardPosCurrencies());
     }
@@ -190,7 +193,7 @@ public class VoucherPurchaseService {
     @Transactional(readOnly = true)
     public Dtos.VoucherPurchaseOrderResponse get(UUID tenantId, String orderRef) {
         VoucherPurchaseOrder order = requireTenantOrder(tenantId, orderRef);
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
+        requireCallerMayActOn(tenantId, order);
         return toResponse(order);
     }
 
@@ -211,9 +214,10 @@ public class VoucherPurchaseService {
                     "This order was already paid " + paidHow(order) + " — do not take cash for it.");
         }
         requireOffSystemPayable(order, "take cash");
+        requireShopStaffNotConfirmingForStaff(order);
 
         markPaid(order, VoucherPurchaseOrder.PaidVia.CASH, "CASH-" + UUID.randomUUID());
-        order.setCashConfirmedBy(CallerDetails.currentEmail());
+        order.setCashConfirmedBy(confirmerIdentity());
         issueForOrder(order);
         log.info("Voucher purchase order cash-confirmed orderRef={} by={} voucherId={}",
                 order.getOrderRef(), order.getCashConfirmedBy(), order.getVoucherId());
@@ -272,11 +276,12 @@ public class VoucherPurchaseService {
                             + ".");
         }
         requireOffSystemPayable(order, "swipe the card");
+        requireShopStaffNotConfirmingForStaff(order);
 
         markPaid(order, VoucherPurchaseOrder.PaidVia.CARD_POS, "CARD-" + code + "-" + UUID.randomUUID());
         order.setCardApprovalCode(code);
         order.setCardLast4(cardLast4);
-        order.setCashConfirmedBy(CallerDetails.currentEmail());
+        order.setCashConfirmedBy(confirmerIdentity());
         issueForOrder(order);
         log.info("Voucher purchase order card-confirmed orderRef={} by={} voucherId={}",
                 order.getOrderRef(), order.getCashConfirmedBy(), order.getVoucherId());
@@ -290,8 +295,76 @@ public class VoucherPurchaseService {
         VoucherPurchaseOrder order = orders.lockByOrderRef(orderRef)
                 .filter(o -> o.getTenantId().equals(tenantId))
                 .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
+        requireCallerMayActOn(tenantId, order);
         return order;
+    }
+
+    /**
+     * Merchant authz, plus the OUTLET pin for shop staff: a caller whose token
+     * names a shop (a cashier or shop admin) may read or confirm only orders
+     * created at that shop. Cash taken at one till for an order raised at
+     * another branch lands in a drawer nobody reconciles against it. An order
+     * with no shop (raised by a merchant admin) stays reachable by the
+     * merchant's staff. A foreign-shop order is a plain 404, the same answer
+     * as a missing one.
+     */
+    private void requireCallerMayActOn(UUID tenantId, VoucherPurchaseOrder order) {
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, order.getMerchantId());
+        UUID callerShop = CallerDetails.currentShopId();
+        if (callerShop != null && order.getShopId() != null && !callerShop.equals(order.getShopId())) {
+            throw LoyaltyException.notFound("purchase order");
+        }
+    }
+
+    /**
+     * Shop staff (cashiers and shop admins) may sell vouchers at the till, but
+     * may not VOUCH for an off-system payment on a voucher that goes to staff.
+     * A cash or card-machine confirmation is the cashier's word, so without this
+     * a cashier could raise an order to their own phone, or a colleague's, press
+     * "cash received" with nothing in the drawer, and walk away with a voucher.
+     * Refused when the recipient is on the merchant's staff list, or when the
+     * caller's own phone is the recipient, the sender or the payer. The customer
+     * can still pay electronically (EcoCash / InnBucks move real money), or a
+     * merchant admin can confirm. Merchant admins and platform staff are not
+     * subject to it.
+     *
+     * <p>The staff list fails open during a user-service outage (see
+     * {@link StaffRegistry}); the caller's-own-phone check needs no network and
+     * holds throughout.
+     */
+    private void requireShopStaffNotConfirmingForStaff(VoucherPurchaseOrder order) {
+        if (!CallerDetails.hasAnyRole("ROLE_SHOP_USER", "ROLE_SHOP_ADMIN")
+                || CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN")) {
+            return;
+        }
+        String callerPhone = CallerDetails.currentPhoneNumber();
+        if (voucherService.samePhone(callerPhone, order.getAssigneePhone())
+                || voucherService.samePhone(callerPhone, order.getSenderPhone())
+                || voucherService.samePhone(callerPhone, order.getPayerPhone())) {
+            log.warn("Off-system confirmation refused: shop staff on their own voucher orderRef={} by={}",
+                    order.getOrderRef(), confirmerIdentity());
+            throw LoyaltyException.forbidden("SELF_CONFIRM",
+                    "You can't confirm a cash or card payment for a voucher to or from your own phone. "
+                            + "Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.");
+        }
+        if (staffRegistry.isStaffPhone(order.getMerchantId(), order.getAssigneePhone())) {
+            log.warn("Off-system confirmation refused: recipient is merchant staff orderRef={} by={}",
+                    order.getOrderRef(), confirmerIdentity());
+            throw LoyaltyException.forbidden("STAFF_RECIPIENT",
+                    "This voucher is for a staff member, so shop staff can't confirm a cash or card payment "
+                            + "for it. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.");
+        }
+    }
+
+    /** Who confirmed an off-system payment: email, else phone, else account id.
+     *  Cashier accounts may have no email; the record must still name them. */
+    private static String confirmerIdentity() {
+        String email = CallerDetails.currentEmail();
+        if (email != null && !email.isBlank()) return email;
+        String phone = CallerDetails.currentPhoneNumber();
+        if (phone != null && !phone.isBlank()) return phone;
+        UUID userId = CallerDetails.currentUserId();
+        return userId == null ? null : userId.toString();
     }
 
     /**

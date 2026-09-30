@@ -701,6 +701,42 @@ public class ReportingService {
         if (!v.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "voucher belongs to a different tenant");
         }
+        return detailOf(v);
+    }
+
+    /**
+     * The console's "Voucher lookup": one box that takes either the voucher id
+     * or its code. A UUID is looked up by id, exactly as before (a foreign
+     * tenant's id is still 403 CROSS_TENANT). Anything else is read as a typed
+     * code through the same normalisation redemption uses (spaces, hyphens and
+     * case are forgiven), and a code that exists only in ANOTHER tenant is a
+     * plain 404: a staff lookup must not confirm that a code is real elsewhere.
+     */
+    public VoucherDetail voucherDetail(UUID tenantId, String idOrCode) {
+        if (idOrCode == null || idOrCode.isBlank()) {
+            throw LoyaltyException.badRequest("VOUCHER_ID_OR_CODE_REQUIRED",
+                    "Enter a voucher id or a voucher code.");
+        }
+        UUID id = parseUuid(idOrCode.strip());
+        if (id != null) {
+            return voucherDetail(tenantId, id);
+        }
+        Voucher v = VoucherService.findByTypedCode(vouchers, idOrCode)
+                .filter(found -> found.getTenantId().equals(tenantId))
+                .orElseThrow(() -> LoyaltyException.notFound("voucher"));
+        return detailOf(v);
+    }
+
+    private static UUID parseUuid(String s) {
+        try {
+            return UUID.fromString(s);
+        } catch (IllegalArgumentException notAUuid) {
+            return null;
+        }
+    }
+
+    private VoucherDetail detailOf(Voucher v) {
+        UUID voucherId = v.getId();
         List<RedemptionDetail> reds = voucherRedemptions
                 .findByVoucherIdOrderByRedeemedAtDesc(voucherId).stream()
                 .map(ReportingService::toRedemption).toList();

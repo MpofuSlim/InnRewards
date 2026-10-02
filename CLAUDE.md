@@ -2273,6 +2273,16 @@ JWT verification is **dual-alg** (Stage-1 of the fleet's HS256→RS256 migration
 optional `jwt.public-key` (PEM), else the HS256 `jwt.secret`. Keys are optional
 env vars (`JWT_PUBLIC_KEY`); default is HS256.
 
+**Every PEM parser here accepts the key on one line** (`JwtUtil` and
+`RegistrationAssertionVerifier`, kept in lock-step with ticketing's
+`FederationAssertionVerifier`). An env-file value is one line, so a PEM arrives
+with its breaks as literal two-character `\n` escapes, and those are dropped
+before Base64-decoding. Without that the backslash failed the boot ("Illegal
+base64 character 5c"), which is how user-service crash-looped the production
+cell on its first federation key (2026-10-02). Any other stray character still
+fails the boot, on purpose. Pinned by `JwtUtilPublicKeyPemTest` and
+`RegistrationAssertionVerifierTest.provisionedKeyShapes_areAccepted`.
+
 ## CI/CD & supply-chain integrity (OWASP A08)
 
 Invariants — weakening any needs a deliberate, called-out reason:

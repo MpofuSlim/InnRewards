@@ -224,7 +224,9 @@ loyalty:
       # Verification key for assertion mode: the partner's PUBLIC key, X.509 /
       # SubjectPublicKeyInfo PEM. Blank fails SAFE — enabled with no key means
       # every call is refused 503 and a HALF-PROVISIONED error is logged at boot,
-      # rather than the endpoint quietly accepting anything.
+      # rather than the endpoint quietly accepting anything. An env-file value is
+      # one line: give the PEM with its breaks as literal \n, with no breaks, or
+      # as the bare Base64 body. A key that still cannot be parsed fails the boot.
       public-key: ${LOYALTY_PARTNER_REGISTRATION_PUBLIC_KEY:}
       # Second accepted key, so rotating is an overlap rather than a cliff:
       # publish the new key here-and-current, cut the partner over, then clear.

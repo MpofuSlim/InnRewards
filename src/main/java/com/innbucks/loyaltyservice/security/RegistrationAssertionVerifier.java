@@ -181,8 +181,12 @@ public class RegistrationAssertionVerifier {
             return null;
         }
         try {
+            // A PEM kept on one line in an env file or a k8s Secret carries its line
+            // breaks as literal two-character "\n" escapes. A backslash is not Base64, so
+            // left in, it failed the boot; drop the escapes before the armour and whitespace.
             byte[] der = Base64.getDecoder().decode(
-                    pem.replaceAll("-----BEGIN [^-]+-----", "")
+                    pem.replace("\\n", "").replace("\\r", "")
+                            .replaceAll("-----BEGIN [^-]+-----", "")
                             .replaceAll("-----END [^-]+-----", "")
                             .replaceAll("\\s", ""));
             // Mirrors JwtUtil.parseRsaPublicKey. RSA covers the RS* algorithms;

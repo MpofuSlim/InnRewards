@@ -1219,9 +1219,9 @@ public class ReportingController {
         UUID tenantId = tenantContext.requireTenantId();
         // Streamed a page at a time; see CsvResponseWriter for why the headers
         // wait for the first write.
-        CsvResponseWriter out = new CsvResponseWriter(response, "transactions.csv");
-        reporting.writeCsv(out, tenantId, reportScope(tenantId, merchantId), from, to);
-        out.flush();
+        try (CsvResponseWriter out = new CsvResponseWriter(response, "transactions.csv")) {
+            reporting.writeCsv(out, tenantId, reportScope(tenantId, merchantId), from, to);
+        }
     }
 
     // ==================================================================
@@ -1553,9 +1553,9 @@ public class ReportingController {
         // narrowed to the caller's merchants.
         requireFilterOwnership(tenantId, filters);
         java.util.Set<UUID> scope = "TENANT".equals(level) ? merchantAuthz.readableMerchants(tenantId) : null;
-        CsvResponseWriter out = new CsvResponseWriter(response, "vouchers.csv");
-        reporting.writeVoucherCsv(out, level, tenantId, scopeId, scope, status, from, to, filters);
-        out.flush();
+        try (CsvResponseWriter out = new CsvResponseWriter(response, "vouchers.csv")) {
+            reporting.writeVoucherCsv(out, level, tenantId, scopeId, scope, status, from, to, filters);
+        }
     }
 
     @GetMapping(value = "/vouchers/export/operator", produces = "text/csv")
@@ -1574,8 +1574,8 @@ public class ReportingController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
-        CsvResponseWriter out = new CsvResponseWriter(response, "vouchers-operator.csv");
-        reporting.writeVoucherCsv(out, "OPERATOR", null, null, null, status, from, to, filters);
-        out.flush();
+        try (CsvResponseWriter out = new CsvResponseWriter(response, "vouchers-operator.csv")) {
+            reporting.writeVoucherCsv(out, "OPERATOR", null, null, null, status, from, to, filters);
+        }
     }
 }

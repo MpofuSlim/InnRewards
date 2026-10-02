@@ -715,15 +715,21 @@ public class ReportingService {
     /** {@link #csv(UUID, UUID, LocalDate, LocalDate)} over a merchant scope
      *  ({@code null} = the whole tenant). An empty scope is the header alone. */
     public String csv(UUID tenantId, Set<UUID> scope, LocalDate from, LocalDate to) {
-        java.io.StringWriter out = new java.io.StringWriter();
-        writeCsv(out, tenantId, scope, from, to);
-        return out.toString();
+        try (java.io.StringWriter out = new java.io.StringWriter()) {
+            writeCsv(out, tenantId, scope, from, to);
+            return out.toString();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e); // StringWriter.close() never throws
+        }
     }
 
     public String csv(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
-        java.io.StringWriter out = new java.io.StringWriter();
-        writeCsvRows(out, tenantId, merchantId, null, from, to);
-        return out.toString();
+        try (java.io.StringWriter out = new java.io.StringWriter()) {
+            writeCsvRows(out, tenantId, merchantId, null, from, to);
+            return out.toString();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e); // StringWriter.close() never throws
+        }
     }
 
     /**
@@ -1379,9 +1385,12 @@ public class ReportingService {
     public String voucherCsv(String level, UUID tenantId, UUID scopeId, Set<UUID> merchantScope,
                              Voucher.Status status, LocalDate from, LocalDate to,
                              VoucherReportFilters filters) {
-        java.io.StringWriter out = new java.io.StringWriter();
-        writeVoucherCsv(out, level, tenantId, scopeId, merchantScope, status, from, to, filters);
-        return out.toString();
+        try (java.io.StringWriter out = new java.io.StringWriter()) {
+            writeVoucherCsv(out, level, tenantId, scopeId, merchantScope, status, from, to, filters);
+            return out.toString();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e); // StringWriter.close() never throws
+        }
     }
 
     /**

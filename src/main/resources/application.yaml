@@ -35,12 +35,22 @@ spring:
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
+    # Off: with Open Session in View on (Boot's default) every request holds a
+    # pooled DB connection until the response is written. This service has no
+    # JPA associations, so nothing relies on lazy loading in the web layer.
+    open-in-view: false
     hibernate:
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        # Group saveAll / save-in-a-loop writes (bulk voucher issue, point lots,
+        # ledger rows) into JDBC batches. Ids are UUIDs, so INSERTs batch too.
+        jdbc:
+          batch_size: ${HIBERNATE_JDBC_BATCH_SIZE:50}
+        order_inserts: true
+        order_updates: true
 
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
@@ -525,9 +535,22 @@ management:
       probes:
         enabled: true
       show-details: when-authorized
+      # The k8s readiness probe hits /actuator/health/readiness. Only the DB
+      # gates it: Redis-backed paths here already degrade without Redis (the
+      # voucher guard's in-memory store, the fail-open denylist), so a Redis
+      # blip must not pull the pod out of its Service.
+      group:
+        readiness:
+          include: readinessState,db
   metrics:
     tags:
       application: ${spring.application.name}
+    # Fixed latency buckets so Prometheus can compute p95/p99 for every
+    # endpoint. A short, fixed list rather than percentiles-histogram, which
+    # emits ~70 buckets per uri/method/status.
+    distribution:
+      slo:
+        "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -590,6 +613,12 @@ spring:
       mail:
         smtp:
           auth: true
+          # JavaMail's defaults are infinite: one hung SMTP host would hold a
+          # notification thread forever, and with CallerRunsPolicy a full queue
+          # pushes the send onto the caller's thread.
+          connectiontimeout: ${MAIL_CONNECT_TIMEOUT_MS:5000}
+          timeout: ${MAIL_READ_TIMEOUT_MS:10000}
+          writetimeout: ${MAIL_WRITE_TIMEOUT_MS:10000}
           starttls:
             enable: true
             required: true

@@ -18,7 +18,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -1213,14 +1212,16 @@ public class ReportingController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<String> exportCsv(@RequestParam(required = false) UUID merchantId,
-                                            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-                                            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+    public void exportCsv(@RequestParam(required = false) UUID merchantId,
+                          @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                          @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                          jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         UUID tenantId = tenantContext.requireTenantId();
-        String csv = reporting.csv(tenantId, reportScope(tenantId, merchantId), from, to);
-        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
-                .header("Content-Disposition", "attachment; filename=\"transactions.csv\"")
-                .body(csv);
+        // Streamed a page at a time; see CsvResponseWriter for why the headers
+        // wait for the first write.
+        CsvResponseWriter out = new CsvResponseWriter(response, "transactions.csv");
+        reporting.writeCsv(out, tenantId, reportScope(tenantId, merchantId), from, to);
+        out.flush();
     }
 
     // ==================================================================
@@ -1536,11 +1537,12 @@ public class ReportingController {
                     + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1,"
                     + "Tawanda Mpofu,+263782608767,,,\\n"))))
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<String> vouchersExport(
+    public void vouchersExport(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters) {
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
+            jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         UUID tenantId = tenantContext.requireTenantId();
         // merchantId / shopId are two of the filters (same query names as before).
         UUID merchantId = filters == null ? null : filters.merchantId();
@@ -1551,10 +1553,9 @@ public class ReportingController {
         // narrowed to the caller's merchants.
         requireFilterOwnership(tenantId, filters);
         java.util.Set<UUID> scope = "TENANT".equals(level) ? merchantAuthz.readableMerchants(tenantId) : null;
-        String csv = reporting.voucherCsv(level, tenantId, scopeId, scope, status, from, to, filters);
-        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
-                .header("Content-Disposition", "attachment; filename=\"vouchers.csv\"")
-                .body(csv);
+        CsvResponseWriter out = new CsvResponseWriter(response, "vouchers.csv");
+        reporting.writeVoucherCsv(out, level, tenantId, scopeId, scope, status, from, to, filters);
+        out.flush();
     }
 
     @GetMapping(value = "/vouchers/export/operator", produces = "text/csv")
@@ -1567,14 +1568,14 @@ public class ReportingController {
                             value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount,"
                                     + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"))))
     @PreAuthorize("hasRole('SUPER_ADMIN')")
-    public ResponseEntity<String> vouchersExportOperator(
+    public void vouchersExportOperator(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters) {
-        String csv = reporting.voucherCsv("OPERATOR", null, null, null, status, from, to, filters);
-        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv"))
-                .header("Content-Disposition", "attachment; filename=\"vouchers-operator.csv\"")
-                .body(csv);
+            @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
+            jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        CsvResponseWriter out = new CsvResponseWriter(response, "vouchers-operator.csv");
+        reporting.writeVoucherCsv(out, "OPERATOR", null, null, null, status, from, to, filters);
+        out.flush();
     }
 }

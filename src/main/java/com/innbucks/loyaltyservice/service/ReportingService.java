@@ -86,6 +86,15 @@ public class ReportingService {
     // Merchant-360 report: rules block (merchant overrides + tenant templates).
     private final LoyaltyRuleRepository rules;
 
+    // The CSV exports run inside this class's one read-only transaction, so every
+    // page they load would stay in the persistence context until the export
+    // ends: the whole period in memory again, as entities instead of a String.
+    // They clear it after each page (see detachPage). Field-injected so the unit
+    // tests that construct this class by hand need no change; null there, where
+    // there is no persistence context to grow.
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     public ReportingService(TenantRepository tenants, MerchantRepository merchants,
                             LoyaltyUserRepository users,
                             LoyaltyTransactionRepository transactions,
@@ -706,23 +715,34 @@ public class ReportingService {
     /** {@link #csv(UUID, UUID, LocalDate, LocalDate)} over a merchant scope
      *  ({@code null} = the whole tenant). An empty scope is the header alone. */
     public String csv(UUID tenantId, Set<UUID> scope, LocalDate from, LocalDate to) {
-        if (scope == null) {
-            return csv(tenantId, (UUID) null, from, to);
-        }
-        return csvRows(tenantId, null, scope, from, to);
+        java.io.StringWriter out = new java.io.StringWriter();
+        writeCsv(out, tenantId, scope, from, to);
+        return out.toString();
     }
 
     public String csv(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
-        return csvRows(tenantId, merchantId, null, from, to);
+        java.io.StringWriter out = new java.io.StringWriter();
+        writeCsvRows(out, tenantId, merchantId, null, from, to);
+        return out.toString();
     }
 
-    private String csvRows(UUID tenantId, UUID merchantId, Set<UUID> scope, LocalDate from, LocalDate to) {
+    /**
+     * The transaction export, written to {@code out} a page at a time instead of
+     * built as one String. Everything that can refuse the request (the range
+     * check) runs BEFORE the first write, so a caller that commits the response
+     * only on its first write still answers a bad request with an ordinary error.
+     */
+    public void writeCsv(java.io.Writer out, UUID tenantId, Set<UUID> scope, LocalDate from, LocalDate to) {
+        writeCsvRows(out, tenantId, null, scope, from, to);
+    }
+
+    private void writeCsvRows(java.io.Writer out, UUID tenantId, UUID merchantId, Set<UUID> scope,
+                              LocalDate from, LocalDate to) {
         requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
 
-        StringBuilder sb = new StringBuilder(
-                "id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber\n");
+        write(out, "id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference,invoiceNumber\n");
 
         // IN-9: resolve invoice_id -> the human-readable invoice number, which is
         // what someone reconciling points against a bill actually quotes. Cached
@@ -755,6 +775,7 @@ public class ReportingService {
                         .forEach(i -> invoiceNumbers.put(i.getId(), i.getInvoiceNumber()));
             }
 
+            StringBuilder sb = new StringBuilder();
             for (LoyaltyTransaction t : page.getContent()) {
                 sb.append(t.getId()).append(',')
                         .append(t.getCreatedAt()).append(',')
@@ -769,10 +790,33 @@ public class ReportingService {
                                 ? null : invoiceNumbers.get(t.getInvoiceId())))
                         .append('\n');
             }
-            if (page.isLast()) break;
+            write(out, sb);
+            boolean last = page.isLast();
+            detachPage();
+            if (last) break;
             pageNum++;
         }
-        return sb.toString();
+    }
+
+    /** Writes one chunk of an export and flushes it, so it leaves the process now. */
+    private static void write(java.io.Writer out, CharSequence chunk) {
+        try {
+            out.append(chunk);
+            out.flush();
+        } catch (java.io.IOException e) {
+            // Almost always the client going away mid-download. The response is
+            // already committed, so there is nothing left to answer; stop the export.
+            throw new java.io.UncheckedIOException("CSV export interrupted", e);
+        }
+    }
+
+    /**
+     * Drops the page just written from the persistence context. The export's
+     * transaction is read-only, so nothing is dirty and nothing is lost; without
+     * this, every page stays managed until the export ends.
+     */
+    private void detachPage() {
+        if (entityManager != null) entityManager.clear();
     }
 
     // ==================================================================
@@ -1335,6 +1379,19 @@ public class ReportingService {
     public String voucherCsv(String level, UUID tenantId, UUID scopeId, Set<UUID> merchantScope,
                              Voucher.Status status, LocalDate from, LocalDate to,
                              VoucherReportFilters filters) {
+        java.io.StringWriter out = new java.io.StringWriter();
+        writeVoucherCsv(out, level, tenantId, scopeId, merchantScope, status, from, to, filters);
+        return out.toString();
+    }
+
+    /**
+     * The voucher export, written to {@code out} a page at a time. As with
+     * {@link #writeCsv}, every refusal (the scope, the named merchant or shop,
+     * an inverted range) is raised before the first write.
+     */
+    public void writeVoucherCsv(java.io.Writer out, String level, UUID tenantId, UUID scopeId,
+                                Set<UUID> merchantScope, Voucher.Status status, LocalDate from, LocalDate to,
+                                VoucherReportFilters filters) {
         UUID excludeTenantId = null, filterTenantId = null, merchantId = null, shopId = null;
         switch (level == null ? "" : level.toUpperCase()) {
             case "OPERATOR" -> excludeTenantId = TicketingLoyaltyService.TICKETING_TENANT_ID;
@@ -1364,12 +1421,17 @@ public class ReportingService {
         }
         Specification<Voucher> spec = filter(filterTenantId, excludeTenantId, merchantId, shopId, status, fromI, toI)
                 .and(inMerchants(merchantScope)).and(reportFilters(filters));
-        StringBuilder sb = new StringBuilder(VOUCHER_CSV_HEADER);
+        write(out, VOUCHER_CSV_HEADER);
         int pageNum = 0;
         int pageSize = 500;
         while (true) {
+            // id breaks ties: offset paging over a non-unique sort key can repeat
+            // or skip a row at a page boundary (a bulk issue stamps many vouchers
+            // with the same issuedAt).
             Page<Voucher> page = vouchers.findAll(spec,
-                    PageRequest.of(pageNum, pageSize, Sort.by(Sort.Direction.DESC, "issuedAt")));
+                    PageRequest.of(pageNum, pageSize, Sort.by(Sort.Direction.DESC, "issuedAt")
+                            .and(Sort.by(Sort.Direction.DESC, "id"))));
+            StringBuilder sb = new StringBuilder();
             for (VoucherDetail d : enrich(page).getContent()) {
                 sb.append(csvField(d.id())).append(',')
                         // Grouped with hyphens HERE only — never in toDetail, which also
@@ -1413,10 +1475,12 @@ public class ReportingService {
                         .append(csvField(d.orderRef()))
                         .append('\n');
             }
-            if (page.isLast()) break;
+            write(out, sb);
+            boolean last = page.isLast();
+            detachPage();
+            if (last) break;
             pageNum++;
         }
-        return sb.toString();
     }
 
     private static UUID requireScopeTenant(UUID tenantId) {

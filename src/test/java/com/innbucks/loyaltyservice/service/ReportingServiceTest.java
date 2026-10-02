@@ -464,6 +464,27 @@ class ReportingServiceTest {
     }
 
     @Test
+    void streamedExports_refuseBeforeTheirFirstWrite() {
+        // The controllers commit the download headers on the first write, so a
+        // refusal must come first or the client saves an error page as a .csv.
+        java.io.StringWriter out = new java.io.StringWriter();
+        java.time.LocalDate from = java.time.LocalDate.of(2026, 9, 3);
+        java.time.LocalDate to = java.time.LocalDate.of(2026, 9, 1);
+
+        LoyaltyException range = assertThrows(LoyaltyException.class,
+                () -> reporting.writeCsv(out, TENANT_A, (java.util.Set<UUID>) null, from, to));
+        assertEquals("RANGE_INVERTED", range.getCode());
+        LoyaltyException voucherRange = assertThrows(LoyaltyException.class,
+                () -> reporting.writeVoucherCsv(out, "OPERATOR", null, null, null, null, from, to, null));
+        assertEquals("RANGE_INVERTED", voucherRange.getCode());
+        LoyaltyException scope = assertThrows(LoyaltyException.class,
+                () -> reporting.writeVoucherCsv(out, "NOPE", TENANT_A, null, null, null, null, null, null));
+        assertEquals("BAD_SCOPE", scope.getCode());
+
+        assertEquals("", out.toString(), "nothing may be written before a refusal");
+    }
+
+    @Test
     void scopedReports_withAnEmptyScope_readNothing_andNeverQueryTheTenant() {
         java.util.Set<UUID> none = java.util.Set.of();
         java.time.LocalDate from = java.time.LocalDate.of(2026, 9, 1);

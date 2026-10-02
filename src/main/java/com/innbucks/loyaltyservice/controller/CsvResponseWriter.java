@@ -58,6 +58,12 @@ final class CsvResponseWriter extends Writer {
         if (delegate != null) delegate.flush();
     }
 
+    /**
+     * Flushes, and does nothing else. The controllers open this in a
+     * try-with-resources, so it also runs when a refusal is thrown before the
+     * first write: it must not commit or touch the response then, and it leaves
+     * the servlet's own writer for the container to close.
+     */
     @Override
     public void close() throws IOException {
         flush();

@@ -17,7 +17,7 @@ class CsvResponseWriterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         CsvResponseWriter out = new CsvResponseWriter(response, "transactions.csv");
 
-        out.flush();
+        out.close(); // what the controllers' try-with-resources does when a refusal is thrown first
 
         assertThat(response.getHeader("Content-Disposition")).isNull();
         assertThat(response.getContentType()).isNull();

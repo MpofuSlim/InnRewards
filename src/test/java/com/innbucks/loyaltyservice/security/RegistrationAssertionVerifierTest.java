@@ -217,6 +217,42 @@ class RegistrationAssertionVerifierTest {
     }
 
     @Test
+    @DisplayName("every shape the cell Secret can carry the key in parses, current and previous alike")
+    void provisionedKeyShapes_areAccepted() {
+        // An env-file value is one line, so the PEM arrives with its breaks as
+        // literal two-character "\n" escapes. The backslash is not Base64: the
+        // same parser in user-service crash-looped the production cell on it
+        // (2026-10-02, "Illegal base64 character 5c"). Kept in lock-step.
+        String pem = pem(keyPair.getPublic()) + "\n";
+        String[] shapes = {
+                pem.replace("\n", "\\n"),  // one line, literal \n escapes
+                pem.replace("\n", "\\r\\n"),  // one line, literal \r\n escapes
+                pem.replace("\n", ""),  // armour, no breaks at all
+                Base64.getEncoder().encodeToString(keyPair.getPublic().getEncoded())  // bare body
+        };
+        for (String shape : shapes) {
+            RegistrationAssertionVerifier current = new RegistrationAssertionVerifier(shape, "", ISSUER, AUDIENCE, 300);
+            current.parseKeys();
+            assertThat(current.verify(validAssertion()).phoneNumber()).as(shape).isEqualTo(PHONE);
+
+            RegistrationAssertionVerifier previous = new RegistrationAssertionVerifier("", shape, ISSUER, AUDIENCE, 300);
+            previous.parseKeys();
+            assertThat(previous.verify(validAssertion()).phoneNumber()).as(shape).isEqualTo(PHONE);
+        }
+    }
+
+    @Test
+    @DisplayName("only the newline escapes are dropped: any other backslash still fails the boot")
+    void otherBackslashSequences_stillFailFast() {
+        RegistrationAssertionVerifier v = new RegistrationAssertionVerifier(
+                pem(keyPair.getPublic()).replace("\n", "\\t"), "", ISSUER, AUDIENCE, 300);
+
+        assertThatThrownBy(v::parseKeys)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("loyalty.registration.partner.public-key");
+    }
+
+    @Test
     @DisplayName("an unparseable key fails at construction, not at the first assertion")
     void malformedKey_failsFast() {
         RegistrationAssertionVerifier v = new RegistrationAssertionVerifier(

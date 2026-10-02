@@ -417,6 +417,11 @@ another connection inside the send: only committed data is visible there).
   (`TransactionTemplate`), and only then dispatched, outside any transaction; a
   page that fails to commit sends nothing. Still one page of 500 wallets + 500
   vouchers per run, ShedLock unchanged.
+- **Invoice emails run on `billingExecutor`, which never drops** (caller-runs,
+  core 1 / max 2 / queue 1000). An invoice is a bill, and the nightly run sends
+  one per merchant in a burst, exactly what would overflow the dropping pool.
+  It is also `getAsyncExecutor()`, so a bare `@Async` never inherits
+  drop-and-count; dropping is opted into by naming `notificationExecutor`.
 - **The STAFF_RECIPIENT registry is pre-loaded before the transaction opens.**
   The guard runs inside a transaction (after the earn's PENDING insert, under
   the QR row lock, under the purchase order's row lock), and a cold cache there

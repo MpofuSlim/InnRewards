@@ -15,12 +15,12 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * Enables {@link org.springframework.scheduling.annotation.Async @Async} app-wide
- * and provides the two executors customer messages run on.
+ * and provides the three executors messages run on.
  *
  * <h2>{@code notificationExecutor} — every per-request message (drop and count)</h2>
  * Voucher delivery and the sender copy, points earned / redeemed / transferred /
- * adjusted, guest checkout, tenant attach, and (as the default {@code @Async}
- * executor) the invoice email. Submitted AFTER the caller's transaction commits
+ * adjusted, guest checkout, tenant attach. Every one names it explicitly
+ * ({@code @Async("notificationExecutor")}). Submitted AFTER the caller's transaction commits
  * ({@link com.innbucks.loyaltyservice.util.AfterCommit}), so a rolled-back spend
  * never messages anyone.
  * <ul>
@@ -43,6 +43,15 @@ import java.util.concurrent.ThreadPoolExecutor;
  * {@code CallerRunsPolicy}: when full, the scheduler thread sends the next
  * warning itself, which is backpressure on the sweep and nothing else (it holds
  * no transaction while dispatching).
+ *
+ * <h2>{@code billingExecutor} — the invoice email, and the {@code @Async} default (caller runs)</h2>
+ * An invoice email is a bill, not a courtesy message, and the nightly invoicing
+ * job sends one per merchant in a burst — exactly the shape that would fill the
+ * notification pool's queue and be dropped. So it runs on its own small pool
+ * that never drops: when full, the invoicing thread sends the email itself,
+ * which only slows the nightly job. It is also what a bare {@code @Async}
+ * resolves to, so dropping stays something a call site opts into by name, never
+ * a default it inherits.
  *
  * <p>Uncaught exceptions go to {@link SimpleAsyncUncaughtExceptionHandler}.
  * Every notifier already swallows its own gateway exceptions; this handler is
@@ -89,6 +98,20 @@ public class AsyncConfig implements AsyncConfigurer {
         return executor;
     }
 
+    @Bean(name = "billingExecutor")
+    public Executor billingExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(1000);
+        executor.setThreadNamePrefix("loyalty-billing-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
+    }
+
     /** Registered when the executor is built, so the series exists at 0 from startup. */
     private Counter rejectedCounter(String executorName) {
         MeterRegistry registry = meterRegistry.getIfAvailable();
@@ -103,7 +126,7 @@ public class AsyncConfig implements AsyncConfigurer {
 
     @Override
     public Executor getAsyncExecutor() {
-        return notificationExecutor();
+        return billingExecutor();
     }
 
     @Override

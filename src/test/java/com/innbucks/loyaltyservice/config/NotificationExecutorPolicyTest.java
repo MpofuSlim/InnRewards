@@ -116,6 +116,26 @@ class NotificationExecutorPolicyTest {
                 .isInstanceOf(ThreadPoolExecutor.CallerRunsPolicy.class);
     }
 
+    @Test
+    void invoiceEmails_andBareAsync_runOnAPoolThatNeverDrops() throws Exception {
+        AsyncConfig config = new AsyncConfig(beanProvider(new SimpleMeterRegistry()));
+        ThreadPoolTaskExecutor billing = (ThreadPoolTaskExecutor) config.billingExecutor();
+        springToShutDown.add(billing);
+        assertThat(billing.getThreadPoolExecutor().getRejectedExecutionHandler())
+                .isInstanceOf(ThreadPoolExecutor.CallerRunsPolicy.class);
+
+        ThreadPoolTaskExecutor fallback = (ThreadPoolTaskExecutor) config.getAsyncExecutor();
+        springToShutDown.add(fallback);
+        assertThat(fallback.getThreadPoolExecutor().getRejectedExecutionHandler())
+                .as("a bare @Async must not inherit drop-and-count")
+                .isNotInstanceOf(DropAndCountPolicy.class);
+
+        java.lang.reflect.Method m = com.innbucks.loyaltyservice.integration.InvoiceEmailNotifier.class
+                .getMethod("onInvoiceGenerated", com.innbucks.loyaltyservice.integration.InvoiceGeneratedEvent.class);
+        assertThat(m.getAnnotation(org.springframework.scheduling.annotation.Async.class).value())
+                .isEqualTo("billingExecutor");
+    }
+
     private static org.springframework.beans.factory.ObjectProvider<MeterRegistry> beanProvider(MeterRegistry r) {
         return new StaticListableBeanFactory(Map.of("meterRegistry", r)).getBeanProvider(MeterRegistry.class);
     }

@@ -728,6 +728,9 @@ public class ShopController {
         // row); the POS never supplies one. Mirrors /payments/shop-checkout's
         // "SHOP-" + UUID convention.
         String reference = "SHOP-" + UUID.randomUUID();
+        // Load the STAFF_RECIPIENT snapshot before the checkout's transaction
+        // opens, so the guard inside it never waits on user-service. Never refuses.
+        shopCheckout.prewarmStaffRecipientGuard(tenantId, shop.merchantId());
         // Cash-only: pointsAmount = ZERO skips the burn/redemption leg, so a PENDING
         // (unregistered) customer earns without a spendable-balance check.
         // TYPED_PHONE, not CHECKOUT_S2S: the cashier keyed this phone in, so the

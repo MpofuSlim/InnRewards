@@ -52,6 +52,15 @@ public class ShopCheckoutService {
 
     /** The payment-service S2S checkout: the customer's phone comes from their
      *  own payment, so no staff member chose the recipient. */
+    /**
+     * Pre-load the STAFF_RECIPIENT registry for the shop's merchant before the
+     * checkout's transaction opens — see
+     * {@link TransactionService#prewarmStaffRecipientGuard}. Never throws.
+     */
+    public void prewarmStaffRecipientGuard(UUID tenantId, UUID merchantId) {
+        transactionService.prewarmStaffRecipientGuard(tenantId, merchantId);
+    }
+
     @Transactional
     public Result checkout(UUID shopId,
                            String phoneNumber,

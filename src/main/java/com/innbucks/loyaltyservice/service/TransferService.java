@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.util.AfterCommit;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.TransactionType;
@@ -146,10 +147,16 @@ public class TransferService {
             walletService.apply(from.getId(), req.points().negate(), debit.getId(), "transfer-out", tenantId);
         }
         BigDecimal senderBalance = walletService.totalBalance(sender.getPhoneNumber());
-        // Confirm to the sender and tell the recipient they received points.
-        memberNotifier.notifyTransferSent(sender.getPhoneNumber(), req.points(), senderBalance);
-        memberNotifier.notifyTransferReceived(recipient.getPhoneNumber(), req.points(),
-                walletService.totalBalance(recipient.getPhoneNumber()));
+        BigDecimal recipientBalance = walletService.totalBalance(recipient.getPhoneNumber());
+        // Confirm to the sender and tell the recipient they received points —
+        // once this transaction COMMITS, never for a transfer that rolls back.
+        String senderPhone = sender.getPhoneNumber();
+        String recipientPhone = recipient.getPhoneNumber();
+        BigDecimal points = req.points();
+        AfterCommit.run(() -> {
+            memberNotifier.notifyTransferSent(senderPhone, points, senderBalance);
+            memberNotifier.notifyTransferReceived(recipientPhone, points, recipientBalance);
+        });
         return senderBalance;
     }
 

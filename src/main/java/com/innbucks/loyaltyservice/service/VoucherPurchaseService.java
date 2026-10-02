@@ -333,8 +333,7 @@ public class VoucherPurchaseService {
      * holds throughout.
      */
     private void requireShopStaffNotConfirmingForStaff(VoucherPurchaseOrder order) {
-        if (!CallerDetails.hasAnyRole("ROLE_SHOP_USER", "ROLE_SHOP_ADMIN")
-                || CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN")) {
+        if (!isShopStaffOnly()) {
             return;
         }
         String callerPhone = CallerDetails.currentPhoneNumber();
@@ -353,6 +352,41 @@ public class VoucherPurchaseService {
             throw LoyaltyException.forbidden("STAFF_RECIPIENT",
                     "This voucher is for a staff member, so shop staff can't confirm a cash or card payment "
                             + "for it. Pay by EcoCash or InnBucks, or ask a merchant admin to confirm it.");
+        }
+    }
+
+    /** Shop staff (cashier / shop admin) not also holding an admin role — the
+     *  callers {@link #requireShopStaffNotConfirmingForStaff} applies to. One
+     *  definition, shared with {@link #prewarmStaffGuard}, so they cannot drift. */
+    private static boolean isShopStaffOnly() {
+        return CallerDetails.hasAnyRole("ROLE_SHOP_USER", "ROLE_SHOP_ADMIN")
+                && !CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN");
+    }
+
+    /**
+     * Pre-load the STAFF_RECIPIENT registry for an order a cashier is about to
+     * confirm (cash or card machine), BEFORE the confirm takes the order's row
+     * lock — the guard runs under that lock, and a cold cache held it across a
+     * user-service round-trip. A plain, non-locking read; only for the callers
+     * the guard applies to and an order of this tenant with a recipient phone.
+     * <b>Never throws and never refuses</b> — every refusal (404, authz,
+     * SELF_CONFIRM, STAFF_RECIPIENT, …) is still the confirm's own, in its
+     * existing order. Fail-open semantics are the registry's, unchanged.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public void prewarmStaffGuard(UUID tenantId, String orderRef) {
+        try {
+            if (tenantId == null || orderRef == null || !isShopStaffOnly()) {
+                return;
+            }
+            orders.findByOrderRef(orderRef)
+                    .filter(o -> tenantId.equals(o.getTenantId()))
+                    .filter(o -> o.getAssigneePhone() != null && !o.getAssigneePhone().isBlank())
+                    .map(VoucherPurchaseOrder::getMerchantId)
+                    .filter(merchantId -> !staffRegistry.isCached(merchantId))
+                    .ifPresent(staffRegistry::warm);
+        } catch (RuntimeException e) {
+            // An optimisation only — the confirm loads on demand.
         }
     }
 

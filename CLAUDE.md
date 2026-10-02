@@ -382,6 +382,52 @@ MERCHANT_ADMIN or SHOP_ADMIN read every sibling merchant's figures (and codes).
   activity across the tenant, and the merchant / rule / campaign / invoice
   LISTS outside `/reports`.
 
+## Customer messages go out AFTER COMMIT, on a pool that drops and counts
+
+**Every SMS/WhatsApp/email hand-off a transactional service makes goes through
+`util/AfterCommit.run`** — voucher delivery and the sender copy (`finishIssue`),
+the three transfer messages, points earned / redeemed / transferred / adjusted,
+the tenant-attach ping. Inside a transaction it registers an `afterCommit`
+callback; outside one it runs now. So a spend that rolls back messages nobody,
+and the `@Async` submission never happens while the caller holds its wallet /
+voucher / order row locks. `@Async` alone never guaranteed either: the hand-off
+ran inside the transaction. **A new message from a `@Transactional` path must go
+through it too.** Compute every value the message needs (balances, phones)
+BEFORE registering — the callback runs after the transaction, so nothing it
+reads lazily is guaranteed. It never throws: an exception out of `afterCommit`
+would reach the committer as an error for work that is already durable.
+Content, recipients and ordering are unchanged — the same rules above (sender
+copy, self-issue single message, transfer's code-less `notifyVoucherSent`).
+Pinned by `AfterCommitTest` and `NotificationAfterCommitIT` (reads the row from
+another connection inside the send: only committed data is visible there).
+
+- **`notificationExecutor` DROPS AND COUNTS when saturated** (owner decision):
+  core 2 / max 4 / queue 500, `DropAndCountPolicy` — never `CallerRunsPolicy`
+  (it ran a 30s SMS send on the HTTP thread, in the spend's transaction), never
+  `AbortPolicy` (`TaskRejectedException` would roll back the caller), never a
+  silent discard. Every drop increments `loyalty.notify.rejected{executor}`,
+  registered at 0 at startup, and logs a throttled WARN with no content and no
+  phone. Alert on any `increase()`.
+- **The 08:00 expiry sweep has its OWN executor and keeps caller-runs**
+  (`expiryWarningExecutor`). Its stamps are written before the send (warn-once),
+  so a dropped warning is never retried — it must not share the dropping pool.
+  `NotificationGateway.warnExpiring` and `MemberActivityNotifier.notifyPointsExpiring`
+  are therefore deliberately NOT `@Async`; adding it would re-route them to the
+  dropping pool. Each page is stamped and committed in its own short transaction
+  (`TransactionTemplate`), and only then dispatched, outside any transaction; a
+  page that fails to commit sends nothing. Still one page of 500 wallets + 500
+  vouchers per run, ShedLock unchanged.
+- **The STAFF_RECIPIENT registry is pre-loaded before the transaction opens.**
+  The guard runs inside a transaction (after the earn's PENDING insert, under
+  the QR row lock, under the purchase order's row lock), and a cold cache there
+  held those across a user-service round-trip. `StaffRegistry.warm` (same
+  loader, same fail-open, never throws) is called from the earn and guest
+  checkout controllers and, through a plain non-locking read
+  (`QrService.prewarmStaffRecipientGuard`, `VoucherPurchaseService.prewarmStaffGuard`),
+  before QR consume and cash/card confirmation. The pre-loads never refuse — every
+  refusal code and its order are still the service's own. A new caller of
+  `isStaffPhone` inside a transaction should get a pre-load too.
+
 ## Timestamps — UTC
 
 Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass

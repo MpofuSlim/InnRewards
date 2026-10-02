@@ -9,7 +9,10 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -76,5 +79,42 @@ class StaffRegistryTest {
         assertThat(registry.isStaffPhone(MERCHANT, null)).isFalse();
         assertThat(registry.isStaffPhone(MERCHANT, "  ")).isFalse();
         verify(client, times(0)).merchantStaffPhones(MERCHANT);
+    }
+
+    // --- warm(): the pre-load callers run BEFORE opening their transaction ---
+
+    @Test
+    void warm_loadsOnce_andTheGuardThenReadsTheCacheWithoutCallingUpstream() {
+        when(client.merchantStaffPhones(MERCHANT)).thenReturn(Optional.of(Set.of("+263771234567")));
+        assertThat(registry.isCached(MERCHANT)).isFalse();
+
+        registry.warm(MERCHANT);
+        registry.warm(MERCHANT); // already cached: no second call
+
+        assertThat(registry.isCached(MERCHANT)).isTrue();
+        assertThat(registry.isStaffPhone(MERCHANT, "+263771234567")).isTrue();
+        verify(client, times(1)).merchantStaffPhones(MERCHANT);
+    }
+
+    @Test
+    void warm_onAFailedLookup_cachesTheSameFailOpenAnswerTheGuardWouldHave() {
+        when(client.merchantStaffPhones(MERCHANT)).thenReturn(Optional.empty());
+
+        registry.warm(MERCHANT);
+
+        // Fail open, cached for the window — exactly as a miss inside the guard.
+        assertThat(registry.isStaffPhone(MERCHANT, "+263771234567")).isFalse();
+        verify(client, times(1)).merchantStaffPhones(MERCHANT);
+    }
+
+    @Test
+    void warm_neverThrows_andIgnoresANullMerchant() {
+        when(client.merchantStaffPhones(any())).thenThrow(new IllegalStateException("boom"));
+
+        assertThatCode(() -> registry.warm(MERCHANT)).doesNotThrowAnyException();
+        assertThatCode(() -> registry.warm(null)).doesNotThrowAnyException();
+        assertThat(registry.isCached(MERCHANT)).isFalse();
+        assertThat(registry.isCached(null)).isFalse();
+        verify(client, never()).merchantStaffPhones(null);
     }
 }

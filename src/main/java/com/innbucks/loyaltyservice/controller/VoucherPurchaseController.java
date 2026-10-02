@@ -380,8 +380,12 @@ public class VoucherPurchaseController {
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> confirmCash(
             @PathVariable String orderRef) {
+        java.util.UUID tenantId = tenantContext.requireTenantId();
+        // Load the STAFF_RECIPIENT snapshot before the confirm locks the order
+        // row, so the guard under that lock never waits on user-service.
+        purchases.prewarmStaffGuard(tenantId, orderRef);
         return ResponseEntity.ok(ApiResult.ok("Cash payment confirmed — voucher issued",
-                purchases.confirmCash(tenantContext.requireTenantId(), orderRef)));
+                purchases.confirmCash(tenantId, orderRef)));
     }
 
     @PostMapping("/{orderRef}/confirm-card")
@@ -551,8 +555,11 @@ public class VoucherPurchaseController {
     public ResponseEntity<ApiResult<Dtos.VoucherPurchaseOrderResponse>> confirmCard(
             @PathVariable String orderRef,
             @Valid @RequestBody Dtos.ConfirmCardPaymentRequest req) {
+        java.util.UUID tenantId = tenantContext.requireTenantId();
+        // Same pre-load as confirm-cash: before the order row lock, never refuses.
+        purchases.prewarmStaffGuard(tenantId, orderRef);
         return ResponseEntity.ok(ApiResult.ok("Card payment confirmed — voucher issued",
-                purchases.confirmCardPos(tenantContext.requireTenantId(), orderRef,
+                purchases.confirmCardPos(tenantId, orderRef,
                         req.approvalCode(), req.last4())));
     }
 }

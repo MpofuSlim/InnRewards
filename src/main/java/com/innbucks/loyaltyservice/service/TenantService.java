@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.util.AfterCommit;
 import com.innbucks.loyaltyservice.config.CacheConfig;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Tenant;
@@ -73,17 +74,25 @@ public class TenantService {
         // Attach the supplied user as the tenant's first member so they can
         // immediately pass this tenant's id as X-Tenant-Id.
         addMember(t.getId(), req.id());
-        // Best-effort "you've been added to {tenant}" ping (WhatsApp → SMS).
-        // @Async on its own thread, so it runs AFTER this txn commits and can
-        // never delay or fail the 201. The notifier already swallows every
-        // failure; the defensive try/catch here only guards the (unexpected)
-        // case of the async hand-off itself throwing synchronously.
-        try {
-            tenantMemberNotifier.notifyAddedToTenant(req.id(), t.getName());
-        } catch (RuntimeException e) {
-            log.warn("Failed to dispatch tenant-attach notification for tenant={} userId={}: {}",
-                    t.getId(), req.id(), e.toString());
-        }
+        // Best-effort "you've been added to {tenant}" ping (email → WhatsApp →
+        // SMS). Handed to the @Async executor only once this txn COMMITS
+        // (AfterCommit) — @Async alone did not guarantee that: the hand-off
+        // happened inside the transaction, so a create that then rolled back
+        // still announced a tenant that does not exist. Never delays or fails
+        // the 201. The notifier already swallows every failure; the defensive
+        // try/catch here only guards the (unexpected) case of the hand-off
+        // itself throwing synchronously.
+        UUID memberId = req.id();
+        String tenantName = t.getName();
+        UUID tenantId = t.getId();
+        AfterCommit.run(() -> {
+            try {
+                tenantMemberNotifier.notifyAddedToTenant(memberId, tenantName);
+            } catch (RuntimeException e) {
+                log.warn("Failed to dispatch tenant-attach notification for tenant={} userId={}: {}",
+                        tenantId, memberId, e.toString());
+            }
+        });
         return toResponse(t);
     }
 

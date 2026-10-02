@@ -153,6 +153,33 @@ public class QrService {
         }
     }
 
+    /**
+     * Pre-load the STAFF_RECIPIENT registry for the merchant whose QR is about
+     * to be consumed, BEFORE {@link #consume} takes the QR row lock — the guard
+     * runs under that lock, and a cold cache held it across a user-service
+     * round-trip. A plain, non-locking read of the token; anything that does not
+     * look like a live merchant QR of this tenant is simply skipped, so every
+     * refusal (and its fraud evidence row) is still {@link #consume}'s own.
+     * Never throws; fail-open semantics are the registry's, unchanged.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public void prewarmStaffRecipientGuard(UUID tenantId, String token) {
+        try {
+            if (!staffRecipientBlock || tenantId == null || token == null || token.isBlank()) {
+                return;
+            }
+            qrs.findByToken(token)
+                    .filter(q -> tenantId.equals(q.getTenantId())
+                            && q.getSourceType() == QrToken.SourceType.MERCHANT
+                            && q.getUsedAt() == null)
+                    .map(QrToken::getSourceId)
+                    .filter(merchantId -> !staffRegistry.isCached(merchantId))
+                    .ifPresent(staffRegistry::warm);
+        } catch (RuntimeException e) {
+            // An optimisation only — consume() loads on demand.
+        }
+    }
+
     public Dtos.TransactionResponse consume(UUID tenantId, Dtos.QrConsumeRequest req) {
         // --- Authorization: the credited/receiving user MUST be the caller. ---
         // consume() awards points (merchant QR) or receives a transfer (P2P QR)

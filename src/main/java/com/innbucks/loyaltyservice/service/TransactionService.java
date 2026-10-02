@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.util.AfterCommit;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.EarnChannel;
 import com.innbucks.loyaltyservice.entity.FraudAttempt;
@@ -67,6 +68,34 @@ public class TransactionService {
         this.fx = fx;
     }
 
+    /**
+     * Pre-load the STAFF_RECIPIENT registry for a typed-phone earn, BEFORE the
+     * earn's transaction opens. The guard inside {@link #post} runs after
+     * {@code findOrCreatePending} may have inserted the recipient's row, so a
+     * cold cache there held that insert open across a user-service round-trip
+     * (2s connect / 5s read) on the till's request thread.
+     *
+     * <p>Runs with NO transaction, does nothing when the guard is switched off
+     * or the merchant is already cached, and only loads for a merchant that
+     * exists in the caller's tenant (the merchant id may be caller-supplied).
+     * <b>Never throws and never refuses</b>: every refusal — an unknown or
+     * foreign merchant included — is still the post's own, in its own words
+     * and order. Fail-open semantics are the registry's, unchanged.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public void prewarmStaffRecipientGuard(UUID tenantId, UUID merchantId) {
+        try {
+            if (tenantId == null || merchantId == null || props.earn() == null
+                    || !props.earn().staffRecipientBlock() || staffRegistry.isCached(merchantId)) {
+                return;
+            }
+            merchants.requireMerchant(tenantId, merchantId);
+            staffRegistry.warm(merchantId);
+        } catch (RuntimeException e) {
+            log.debug("Staff-recipient pre-load skipped for merchant {}: {}", merchantId, e.toString());
+        }
+    }
+
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req,
                                           EarnChannel channel) {
         // JWT-gated callers (SHOP_USER / SHOP_ADMIN): attribute the transaction to
@@ -83,7 +112,8 @@ public class TransactionService {
             String phone = (req.assigneePhone() != null && !req.assigneePhone().isBlank())
                     ? req.assigneePhone()
                     : users.require(tenantId, req.userId()).getPhoneNumber();
-            memberNotifier.notifyPointsEarned(phone, resp.pointsDelta(), resp.balanceAfter());
+            // After COMMIT: an earn that rolls back must not be announced.
+            AfterCommit.run(() -> memberNotifier.notifyPointsEarned(phone, resp.pointsDelta(), resp.balanceAfter()));
         }
         return resp;
     }
@@ -397,7 +427,8 @@ public class TransactionService {
                 "adjust:" + (reason == null ? "n/a" : reason), tenantId);
         metrics.incTransactionPosted("ADJUSTMENT");
         // Unexpected balance changes are worth surfacing (credit or debit).
-        memberNotifier.notifyPointsAdjusted(u.getPhoneNumber(), points, balance);
+        String phone = u.getPhoneNumber();
+        AfterCommit.run(() -> memberNotifier.notifyPointsAdjusted(phone, points, balance));
         return toResponse(t, balance);
     }
 

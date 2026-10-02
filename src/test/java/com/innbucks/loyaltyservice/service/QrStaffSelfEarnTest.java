@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -173,5 +174,36 @@ class QrStaffSelfEarnTest {
                 "caller@test.local", null, List.of(new SimpleGrantedAuthority(role)));
         auth.setDetails(new CallerDetails(merchantId, null, phone, UUID.randomUUID()));
         SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    // --- Pre-load of the staff registry, before consume() takes the QR lock ---
+
+    @Test
+    void prewarm_aLiveMerchantQrOfThisTenant_loadsThatMerchantsStaff() {
+        when(qrs.findByToken(token.getToken())).thenReturn(Optional.of(token));
+
+        qrService.prewarmStaffRecipientGuard(TENANT, token.getToken());
+
+        verify(staffRegistry).warm(MERCHANT);
+    }
+
+    @Test
+    void prewarm_aForeignUsedOrUnknownQr_loadsNothing_andNeverThrows() {
+        when(qrs.findByToken("unknown")).thenReturn(Optional.empty());
+        qrService.prewarmStaffRecipientGuard(TENANT, "unknown");
+
+        when(qrs.findByToken(token.getToken())).thenReturn(Optional.of(token));
+        qrService.prewarmStaffRecipientGuard(UUID.randomUUID(), token.getToken()); // another tenant
+
+        token.setUsedAt(java.time.Instant.now());
+        qrService.prewarmStaffRecipientGuard(TENANT, token.getToken()); // already used
+        token.setUsedAt(null);
+
+        when(qrs.findByToken("boom")).thenThrow(new IllegalStateException("db down"));
+        qrService.prewarmStaffRecipientGuard(TENANT, "boom"); // swallowed
+
+        verify(staffRegistry, never()).warm(any());
+        // The refusals (and their fraud evidence) are still consume()'s alone.
+        verifyNoInteractions(fraud);
     }
 }

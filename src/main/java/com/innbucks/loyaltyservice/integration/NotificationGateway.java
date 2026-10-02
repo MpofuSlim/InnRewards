@@ -124,8 +124,12 @@ public class NotificationGateway {
      * still unredeemed. Same channel order (WhatsApp first, SMS fallback) and
      * best-effort contract as {@link #deliver}. The code itself is NOT resent —
      * it was delivered at issuance; this is only the reminder.
+     *
+     * <p><b>Synchronous, unlike {@link #deliver}.</b> The sweep runs it on its
+     * own caller-runs {@code expiryWarningExecutor}: the warning is stamped
+     * before it is sent, so it must never be handed to the drop-and-count
+     * {@code notificationExecutor}, where a busy pool would lose it for good.
      */
-    @Async("notificationExecutor")
     public void warnExpiring(Voucher voucher, String recipientPhone, LocalDate expiresOn) {
         if (voucher == null || recipientPhone == null || recipientPhone.isBlank() || expiresOn == null) {
             return;

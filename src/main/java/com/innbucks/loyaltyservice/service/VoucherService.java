@@ -21,6 +21,7 @@ import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
+import com.innbucks.loyaltyservice.util.AfterCommit;
 import com.innbucks.loyaltyservice.util.VoucherCodes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -260,16 +261,25 @@ public class VoucherService {
         if (willAttemptSend) {
             v.setDeliveredAt(Instant.now());
         }
-        notifications.deliver(v, recipientPhone);
+        // Both sends are handed off only once this transaction COMMITS
+        // (AfterCommit): on the purchase-order confirm this runs under the
+        // order's row lock, and a confirm that then rolls back (so the voucher
+        // never exists) must not have messaged anyone a code.
+        //
         // Sender's confirmation copy (V46): "we should both get the WhatsApp
         // messages". Issue-path ONLY — the transfer path rotates the code and
         // deliberately redacts it from the sender, so a sender copy there would
         // defeat the rotation. Skipped when sender and recipient are the same
         // phone (self-issue): one message, not two identical ones.
         String stampedSenderPhone = v.getSenderPhone();
-        if (stampedSenderPhone != null && !isSelfIssued(stampedSenderPhone, recipientPhone)) {
-            notifications.deliverSenderCopy(v, stampedSenderPhone);
-        }
+        boolean sendSenderCopy = stampedSenderPhone != null
+                && !isSelfIssued(stampedSenderPhone, recipientPhone);
+        AfterCommit.run(() -> {
+            notifications.deliver(v, recipientPhone);
+            if (sendSenderCopy) {
+                notifications.deliverSenderCopy(v, stampedSenderPhone);
+            }
+        });
         metrics.incVouchersIssued();
         return toResponse(v);
     }
@@ -1136,19 +1146,27 @@ public class VoucherService {
         // resolved to the person they meant.
         //
         // Both are @Async and best-effort: a notification failure must never
-        // roll back a transfer that has already happened.
+        // roll back a transfer that has already happened. And all three are
+        // handed off only AFTER this transaction commits (AfterCommit): a
+        // transfer that rolls back must not have told anyone it happened, nor
+        // sent its rotated code out.
         java.time.LocalDate expiresOn = v.getExpiresAt() == null
                 ? null
                 : v.getExpiresAt().atZone(java.time.ZoneOffset.UTC).toLocalDate();
-        memberNotifier.notifyVoucherReceived(recipient.getPhoneNumber(),
-                v.getValue(), v.getCurrency(), expiresOn);
-        memberNotifier.notifyVoucherSent(fromPhone, v.getValue(), v.getCurrency());
+        String recipientPhone = recipient.getPhoneNumber();
+        java.math.BigDecimal value = v.getValue();
+        String currency = v.getCurrency();
+        AfterCommit.run(() -> {
+            memberNotifier.notifyVoucherReceived(recipientPhone, value, currency, expiresOn);
+            memberNotifier.notifyVoucherSent(fromPhone, value, currency);
 
-        // Hand the ROTATED code to the new holder the same way issuance does —
-        // best-effort WhatsApp/SMS. The sender's old code is now dead, so the
-        // recipient needs a route to the new one; the in-app view (activeForPhone
-        // → toResponse) is the primary path, this is the out-of-band mirror.
-        notifications.deliver(v, recipient.getPhoneNumber());
+            // Hand the ROTATED code to the new holder the same way issuance does
+            // — best-effort WhatsApp/SMS. The sender's old code is now dead, so
+            // the recipient needs a route to the new one; the in-app view
+            // (activeForPhone → toResponse) is the primary path, this is the
+            // out-of-band mirror.
+            notifications.deliver(v, recipientPhone);
+        });
 
         // Redact the code from the transfer RESPONSE. The response goes to the
         // CALLER — the sender (a CUSTOMER handing off their own voucher) or staff

@@ -135,8 +135,12 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
-        Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(),
-                CallerDetails.resolveMerchantId(req.merchantId()), req,
+        UUID tenantId = tenantContext.requireTenantId();
+        UUID merchantId = CallerDetails.resolveMerchantId(req.merchantId());
+        // Load the STAFF_RECIPIENT snapshot before the earn's transaction opens,
+        // so the guard inside it never waits on user-service. Never refuses.
+        transactions.prewarmStaffRecipientGuard(tenantId, merchantId);
+        Dtos.TransactionResponse data = transactions.post(tenantId, merchantId, req,
                 com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Transaction posted successfully", data));

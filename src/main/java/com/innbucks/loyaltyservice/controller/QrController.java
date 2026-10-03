@@ -269,7 +269,11 @@ public class QrController {
     // scanning its QR under any other role (SELF_EARN / STAFF_RECIPIENT).
     @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> consume(@Valid @RequestBody Dtos.QrConsumeRequest req) {
-        Dtos.TransactionResponse data = qrService.consume(tenantContext.requireTenantId(), req);
+        java.util.UUID tenantId = tenantContext.requireTenantId();
+        // Load the STAFF_RECIPIENT snapshot before consume() locks the QR row,
+        // so the guard under that lock never waits on user-service. Never refuses.
+        qrService.prewarmStaffRecipientGuard(tenantId, req.token());
+        Dtos.TransactionResponse data = qrService.consume(tenantId, req);
         return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));
     }
 }

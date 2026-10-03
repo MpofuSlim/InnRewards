@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.util.AfterCommit;
 import com.innbucks.loyaltyservice.config.LoyaltyMetrics;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
@@ -259,8 +260,11 @@ public class RedemptionService {
                 "redeem:" + (t.getReference() == null ? "n/a" : t.getReference()), tenantId);
         metrics.addPointsRedeemed(pointsToDebit);
         // Spend confirmation. The idempotent-replay branch above returns before
-        // here, so a retried redemption never fires a second alert.
-        memberNotifier.notifyPointsRedeemed(u.getPhoneNumber(), pointsToDebit, balance);
+        // here, so a retried redemption never fires a second alert. Handed off
+        // after COMMIT: a redemption that rolls back (a lost race, a failed
+        // flush) must not tell the customer points left their wallet.
+        String phone = u.getPhoneNumber();
+        AfterCommit.run(() -> memberNotifier.notifyPointsRedeemed(phone, pointsToDebit, balance));
         return new RedemptionResult(t.getId(), balance);
     }
 }

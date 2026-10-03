@@ -17,10 +17,11 @@ import java.time.LocalDate;
  * <p>Channel order is SMS-primary, WhatsApp-fallback (product decision:
  * SMS reaches every handset, WhatsApp catches SMS delivery failures — same
  * order as {@link GuestCheckoutNotifier}). Brand is InnBucks.
- * Every method is {@link Async @Async} on the {@code notificationExecutor} so it
- * never delays the caller, and is strictly best-effort: all failures are logged
- * and swallowed — a notification never affects the (already-applied)
- * ledger/wallet change.
+ * Every method except {@link #notifyPointsExpiring} is {@link Async @Async} on
+ * the {@code notificationExecutor} so it never delays the caller (callers submit
+ * after their transaction commits — {@code util.AfterCommit}), and is strictly
+ * best-effort: all failures are logged and swallowed — a notification never
+ * affects the (already-applied) ledger/wallet change.
  */
 @Slf4j
 @Component
@@ -71,8 +72,13 @@ public class MemberActivityNotifier {
      * Retention nudge from the daily expiry-warning sweep: {@code amount}
      * points across the member's soon-to-expire lots lapse on
      * {@code expiresOn} unless spent.
+     *
+     * <p><b>Synchronous, unlike every other method here.</b> The sweep has its
+     * own executor ({@code expiryWarningExecutor}, caller-runs) and calls this
+     * from it: the warning is stamped before it is sent, so it must never be
+     * handed to the drop-and-count {@code notificationExecutor}, where a busy
+     * pool would lose a warning that is never retried.
      */
-    @Async("notificationExecutor")
     public void notifyPointsExpiring(String phone, BigDecimal amount, LocalDate expiresOn) {
         if (isBlank(phone) || isNonPositive(amount) || expiresOn == null) return;
         dispatch(phone, fmt(amount) + " of your InnBucks loyalty points expire on " + expiresOn

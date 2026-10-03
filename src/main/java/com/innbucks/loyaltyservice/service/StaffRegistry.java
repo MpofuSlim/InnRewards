@@ -68,6 +68,38 @@ public class StaffRegistry {
         return entry != null && entry.keys().contains(key);
     }
 
+    /**
+     * Load {@code merchantId}'s staff snapshot into the cache if it is not
+     * there already, so the guard that follows reads memory instead of calling
+     * user-service (2s connect / 5s read). Called BEFORE the caller opens its
+     * transaction — the guards themselves run inside one, after rows have been
+     * inserted or locked (the earn's PENDING enrolment, the QR row, the
+     * purchase order), and a cache miss there held those for the whole
+     * round-trip.
+     *
+     * <p>Same loader and same fail-open as {@link #isStaffPhone}: a failed
+     * lookup caches the non-authoritative empty set exactly as a miss inside
+     * the guard would. <b>Never throws</b> — it is an optimisation, and a
+     * failure here must leave the request to run exactly as it did before (the
+     * guard then loads on its own, or reads the cached failure).
+     */
+    public void warm(UUID merchantId) {
+        if (merchantId == null) {
+            return;
+        }
+        try {
+            cache.get(merchantId, this::load);
+        } catch (RuntimeException e) {
+            log.warn("Staff registry pre-load for merchant {} failed; the guard will load on demand: {}",
+                    merchantId, e.toString());
+        }
+    }
+
+    /** Whether a snapshot (authoritative or not) is cached for the merchant. */
+    public boolean isCached(UUID merchantId) {
+        return merchantId != null && cache.getIfPresent(merchantId) != null;
+    }
+
     private Entry load(UUID merchantId) {
         return userServiceClient.merchantStaffPhones(merchantId)
                 .map(phones -> new Entry(

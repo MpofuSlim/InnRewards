@@ -873,4 +873,44 @@ class VoucherPurchaseServiceTest {
         assertThat(VoucherPurchaseService.cleanRail("<script>")).isNull();
         assertThat(VoucherPurchaseService.cleanRail("X".repeat(33))).isNull();
     }
+
+    // --- Pre-load of the staff registry, before the confirm takes the order lock ---
+
+    @Test
+    void prewarm_aCashierConfirmingAnOrderOfThisTenant_loadsTheMerchantsStaff() {
+        signInAs("ROLE_SHOP_USER", CASHIER_SHOP, CASHIER_PHONE);
+        VoucherPurchaseOrder o = cashierOrder();
+        when(orders.findByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        service.prewarmStaffGuard(TENANT, o.getOrderRef());
+
+        verify(staffRegistry).warm(MERCHANT);
+        // A plain read: the lock is the confirm's, and nothing was refused here.
+        verify(orders, never()).lockByOrderRef(any());
+    }
+
+    @Test
+    void prewarm_skipsCallersTheGuardDoesNotApplyTo_foreignOrders_andNeverThrows() {
+        VoucherPurchaseOrder o = cashierOrder();
+        when(orders.findByOrderRef(o.getOrderRef())).thenReturn(Optional.of(o));
+
+        // A merchant admin is not subject to the guard.
+        var auth = new UsernamePasswordAuthenticationToken("owner@westgate.co.zw", "n/a",
+                List.of(new SimpleGrantedAuthority("ROLE_MERCHANT_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        service.prewarmStaffGuard(TENANT, o.getOrderRef());
+
+        signInAs("ROLE_SHOP_USER", CASHIER_SHOP, CASHIER_PHONE);
+        service.prewarmStaffGuard(UUID.randomUUID(), o.getOrderRef()); // another tenant's order
+
+        VoucherPurchaseOrder noRecipient = pendingOrder();
+        noRecipient.setOrderRef("VCH-000000000001");
+        when(orders.findByOrderRef(noRecipient.getOrderRef())).thenReturn(Optional.of(noRecipient));
+        service.prewarmStaffGuard(TENANT, noRecipient.getOrderRef()); // guard cannot match
+
+        when(orders.findByOrderRef("VCH-BOOM")).thenThrow(new IllegalStateException("db down"));
+        service.prewarmStaffGuard(TENANT, "VCH-BOOM"); // swallowed
+
+        verify(staffRegistry, never()).warm(any());
+    }
 }

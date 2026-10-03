@@ -15,7 +15,8 @@ import java.util.List;
  * {@link TransactionPhase#AFTER_COMMIT} (rather than sending inline in
  * {@code InvoicingService}) guarantees we never email an invoice that then
  * rolls back, and {@code @Async} keeps the send off the nightly scheduler's
- * thread.
+ * thread. It runs on {@code billingExecutor}, which never drops a task (see
+ * {@code AsyncConfig}): an invoice is a bill, not a best-effort notification.
  *
  * <p>The recipients are the OWNER and ADMIN members of the merchant's
  * organization, resolved from user-service at send time. It used to be the
@@ -40,7 +41,7 @@ public class InvoiceEmailNotifier {
         this.userService = userService;
     }
 
-    @Async
+    @Async("billingExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onInvoiceGenerated(InvoiceGeneratedEvent e) {
         if (e.organizationId() == null) {

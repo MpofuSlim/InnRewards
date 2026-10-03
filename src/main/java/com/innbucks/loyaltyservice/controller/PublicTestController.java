@@ -159,6 +159,8 @@ public class PublicTestController {
     private final TransferService transfers;
     private final RedemptionService redemptions;
     private final VoucherService voucherService;
+    /** Every spend here runs the V44 eligibility check outside its transaction. */
+    private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
 
     /**
      * Master switch. Default {@code false} so the endpoints are absent unless a
@@ -187,7 +189,9 @@ public class PublicTestController {
                                 TransactionService transactions,
                                 TransferService transfers,
                                 RedemptionService redemptions,
-                                VoucherService voucherService) {
+                                VoucherService voucherService,
+                                com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+        this.eligibilityDeferral = eligibilityDeferral;
         this.users = users;
         this.wallets = wallets;
         this.vouchers = vouchers;
@@ -381,10 +385,10 @@ public class PublicTestController {
         String phone = requirePhone(phoneNumber, "send-points");
         LoyaltyUser sender = resolveActingProjection(phone);
 
-        BigDecimal balance = asCustomer(sender, () -> transfers.transfer(
+        BigDecimal balance = asCustomer(sender, () -> eligibilityDeferral.run(() -> transfers.transfer(
                 sender.getTenantId(),
                 new Dtos.TransferRequest(sender.getId(), null, body.toPhone(),
-                        body.points(), body.reason())));
+                        body.points(), body.reason()))));
         return ResponseEntity.ok(ApiResult.ok("Points transferred successfully",
                 Map.of("newBalance", balance)));
     }
@@ -432,11 +436,11 @@ public class PublicTestController {
         LoyaltyUser customer = resolveActingProjection(phone);
         UUID merchantId = resolveMerchant(customer.getTenantId(), body.merchantId());
 
-        RedemptionService.RedemptionResult result = asCustomer(customer, () ->
+        RedemptionService.RedemptionResult result = asCustomer(customer, () -> eligibilityDeferral.run(() ->
                 redemptions.redeemPointsIdempotent(customer.getTenantId(), merchantId,
                         new Dtos.RedemptionRequest(merchantId, customer.getId(), body.points(),
                                 body.reason(), body.reference()),
-                        true));
+                        true)));
         return ResponseEntity.ok(ApiResult.ok("Points redeemed successfully", Map.of(
                 "status", "OK",
                 "transactionId", result.transactionId(),
@@ -535,10 +539,10 @@ public class PublicTestController {
                 : (v.getMerchantId() != null ? v.getMerchantId()
                                              : resolveMerchant(v.getTenantId(), null));
         LoyaltyUser holder = holderOf(v);
-        Dtos.RedemptionResponse data = asCustomer(holder, () -> voucherService.redeem(
+        Dtos.RedemptionResponse data = asCustomer(holder, () -> eligibilityDeferral.run(() -> voucherService.redeem(
                 v.getTenantId(), merchantId,
                 new Dtos.RedeemVoucherRequest(merchantId, v.getCode(),
-                        holder == null ? null : holder.getId(), null, null, null)));
+                        holder == null ? null : holder.getId(), null, null, null))));
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 

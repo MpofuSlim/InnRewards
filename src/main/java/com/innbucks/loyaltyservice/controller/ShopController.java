@@ -46,9 +46,12 @@ public class ShopController {
     private final TenantContext tenantContext;
     private final ShopCheckoutService shopCheckout;
     private final com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier;
+    private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
 
     public ShopController(ShopService shops, TenantContext tenantContext, ShopCheckoutService shopCheckout,
-                          com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier) {
+                          com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier,
+                          com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+        this.eligibilityDeferral = eligibilityDeferral;
         this.shops = shops;
         this.tenantContext = tenantContext;
         this.shopCheckout = shopCheckout;
@@ -737,9 +740,13 @@ public class ShopController {
         // earn-integrity guards apply — SELF_EARN (their own phone) and
         // STAFF_RECIPIENT (any colleague's). REFERENCE_REQUIRED is already met
         // by the server-generated reference above.
-        ShopCheckoutService.Result r = shopCheckout.checkout(
+        // Cash-only, so this never reaches the spend gate today; wrapped anyway
+        // because checkout() can burn, and a scope costs nothing when no
+        // deferral is raised (EligibilityDeferralWiringTest holds every caller
+        // of a gate-reaching service to it).
+        ShopCheckoutService.Result r = eligibilityDeferral.run(() -> shopCheckout.checkout(
                 shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, reference,
-                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE));
         Dtos.GuestShopCheckoutResponse data = new Dtos.GuestShopCheckoutResponse(
                 r.shopId(), r.merchantId(), r.loyaltyUserId(),
                 r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId());

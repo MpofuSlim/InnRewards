@@ -720,8 +720,10 @@ other — they answer different questions.
   apart from a phone that genuinely is not a customer. **The FE asked for this
   to be a backend concern and was right** (its own framing — "the FE can be
   exploited" — is not the reason: see the ownership note below). So
-  `requireSpendable`'s PENDING arm now ASKS the directory at the moment it is
-  about to refuse, registers the confirmed customer (`source =
+  the spend gate's PENDING arm (`UserService.spendabilityOf`, shared by
+  `requireSpendable` and voucher redeem) now ASKS the directory at the moment it
+  is about to refuse — from outside the spend transaction, see below —
+  registers the confirmed customer (`source =
   INNBUCKS_VALIDATE`, `source_ref = on-demand-spend`) and lets the spend
   through. The registration endpoint stays — it is still the faster path when a
   client does call it, and the sweeper still converges everything else.
@@ -742,16 +744,60 @@ other — they answer different questions.
     check is **skipped** rather than run unthrottled (watch
     `outcome=no_throttle`). An `Unavailable` shortens the window rather than
     locking the phone out, and is never read as "not a customer".
-  - **Nothing in it throws.** It runs inside a customer's spend transaction, so
-    every failure path returns false and the caller falls back to the ordinary
-    `USER_PENDING` — the pre-existing behaviour. Same reason an outage is not a
-    503 there: the account really is not spendable yet, and a retryable status
-    invites a retry that cannot change.
-  - `registerPhone` is reached by SELF-invocation, so it joins the spend
-    transaction instead of opening its own. That is wanted, and matches the heal
-    arm above: a registration earned on a spend that then fails rolls back with
-    it, and the sweeper converges the phone anyway. Don't "fix" it into
-    `REQUIRES_NEW` expecting an independent commit.
+  - **Nothing in it throws.** A fault in an optimisation must never fail a
+    spend, so every failure path returns false and the caller falls back to the
+    ordinary `USER_PENDING` — the pre-existing behaviour. Same reason an outage
+    is not a 503 there: the account really is not spendable yet, and a
+    retryable status invites a retry that cannot change.
+  - **It runs OUTSIDE the spend transaction — defer and replay
+    (`EligibilityDeferral`).** The gate sits inside the caller's transaction on
+    every spend path (points redeem, transfer, transfer-QR consume, shop
+    checkout, the ticketing burn) and, on voucher redeem, under the voucher's
+    `PESSIMISTIC_WRITE` row lock — so asking the directory there held a pooled
+    connection and that lock for the whole HTTP call. Inside a deferral scope
+    the PENDING arm instead throws `EligibilityCheckDeferred` (deliberately not
+    a `LoyaltyException` and not a `VoucherCodeGuessException`, so nothing maps
+    or counts it as a refusal). The spend rolls back — safe, because nothing on
+    any spend path writes or commits on its own before the gate: every refusal
+    that publishes a `VoucherRedemptionRejectedEvent` or writes `REQUIRES_NEW`
+    fraud evidence THROWS before the gate is reached. With no transaction open,
+    `EligibilityDeferral.run` then asks the directory once, registers a
+    confirmed customer through the `UserService` proxy in its OWN transaction,
+    and replays the spend exactly once in REPLAY mode, where the gate never
+    asks again: a registered phone heals and spends, anything else (no, outage,
+    throttled, REVOKED) is the ordinary `USER_PENDING`. Never a loop, never two
+    directory calls for one request.
+    - **Behaviour change, accepted (owner, "include it now"): the on-demand
+      registration COMMITS even when the replayed spend then fails**
+      (INSUFFICIENT_FUNDS, say). It used to join the spend transaction and roll
+      back with it. Under the eligibility rule every InnBucks customer is
+      eligible and the sweeper or the endpoint would register them anyway, so
+      only the timing moved.
+    - **Every controller that reaches the gate wraps its call**:
+      `TransactionController` transfer + redeem, `VoucherController.redeem`
+      (INSIDE `VoucherGuessGuard.attempt`, so a deferral and its replay are one
+      reserved slot, settled once, and the deferral is never a miss),
+      `QrController.consume`, `ShopController`'s guest checkout,
+      `InternalMerchantLookupController` shop-checkout + ticketing redeem, and
+      `PublicTestController`'s three spends (inside `asCustomer`).
+      `EligibilityDeferralWiringTest` reads the bytecode call graph and fails
+      the build on a controller call into anything that reaches
+      `spendabilityOf` without `eligibilityDeferral.run(() -> …)`, and on a
+      `@Scheduled` / listener / `@Async` method that reaches it.
+    - **No scope = the old shape, exactly** (inline ask, `registerPhone` by
+      SELF-invocation joining the spend transaction). So is a `run` made while
+      a transaction is already open — deferring there would poison the
+      caller's transaction — and a nested `run` is a pass-through. A deferral
+      therefore can never escape as a 500.
+    - **The deferral fires only when the check could act**
+      (`OnDemandEligibilityCheck.isActive()`: enabled and provisioned), so a
+      cell with it off never rolls a spend back for nothing. A phone inside its
+      cooldown still costs one rollback + replay; the metrics are unchanged
+      (`confirmsCustomer` is still the one place that counts).
+    - Pinned end to end, real Postgres, by `EligibilityDeferralIT`: the
+      directory stub asserts no transaction is open on the thread and, on the
+      voucher path, that another connection can take the row with
+      `FOR UPDATE NOWAIT`.
   - Off by default: `LOYALTY_INNBUCKS_VALIDATE_ON_DEMAND_ENABLED`. Enabled
     without credentials is a HALF-PROVISIONED boot ERROR, because its failure is
     otherwise silent — no runs to log, every affected customer just keeps seeing
@@ -1711,6 +1757,15 @@ three of its guards came to guard nothing. The rules below are what they now do.
   throws `403 CROSS_TENANT` from `MerchantService.requireMerchant`. All three
   shapes — staff refused, customer self-redeem, unauthenticated bulk stock —
   are pinned by `VoucherRedemptionGuardsTest`.
+  **It runs BEFORE the holder's account gate** (right after `WRONG_MERCHANT`),
+  because that gate can ask the InnBucks directory and register the holder's
+  phone (V44 on-demand): a staff caller for a foreign merchant is refused
+  `NOT_MERCHANT_OWNER` before it can make loyalty do either, or learn the
+  holder's state from `USER_PENDING` / `USER_BLOCKED`. The non-staff
+  `requireMerchant` branch moved with it, unchanged. Same reasoning on
+  `POST /loyalty/transfer`: `requireCallerOwns` now runs before
+  `requireSpendable`, so a non-owner gets `NOT_WALLET_OWNER` and never reaches
+  the gate. Both pinned by `EligibilityDeferralIT`.
 - **REVOKED is checked before exhaustion.** Clients branch on `code`, and the old
   order made a voucher an operator had cancelled after its last use report
   itself as merely spent.

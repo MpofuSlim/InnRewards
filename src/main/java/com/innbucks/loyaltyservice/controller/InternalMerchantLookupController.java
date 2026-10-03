@@ -54,6 +54,7 @@ public class InternalMerchantLookupController {
     private final TicketingLoyaltyService ticketingLoyaltyService;
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final String expectedToken;
+    private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
 
     public InternalMerchantLookupController(MerchantRepository merchants,
                                             ShopRepository shops,
@@ -61,7 +62,9 @@ public class InternalMerchantLookupController {
                                             ShopCheckoutService shopCheckoutService,
                                             TicketingLoyaltyService ticketingLoyaltyService,
                                             com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
-                                            @Value("${innbucks.internal-api-token:}") String expectedToken) {
+                                            @Value("${innbucks.internal-api-token:}") String expectedToken,
+                                            com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+        this.eligibilityDeferral = eligibilityDeferral;
         this.merchants = merchants;
         this.shops = shops;
         this.userService = userService;
@@ -190,8 +193,10 @@ public class InternalMerchantLookupController {
             // checkout() still performs all validation (shop existence, at-least-one
             // amount > 0, etc.) and returns the same typed error codes as before —
             // the only change is the request binding (Map -> typed DTO).
-            ShopCheckoutService.Result r = shopCheckoutService.checkout(
-                    body.shopId(), body.phoneNumber(), body.cashAmount(), body.pointsAmount(), body.reference());
+            // The burn leg is a spend: the V44 eligibility check runs outside the
+            // checkout's transaction (EligibilityDeferral).
+            ShopCheckoutService.Result r = eligibilityDeferral.run(() -> shopCheckoutService.checkout(
+                    body.shopId(), body.phoneNumber(), body.cashAmount(), body.pointsAmount(), body.reference()));
 
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("shopId", r.shopId());
@@ -275,8 +280,9 @@ public class InternalMerchantLookupController {
             // redeem() validates organizerUuid / phoneNumber / points and throws
             // typed LoyaltyExceptions (mapped below) — behaviour unchanged; only the
             // request binding moves from an untyped Map to a typed DTO.
-            TicketingLoyaltyService.RedeemResult r = ticketingLoyaltyService.redeem(
-                    body.organizerUuid(), body.phoneNumber(), body.points(), body.reference());
+            // A spend: the V44 eligibility check runs outside its transaction.
+            TicketingLoyaltyService.RedeemResult r = eligibilityDeferral.run(() -> ticketingLoyaltyService.redeem(
+                    body.organizerUuid(), body.phoneNumber(), body.points(), body.reference()));
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("transactionId", r.transactionId());
             resp.put("merchantId", r.merchantId());

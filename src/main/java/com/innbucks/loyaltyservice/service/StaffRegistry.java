@@ -88,7 +88,10 @@ public class StaffRegistry {
             return;
         }
         try {
-            cache.get(merchantId, this::load);
+            Entry loaded = cache.get(merchantId, this::load);
+            if (loaded != null && !loaded.authoritative()) {
+                log.debug("Staff registry pre-load for merchant {} cached a non-authoritative snapshot", merchantId);
+            }
         } catch (RuntimeException e) {
             log.warn("Staff registry pre-load for merchant {} failed; the guard will load on demand: {}",
                     merchantId, e.toString());

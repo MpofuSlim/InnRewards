@@ -44,11 +44,14 @@ public class VoucherController {
     private final TenantContext tenantContext;
     private final VoucherGuessGuard guessGuard;
     private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
+    private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
 
     public VoucherController(VoucherService voucherService,
                              TenantContext tenantContext,
                              VoucherGuessGuard guessGuard,
-                             com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
+                             com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
+                             com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+        this.eligibilityDeferral = eligibilityDeferral;
         this.voucherService = voucherService;
         this.tenantContext = tenantContext;
         this.guessGuard = guessGuard;
@@ -497,8 +500,17 @@ public class VoucherController {
         // parallel requests), and settled once the transaction has rolled back.
         // The attempt that trips the lock keeps its own 404/403; the next one
         // gets the 429.
-        Dtos.RedemptionResponse data = guessGuard.attempt(() -> voucherService.redeem(
-                tenantContext.requireTenantId(), CallerDetails.resolveMerchantId(req.merchantId()), req));
+        //
+        // The eligibility deferral sits INSIDE the attempt: a holder whose V44
+        // check is deferred rolls back, is asked about once with the voucher's
+        // row lock released, and is replayed — all within this ONE reserved
+        // slot, settled once. The deferral itself is never a miss (it is not a
+        // VoucherCodeGuessException), so only the replay's outcome counts.
+        Dtos.RedemptionResponse data = guessGuard.attempt(() -> {
+            UUID tenantId = tenantContext.requireTenantId();
+            UUID merchantId = CallerDetails.resolveMerchantId(req.merchantId());
+            return eligibilityDeferral.run(() -> voucherService.redeem(tenantId, merchantId, req));
+        });
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 

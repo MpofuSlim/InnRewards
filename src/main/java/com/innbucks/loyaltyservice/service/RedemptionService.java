@@ -142,9 +142,12 @@ public class RedemptionService {
         if (enforceCallerOwnership) {
             users.requireCallerOwnsOrIsAdmin(u);
         }
+        // The merchant is resolved BEFORE the spend gate: the gate may defer to
+        // the eligibility directory (EligibilityDeferral), and a request naming
+        // a merchant that does not exist must be refused without that call.
+        var m = merchants.requireMerchant(tenantId, merchantId);
         // PENDING (not yet registered) users may accrue but not spend.
         users.requireSpendable(u);
-        var m = merchants.requireMerchant(tenantId, merchantId);
 
         // Idempotency: when the caller supplies a stable reference (e.g. the
         // booking id), a repeat redeem must NOT debit the wallet a second time.

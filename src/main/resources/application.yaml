@@ -301,7 +301,11 @@ loyalty:
       #
       # It runs ONLY on the spend-refusal path, so an already-ACTIVE customer
       # never pays for it, and deliberately NOT on the earn path (a cashier is
-      # waiting at the till there).
+      # waiting at the till there). The call is made OUTSIDE the spend's
+      # transaction (EligibilityDeferral: roll back, ask, register in its own
+      # transaction, replay once), so it never holds a connection or a voucher
+      # row lock — and a registration it earns commits even if the replayed
+      # spend then fails.
       #
       # cooldown-seconds throttles per PHONE, claimed before the upstream call,
       # because a spend attempt is caller-triggered and repeatable — without a

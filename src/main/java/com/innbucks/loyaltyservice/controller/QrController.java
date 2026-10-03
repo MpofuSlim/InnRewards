@@ -29,10 +29,13 @@ public class QrController {
 
     private final QrService qrService;
     private final TenantContext tenantContext;
+    private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
 
-    public QrController(QrService qrService, TenantContext tenantContext) {
+    public QrController(QrService qrService, TenantContext tenantContext,
+                        com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
         this.qrService = qrService;
         this.tenantContext = tenantContext;
+        this.eligibilityDeferral = eligibilityDeferral;
     }
 
     @PostMapping("/issue")
@@ -273,7 +276,9 @@ public class QrController {
         // Load the STAFF_RECIPIENT snapshot before consume() locks the QR row,
         // so the guard under that lock never waits on user-service. Never refuses.
         qrService.prewarmStaffRecipientGuard(tenantId, req.token());
-        Dtos.TransactionResponse data = qrService.consume(tenantId, req);
+        // A transfer-QR is a spend by its sender: the V44 eligibility check runs
+        // outside the consume's transaction and QR row lock (EligibilityDeferral).
+        Dtos.TransactionResponse data = eligibilityDeferral.run(() -> qrService.consume(tenantId, req));
         return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));
     }
 }

@@ -145,6 +145,30 @@ non-2xx envelope, a connect-refused/fault case, the outbound wire contract
 (`matchingJsonPath`), and the guard rails (blank inputs → `verify(0, ...)`).
 Use the `wiremock-standalone` (shaded) classifier.
 
+## Platform login tokens are single-flight — never `synchronized` across a network call
+
+Every client that logs in to the InnBucks platform (`POST /auth/third-party`)
+before calling it — `SmsNotificationClient`, `EmailNotificationClient`,
+`InnbucksCustomerValidateClient` — keeps its bearer in `util/SingleFlightTokenCache`.
+They used to guard it with `synchronized currentToken(...)`, which held the
+monitor for the whole login: one slow login (about 19 s measured) stalled every
+sender behind it, including the ones holding a good token.
+
+- **A valid token never waits.** It is read lock-free; inside the 30 s refresh
+  margin it is still returned to every caller except the one running the refresh.
+- **One login at a time.** A short lock only starts or joins a
+  `CompletableFuture`; it is never held during the call. A caller with no usable
+  token waits at most connect + read timeout + 2 s, then gets the client's
+  existing transient error (`NotificationDeliveryException`; for the validate
+  client `login_timeout` → **Unavailable, never NotACustomer**).
+- **After a 401/403 call `refreshAfterRejection(theTokenThatWasRefused)`**, not a
+  blind refresh: it logs in only if that token is still cached, so N concurrent
+  401s cost one login. The refused token is dropped from the cache.
+- A failed login caches nothing and frees the slot, so the next caller retries.
+- **A new platform client uses the same class.** Don't put `synchronized` (or any
+  lock) around an HTTP call. Pinned by `SingleFlightTokenCacheTest` and
+  `InnbucksCustomerValidateClientConcurrencyTest`.
+
 ## Swagger response examples
 
 Every endpoint MUST have meaningful `@ApiResponses` with `@ExampleObject`

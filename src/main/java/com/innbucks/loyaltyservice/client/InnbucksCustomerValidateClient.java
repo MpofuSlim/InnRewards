@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
+import com.innbucks.loyaltyservice.util.SingleFlightTokenCache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -84,6 +85,10 @@ public class InnbucksCustomerValidateClient {
     public record Unavailable(String reason) implements CustomerCheckOutcome {}
 
     private static final String API_KEY_HEADER = "X-Api-Key";
+    /** A token this close to its exp is refreshed (and still used while that runs). */
+    private static final Duration REFRESH_MARGIN = Duration.ofSeconds(30);
+    /** Slack on top of connect + read timeout for a caller waiting on someone else's login. */
+    private static final Duration LOGIN_WAIT_MARGIN = Duration.ofSeconds(2);
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -96,8 +101,13 @@ public class InnbucksCustomerValidateClient {
     private final Set<String> successCodes;
     private final Duration tokenTtl;
 
-    private String accessToken;
-    private Instant tokenExpiry = Instant.EPOCH;
+    /**
+     * See {@link SingleFlightTokenCache}: no lock is ever held across the login.
+     * A caller that times out waiting for someone else's login gets
+     * {@code login_timeout}, which {@link #checkCustomer} maps to
+     * {@link Unavailable}: an outage is never read as "not a customer".
+     */
+    private final SingleFlightTokenCache tokens;
 
     public InnbucksCustomerValidateClient(
             @Value("${loyalty.registration.innbucks-validate.base-url:}") String baseUrl,
@@ -131,6 +141,10 @@ public class InnbucksCustomerValidateClient {
                 .baseUrl(this.baseUrl.isBlank() ? "http://innbucks-unconfigured.invalid" : this.baseUrl)
                 .requestFactory(factory)
                 .build();
+        this.tokens = new SingleFlightTokenCache(this::login, REFRESH_MARGIN,
+                Duration.ofMillis((long) Math.max(0, connectTimeoutMs) + Math.max(0, readTimeoutMs))
+                        .plus(LOGIN_WAIT_MARGIN),
+                () -> new LoginFailedException("login_timeout"));
     }
 
     /**
@@ -170,7 +184,7 @@ public class InnbucksCustomerValidateClient {
 
         String token;
         try {
-            token = currentToken(false);
+            token = tokens.get();
         } catch (LoginFailedException e) {
             log.warn("InnBucks validate: platform login failed ({})", e.reason);
             return new Unavailable(e.reason);
@@ -193,7 +207,7 @@ public class InnbucksCustomerValidateClient {
             // the call. A second refusal is a credential/provisioning problem:
             // an outage to us, never a verdict on the msisdn.
             try {
-                token = currentToken(true);
+                token = tokens.refreshAfterRejection(token);
             } catch (LoginFailedException e) {
                 return new Unavailable(e.reason);
             }
@@ -277,10 +291,8 @@ public class InnbucksCustomerValidateClient {
         }
     }
 
-    private synchronized String currentToken(boolean force) {
-        if (!force && accessToken != null && Instant.now().isBefore(tokenExpiry)) {
-            return accessToken;
-        }
+    /** One login. Runs outside any lock; {@link #tokens} makes it single-flight. */
+    private SingleFlightTokenCache.Token login() {
         ResponseEntity<String> response;
         try {
             response = restClient.post()
@@ -309,10 +321,9 @@ public class InnbucksCustomerValidateClient {
         if (token == null || token.isBlank()) {
             throw new LoginFailedException("login_no_token");
         }
-        accessToken = token;
-        tokenExpiry = deriveExpiry(token).minusSeconds(30);
-        log.info("InnBucks validate: platform login succeeded; token cached until {}", tokenExpiry);
-        return accessToken;
+        Instant expiresAt = deriveExpiry(token);
+        log.info("InnBucks validate: platform login succeeded; token valid until {}", expiresAt);
+        return new SingleFlightTokenCache.Token(token, expiresAt);
     }
 
     /** Best-effort JWT exp parse; falls back to the configured token TTL. */

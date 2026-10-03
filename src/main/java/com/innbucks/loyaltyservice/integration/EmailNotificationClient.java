@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.loyaltyservice.config.InnbucksNotifyProperties;
+import com.innbucks.loyaltyservice.util.SingleFlightTokenCache;
 import com.innbucks.loyaltyservice.util.SmsTextSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -11,6 +12,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -37,6 +39,10 @@ public class EmailNotificationClient {
     private static final String LOGIN_PATH = "/auth/third-party";
     private static final String EMAIL_PATH = "/api/notification/email";
     private static final String API_KEY_HEADER = "X-Api-Key";
+    /** A token this close to its exp is refreshed (and still used while that runs). */
+    private static final Duration REFRESH_MARGIN = Duration.ofSeconds(30);
+    /** Slack on top of connect + read timeout for a caller waiting on someone else's login. */
+    private static final Duration LOGIN_WAIT_MARGIN = Duration.ofSeconds(2);
 
     private final RestClient restClient;
     private final InnbucksNotifyProperties properties;
@@ -48,8 +54,8 @@ public class EmailNotificationClient {
      */
     private final SmtpEmailSender smtpEmailSender;
 
-    private String accessToken;
-    private Instant tokenExpiry = Instant.EPOCH;
+    /** See {@link SingleFlightTokenCache}: no lock is ever held across the login. */
+    private final SingleFlightTokenCache tokens;
 
     @org.springframework.beans.factory.annotation.Autowired
     public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
@@ -59,6 +65,11 @@ public class EmailNotificationClient {
         this.restClient = restClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.tokens = new SingleFlightTokenCache(this::login, REFRESH_MARGIN,
+                Duration.ofMillis((long) properties.getConnectTimeoutMs() + properties.getReadTimeoutMs())
+                        .plus(LOGIN_WAIT_MARGIN),
+                () -> new NotificationDeliveryException(
+                        "Timed out waiting for the notification API login"));
         this.smtpEmailSender = smtpEmailSender;
     }
 
@@ -164,12 +175,13 @@ public class EmailNotificationClient {
 
     /** Run an authed call; on 401, force one token refresh and replay once. */
     private <T> T withAuthRetryOn401(Function<String, T> call) {
+        String token = tokens.get();
         try {
-            return call.apply(currentToken(false));
+            return call.apply(token);
         } catch (UnauthorizedException first) {
             log.info("Notification API returned 401 for email — refreshing token and replaying once");
             try {
-                return call.apply(currentToken(true));
+                return call.apply(tokens.refreshAfterRejection(token));
             } catch (UnauthorizedException second) {
                 throw new NotificationDeliveryException(
                         "Notification API rejected our credentials twice (401) — check BANK_API_USERNAME/PASSWORD/KEY");
@@ -177,10 +189,8 @@ public class EmailNotificationClient {
         }
     }
 
-    private synchronized String currentToken(boolean force) {
-        if (!force && accessToken != null && Instant.now().isBefore(tokenExpiry)) {
-            return accessToken;
-        }
+    /** One login. Runs outside any lock; {@link #tokens} makes it single-flight. */
+    private SingleFlightTokenCache.Token login() {
         try {
             String raw = restClient.post()
                     .uri(LOGIN_PATH)
@@ -195,9 +205,8 @@ public class EmailNotificationClient {
             if (token == null || token.toString().isBlank()) {
                 throw new NotificationDeliveryException("Notification API login returned no accessToken");
             }
-            accessToken = token.toString();
-            tokenExpiry = deriveExpiry(accessToken).minusSeconds(30);
-            return accessToken;
+            String accessToken = token.toString();
+            return new SingleFlightTokenCache.Token(accessToken, deriveExpiry(accessToken));
         } catch (RestClientResponseException e) {
             log.warn("Notification API rejected login status={} body={}",
                     e.getStatusCode(), e.getResponseBodyAsString());

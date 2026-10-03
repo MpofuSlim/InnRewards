@@ -2431,6 +2431,16 @@ Invariants — weakening any needs a deliberate, called-out reason:
 - **`.trivyignore` is a governed waiver list** — every entry needs an owner +
   reason + review-date comment. Prefer fixing/upgrading over waiving; POM CVE
   overrides live in `pom.xml`.
+- **CI tests on the JDK the image ships on: 25** (`ci.yml`'s `java-version`,
+  the Dockerfile's `eclipse-temurin:25-jdk` / `25-jre`). CI used to run on 21
+  while the image built and ran on 25, so a green CI did not prove the image
+  worked. **Bytecode still targets 21** (`<java.version>21` through `<release>`,
+  which also checks the code against the JDK 21 API — never `-source`/`-target`).
+  Lombok is an explicit `annotationProcessorPaths` entry because JDK 23+ javac
+  no longer runs a processor it only finds on the classpath (that broke the
+  JDK-25 image build once). `dependabot.yml` ignores `eclipse-temurin` major
+  bumps: move the Dockerfile and `java-version` together, to the next LTS, in
+  one PR.
 - **PR-time SCA**: `ci.yml`'s `dependency-review` flags any *new* High/Critical
   direct dependency a PR introduces (diff-scoped). **Called-out exception:** the
   `dependency-review` job is **gated to public repos**

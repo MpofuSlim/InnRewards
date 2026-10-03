@@ -12,7 +12,7 @@ gateway wiring are untouched.
 
 ## Runtime shape
 
-- **Spring Boot 4.1** (webmvc), Java 21.
+- **Spring Boot 4.1** (webmvc), Java 21 bytecode, built, tested and run on JDK 25.
 - **Postgres** owns the schema via **Flyway** migrations
   (`src/main/resources/db/migration`, V1–V27), `ddl-auto: validate`.
 - **Service discovery by Kubernetes Service DNS**: siblings resolved by name via

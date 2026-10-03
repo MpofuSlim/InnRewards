@@ -53,6 +53,15 @@ updates:
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
     commit-message: { prefix: "docker" }
+    # A JDK major is a deliberate move, never a Dependabot bump: the image JDK
+    # (eclipse-temurin:25) and CI's java-version (.github/workflows/ci.yml) must
+    # move in the SAME PR, or a green CI stops proving the image works. It also
+    # keeps us off non-LTS majors (26, 27) past their short support window — the
+    # trap ticketing-system hit when six images moved to non-LTS 24 (#621-#630).
+    # Remove this ignore only in the PR that moves both to the next LTS.
+    ignore:
+      - dependency-name: "eclipse-temurin"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

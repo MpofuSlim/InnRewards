@@ -64,25 +64,43 @@ public record LoyaltyProperties(
      *                          A voucher order priced in anything else cannot be
      *                          confirmed as paid by card: the machine would charge
      *                          the same number in its own currency.
+     * @param bulkMaxQuantity   the most vouchers one {@code POST /loyalty/vouchers/issue-bulk}
+     *                          may create ({@code LOYALTY_VOUCHER_BULK_MAX_QUANTITY},
+     *                          default {@value #DEFAULT_BULK_MAX_QUANTITY}). One
+     *                          request is one transaction; an unbounded quantity
+     *                          could tie up a pod and a database connection for as
+     *                          long as it ran. Non-positive means the default:
+     *                          the cap cannot be switched off.
      */
     public record Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold,
                           int fraudWindowSeconds, java.time.Duration purchaseOrderTtl,
-                          String cardPosCurrencies) {
+                          String cardPosCurrencies, int bulkMaxQuantity) {
+        public static final int DEFAULT_BULK_MAX_QUANTITY = 1000;
+
         public Voucher {
             if (purchaseOrderTtl == null) purchaseOrderTtl = java.time.Duration.ofMinutes(30);
             if (cardPosCurrencies == null || cardPosCurrencies.isBlank()) cardPosCurrencies = "USD,ZWG";
+            if (bulkMaxQuantity <= 0) bulkMaxQuantity = DEFAULT_BULK_MAX_QUANTITY;
+        }
+
+        /** Back-compat for callers built against the V54 arity. */
+        public Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold,
+                       int fraudWindowSeconds, java.time.Duration purchaseOrderTtl,
+                       String cardPosCurrencies) {
+            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds,
+                    purchaseOrderTtl, cardPosCurrencies, 0);
         }
 
         /** Back-compat for callers built against the V47 arity. */
         public Voucher(String secret, int defaultValidityDays, int fraudVelocityThreshold,
                        int fraudWindowSeconds, java.time.Duration purchaseOrderTtl) {
-            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, purchaseOrderTtl, null);
+            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, purchaseOrderTtl, null, 0);
         }
 
         /** Back-compat for callers built against the pre-V47 arity. */
         public Voucher(String secret, int defaultValidityDays,
                        int fraudVelocityThreshold, int fraudWindowSeconds) {
-            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, null, null);
+            this(secret, defaultValidityDays, fraudVelocityThreshold, fraudWindowSeconds, null, null, 0);
         }
     }
 

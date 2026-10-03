@@ -203,7 +203,9 @@ public class VoucherController {
             description = "Mints `quantity` independent unassigned vouchers in one call — same direct shape " +
                           "as /issue (type + money value + currency; expiry from the loyalty rules), applied " +
                           "to every voucher in the batch. Each gets its own unique signed code. The caller " +
-                          "must administer the issuing merchant.")
+                          "must administer the issuing merchant. `quantity` is capped per request " +
+                          "(`loyalty.voucher.bulk-max-quantity`, default 1000); more is a 400 " +
+                          "`BULK_QUANTITY_TOO_LARGE` — split the batch into several requests.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -283,17 +285,26 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error",
+                    description = "Validation error, or a quantity over the per-request cap",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "quantity": "must be greater than or equal to 1" }
                                     }
+                                    """),
+                                    @ExampleObject(name = "Quantity over the cap", value = """
+                                    {
+                                      "code": "BULK_QUANTITY_TOO_LARGE",
+                                      "message": "A bulk issue can create at most 1000 vouchers. Split the batch into requests of 1000 or fewer.",
+                                      "data": null
+                                    }
                                     """)
+                            }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

@@ -27,6 +27,16 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
 
     Optional<Voucher> findByCode(String code);
 
+    /**
+     * Which of {@code codes} already exist — ONE query for a whole bulk batch.
+     * Bulk issue used to call {@link #findByCode} once per voucher, and each of
+     * those auto-flushed and dirty-checked every voucher created so far in the
+     * transaction, so a batch got quadratically slower. Returns codes only, so
+     * nothing is loaded into the persistence context.
+     */
+    @Query("select v.code from Voucher v where v.code in :codes")
+    List<String> findExistingCodes(@Param("codes") Collection<String> codes);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT v FROM Voucher v WHERE v.code = :code")
     Optional<Voucher> lockByCode(@Param("code") String code);

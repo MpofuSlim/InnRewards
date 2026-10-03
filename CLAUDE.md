@@ -1385,6 +1385,30 @@ path back.**
   costs the name, never the message. Pinned by `VoucherSenderIdentityTest` +
   the sender and merchant cases in `NotificationGatewayTest`.
 
+### Bulk issue is capped, and its lookups do not grow with the quantity
+
+`POST /loyalty/vouchers/issue-bulk` creates at most
+`loyalty.voucher.bulk-max-quantity` vouchers per request
+(`LOYALTY_VOUCHER_BULK_MAX_QUANTITY`, default 1000; non-positive means the
+default, so the cap cannot be switched off). More is **400
+`BULK_QUANTITY_TOO_LARGE`**, whose message names the limit; the client splits
+the batch. It is checked in the service because a `@Max` cannot read config.
+
+- **Why.** `quantity` was only `@Min(1)`, and every voucher ran its own
+  `findByCode`, rule lookup and FX lookup. Each query auto-flushed and
+  dirty-checked every voucher created so far in the transaction, so the work
+  grew with the square of the quantity and one request could tie up a pod.
+- **Now** the currency, frozen FX rate and expiry are resolved ONCE per batch
+  (`IssueTerms`), codes are allocated in one `findExistingCodes(IN …)` query
+  (only colliding codes are regenerated and rechecked, 8 rounds then fail), and
+  the vouchers are then only persisted, so the inserts go out in JDBC batches.
+  The UNIQUE constraint on `vouchers.code` is still the final backstop.
+- Every other bulk rule is unchanged: no holder, no sender, no delivery,
+  signed per code, fees/FX/expiry as for `/issue`. A new per-voucher query in
+  this loop brings the quadratic cost back. Pinned by `BulkVoucherIssueTest`
+  and `BulkVoucherIssueIT` (Hibernate statistics: the query count for 400
+  vouchers equals the count for 5).
+
 ### The voucher list row carries all three people — including the cashier
 
 **Owner decision (2026-09-18): one `VoucherResponse` shape on every surface, the

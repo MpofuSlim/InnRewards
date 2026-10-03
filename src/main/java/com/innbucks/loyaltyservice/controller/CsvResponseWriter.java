@@ -44,11 +44,13 @@ final class CsvResponseWriter extends Writer {
     }
 
     @Override
+    @SuppressWarnings("resource") // the servlet's own writer: the container closes it, see close()
     public void write(char[] cbuf, int off, int len) throws IOException {
         delegate().write(cbuf, off, len);
     }
 
     @Override
+    @SuppressWarnings("resource") // the servlet's own writer: the container closes it, see close()
     public void write(String str, int off, int len) throws IOException {
         delegate().write(str, off, len);
     }

@@ -848,45 +848,6 @@ public class VoucherService {
             throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher can't be redeemed at this shop.");
         }
 
-        // The HOLDER's account state, resolved from the voucher — see
-        // holderAccount for why this must not come from req.userId(), which is
-        // recorded as a claim and nothing more. Empty for bulk stock, which has
-        // no holder to check.
-        //
-        // The verdict comes from UserService.spendabilityOf, the same decision
-        // the points spend gate uses, so this gate cannot drift from that one
-        // again: it had lost the PENDING heal, the V44 on-demand eligibility
-        // check and the INACTIVE refusal entirely. Only the WORDING is local —
-        // VoucherController's 403 documentation promises callers that `message`
-        // can be shown as-is, and a cashier reads these aloud to the person at
-        // the counter, so they must describe a voucher rather than a points
-        // balance and must not name a signup step the holder has no route to.
-        java.util.Optional<LoyaltyUser> holder = holderAccount(v);
-        if (holder.isPresent()) {
-            switch (userService.spendabilityOf(holder.get())) {
-                case OK -> { /* spendable */ }
-                case BLOCKED -> {
-                    rejectRedemption(v, merchantId, req, "holder account blocked");
-                    recordAttempt(tenantId, req, merchantId, v.getCode(),
-                            FraudAttempt.Reason.BLOCKED_USER, "blocked holder attempted redemption");
-                    throw LoyaltyException.forbidden("USER_BLOCKED",
-                            "This voucher's account is currently suspended. Please contact support.");
-                }
-                case PENDING_REGISTRATION -> {
-                    rejectRedemption(v, merchantId, req, "holder pending registration");
-                    throw LoyaltyException.forbidden("USER_PENDING",
-                            "This voucher's rewards account is still being set up, so it can't be "
-                                    + "redeemed yet.");
-                }
-                case INACTIVE -> {
-                    rejectRedemption(v, merchantId, req, "holder account inactive");
-                    throw LoyaltyException.forbidden("USER_INACTIVE",
-                            "This voucher's account is inactive. Please contact support to "
-                                    + "reactivate it.");
-                }
-            }
-        }
-
         // Object-level authorization on the REDEEMING merchant — for STAFF only,
         // and the distinction is load-bearing rather than a shortcut.
         //
@@ -911,10 +872,67 @@ public class VoucherService {
         //     holder).
         // Requiring administration of either refuses it `NOT_MERCHANT_OWNER`,
         // and the first draft of this change did exactly that to both.
+        //
+        // It runs BEFORE the holder's account gate below, deliberately: that
+        // gate can ask the InnBucks directory and register the holder's phone
+        // (the V44 on-demand check), so a staff caller naming a merchant it does
+        // not administer must be refused first — never able to make loyalty do
+        // either, nor to learn the holder's account state from USER_PENDING /
+        // USER_BLOCKED. WRONG_MERCHANT above has already pinned the redemption
+        // to this voucher's own merchant, so moving this changes no outcome for
+        // a caller entitled to redeem here.
         if (staffCaller) {
             merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
         } else {
             merchants.requireMerchant(tenantId, merchantId);
+        }
+
+        // The HOLDER's account state, resolved from the voucher — see
+        // holderAccount for why this must not come from req.userId(), which is
+        // recorded as a claim and nothing more. Empty for bulk stock, which has
+        // no holder to check.
+        //
+        // The verdict comes from UserService.spendabilityOf, the same decision
+        // the points spend gate uses, so this gate cannot drift from that one
+        // again: it had lost the PENDING heal, the V44 on-demand eligibility
+        // check and the INACTIVE refusal entirely. Only the WORDING is local —
+        // VoucherController's 403 documentation promises callers that `message`
+        // can be shown as-is, and a cashier reads these aloud to the person at
+        // the counter, so they must describe a voucher rather than a points
+        // balance and must not name a signup step the holder has no route to.
+        //
+        // Inside an EligibilityDeferral scope spendabilityOf may THROW
+        // (EligibilityCheckDeferred) rather than answer, so the V44 directory
+        // call is made after this transaction — and this voucher's row lock —
+        // has gone. It throws before any branch below runs, and every refusal
+        // above throws before reaching here, so a deferral publishes no
+        // VoucherRedemptionRejectedEvent (no REJECTED row, no EXPIRED flip) and
+        // writes no fraud evidence: the rollback leaves nothing behind and the
+        // replay starts clean.
+        java.util.Optional<LoyaltyUser> holder = holderAccount(v);
+        if (holder.isPresent()) {
+            switch (userService.spendabilityOf(holder.get())) {
+                case OK -> { /* spendable */ }
+                case BLOCKED -> {
+                    rejectRedemption(v, merchantId, req, "holder account blocked");
+                    recordAttempt(tenantId, req, merchantId, v.getCode(),
+                            FraudAttempt.Reason.BLOCKED_USER, "blocked holder attempted redemption");
+                    throw LoyaltyException.forbidden("USER_BLOCKED",
+                            "This voucher's account is currently suspended. Please contact support.");
+                }
+                case PENDING_REGISTRATION -> {
+                    rejectRedemption(v, merchantId, req, "holder pending registration");
+                    throw LoyaltyException.forbidden("USER_PENDING",
+                            "This voucher's rewards account is still being set up, so it can't be "
+                                    + "redeemed yet.");
+                }
+                case INACTIVE -> {
+                    rejectRedemption(v, merchantId, req, "holder account inactive");
+                    throw LoyaltyException.forbidden("USER_INACTIVE",
+                            "This voucher's account is inactive. Please contact support to "
+                                    + "reactivate it.");
+                }
+            }
         }
 
         v.setUsesRemaining(v.getUsesRemaining() - 1);

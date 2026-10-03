@@ -78,7 +78,10 @@ class VoucherRedeemLockoutTest {
         VoucherGuessGuard guard = new VoucherGuessGuard(VoucherGuardProperties.defaults(), noRedis,
                 new LoyaltyMetrics(new SimpleMeterRegistry()), clock);
         mvc = MockMvcBuilders.standaloneSetup(new VoucherController(service, tenants, guard,
-                org.mockito.Mockito.mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class)))
+                org.mockito.Mockito.mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class),
+                new com.innbucks.loyaltyservice.service.EligibilityDeferral(
+                        org.mockito.Mockito.mock(com.innbucks.loyaltyservice.service.OnDemandEligibilityCheck.class),
+                        org.mockito.Mockito.mock(com.innbucks.loyaltyservice.service.UserService.class))))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
         asCustomer(CUSTOMER_PHONE);

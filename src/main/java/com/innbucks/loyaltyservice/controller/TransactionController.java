@@ -43,11 +43,14 @@ public class TransactionController {
     private final com.innbucks.loyaltyservice.service.UserService users;
 
     private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
+    private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
 
     public TransactionController(TransactionService transactions, TransferService transferService,
                                  RedemptionService redemptionService, TenantContext tenantContext,
                                  com.innbucks.loyaltyservice.service.UserService users,
-                                 com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
+                                 com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
+                                 com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+        this.eligibilityDeferral = eligibilityDeferral;
         this.transactions = transactions;
         this.transferService = transferService;
         this.redemptionService = redemptionService;
@@ -568,7 +571,10 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> transfer(@Valid @RequestBody Dtos.TransferRequest req) {
-        BigDecimal balance = transferService.transfer(tenantContext.requireTenantId(), req);
+        // A spend: the V44 eligibility check runs outside its transaction
+        // (EligibilityDeferral), so the gate never holds a connection across it.
+        UUID tenantId = tenantContext.requireTenantId();
+        BigDecimal balance = eligibilityDeferral.run(() -> transferService.transfer(tenantId, req));
         Map<String, Object> data = Map.of("status", "OK", "newSenderBalance", balance);
         return ResponseEntity.ok(ApiResult.ok("Transfer completed successfully", data));
     }
@@ -664,8 +670,12 @@ public class TransactionController {
         // wallet (admins may act on behalf). The S2S callers use the 3-arg form.
         // Idempotent variant: a concurrent double-tap replays to a clean 200
         // instead of surfacing a 409 for a redemption that actually went through.
-        var result = redemptionService.redeemPointsIdempotent(tenantContext.requireTenantId(),
-                CallerDetails.resolveMerchantId(req.merchantId()), req, true);
+        // A spend: the V44 eligibility check runs outside its transaction
+        // (EligibilityDeferral), so the gate never holds a connection across it.
+        UUID tenantId = tenantContext.requireTenantId();
+        UUID merchantId = CallerDetails.resolveMerchantId(req.merchantId());
+        var result = eligibilityDeferral.run(() ->
+                redemptionService.redeemPointsIdempotent(tenantId, merchantId, req, true));
         Map<String, Object> data = Map.of(
                 "status", "OK",
                 "transactionId", result.transactionId(),

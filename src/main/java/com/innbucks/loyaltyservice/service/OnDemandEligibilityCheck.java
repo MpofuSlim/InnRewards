@@ -60,8 +60,17 @@ import java.time.Duration;
  * upstream. An {@code Unavailable} answer shortens the cooldown, so an outage
  * does not lock a phone out for the full window.
  *
+ * <h2>Where it runs: outside the spend transaction</h2>
+ * The gate is inside the spend's transaction (and, for a voucher, under its
+ * row lock), so the gate does not call this directly when a deferral scope is
+ * open: it throws, the spend rolls back, and {@link EligibilityDeferral} calls
+ * this with no transaction open, registers a confirmed customer in a
+ * transaction of its own, and replays the spend once. Every controller that
+ * reaches the gate opens that scope. Only a caller that does not — or one
+ * already inside a transaction — still gets the check inline, as before.
+ *
  * <h2>Nothing here throws</h2>
- * This runs inside a customer's spend transaction. A fault in an optimisation
+ * A fault in an optimisation
  * must never surface as a failed redemption, so every error path returns
  * {@code false} and the caller falls back to the ordinary
  * {@code USER_PENDING} refusal — the exact behaviour that existed before this
@@ -96,6 +105,16 @@ public class OnDemandEligibilityCheck {
         this.enabled = enabled;
         this.cooldown = Duration.ofSeconds(Math.max(1, cooldownSeconds));
         this.unavailableCooldown = Duration.ofSeconds(Math.max(1, unavailableCooldownSeconds));
+    }
+
+    /**
+     * Whether {@link #confirmsCustomer} could ever reach the directory on this
+     * cell: switched on and provisioned. The spend gate defers out of its
+     * transaction ({@link EligibilityDeferral}) only when this is true, so a cell
+     * with the check off never rolls a spend back for nothing.
+     */
+    public boolean isActive() {
+        return enabled && validateClient.isConfigured();
     }
 
     /**

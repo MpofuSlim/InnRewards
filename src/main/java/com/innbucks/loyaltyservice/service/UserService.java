@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.PhoneRegistration;
 import com.innbucks.loyaltyservice.entity.Wallet;
+import com.innbucks.loyaltyservice.exception.EligibilityCheckDeferred;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.PhoneRegistrationRepository;
@@ -201,6 +202,12 @@ public class UserService {
      * documented V40/V44 behaviour and both belong to the decision rather than
      * to the caller's phrasing; see the comments inside.
      *
+     * <p>Inside an {@link EligibilityDeferral} scope it may also throw
+     * {@link EligibilityCheckDeferred} instead of answering, so the V44
+     * directory call happens after the caller's transaction has rolled back
+     * rather than under it. The scope catches it and replays the spend; with no
+     * scope open it is never thrown.
+     *
      * <p>(This doc comment used to sit above {@link Spendability}, where every
      * claim in it was false of the element it was attached to — an enum has no
      * PENDING branch and no side effects. Keep the method's contract on the
@@ -238,12 +245,36 @@ public class UserService {
                 // on every failure, and false means "don't promote" rather than
                 // "not a customer".
                 //
-                // registerPhone is a SELF-invocation, so it joins this
-                // transaction instead of opening its own. That is wanted here
-                // and matches the heal above: a registration earned on a spend
-                // that then fails (INSUFFICIENT_FUNDS, say) rolls back with it,
-                // and the sweeper converges the phone anyway. Don't "fix" this
-                // into REQUIRES_NEW expecting it to commit independently.
+                // But NOT from inside this transaction when we can avoid it. The
+                // ask is an HTTP round trip to the InnBucks directory, and this
+                // runs inside the caller's spend transaction — on the voucher
+                // path under the voucher's PESSIMISTIC_WRITE row lock — so a slow
+                // directory held a pooled connection and that lock for the whole
+                // call. Inside an EligibilityDeferral scope (every controller that
+                // reaches this gate opens one) the gate throws instead: the spend
+                // rolls back, the deferral asks with no transaction open,
+                // registers a confirmed customer in its OWN transaction — so that
+                // registration commits even if the replayed spend then fails
+                // (INSUFFICIENT_FUNDS, say), which the owner accepted: every
+                // InnBucks customer is eligible and the sweeper would register
+                // them anyway — and replays the spend once, in REPLAY mode, where
+                // the fact read above decides and the directory is not asked a
+                // second time.
+                switch (EligibilityDeferral.currentMode()) {
+                    case REPLAY -> { return Spendability.PENDING_REGISTRATION; }
+                    case DEFER -> {
+                        if (onDemandEligibility.isActive()) {
+                            throw new EligibilityCheckDeferred(u.getPhoneNumber());
+                        }
+                        return Spendability.PENDING_REGISTRATION;
+                    }
+                    case NONE -> { /* no scope: ask inline, below — the legacy shape */ }
+                }
+                // Legacy inline shape, for a caller with no deferral scope (or one
+                // already inside a transaction, where deferring would poison it).
+                // registerPhone is a SELF-invocation here, so it joins this
+                // transaction and rolls back with a failed spend; the sweeper
+                // converges the phone anyway.
                 if (onDemandEligibility.confirmsCustomer(u.getPhoneNumber())) {
                     registerPhone(u.getPhoneNumber(), PhoneRegistration.Source.INNBUCKS_VALIDATE,
                             "on-demand-spend", null, null);

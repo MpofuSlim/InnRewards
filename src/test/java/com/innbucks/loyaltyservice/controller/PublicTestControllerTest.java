@@ -66,7 +66,10 @@ class PublicTestControllerTest {
     /** Overload for the tests that exercise the configured tenant / merchant pins. */
     private PublicTestController controller(boolean enabled, String tenantPin, String merchantPin) {
         PublicTestController c = new PublicTestController(users, wallets, vouchers, merchants,
-                transactions, transfers, redemptions, voucherService);
+                transactions, transfers, redemptions, voucherService,
+                new com.innbucks.loyaltyservice.service.EligibilityDeferral(
+                        org.mockito.Mockito.mock(com.innbucks.loyaltyservice.service.OnDemandEligibilityCheck.class),
+                        org.mockito.Mockito.mock(com.innbucks.loyaltyservice.service.UserService.class)));
         ReflectionTestUtils.setField(c, "enabled", enabled);
         if (tenantPin != null) ReflectionTestUtils.setField(c, "configuredTenantId", tenantPin);
         if (merchantPin != null) ReflectionTestUtils.setField(c, "configuredMerchantId", merchantPin);

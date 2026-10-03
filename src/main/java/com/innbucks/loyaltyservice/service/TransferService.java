@@ -79,15 +79,21 @@ public class TransferService {
         }
 
         var sender = users.require(tenantId, req.fromUserId());
-        // Senders cannot be PENDING — you must be registered to spend.
-        users.requireSpendable(sender);
         // The caller must OWN the sender wallet — strictly, with no admin bypass
         // (see the overload's javadoc). The QR consume path passes
         // enforceCallerOwnership=false because QrService.issue already proved the
         // sender's ownership when the token was minted.
+        //
+        // BEFORE the spend gate, deliberately: the gate can ask the InnBucks
+        // directory and register the phone (V44 on-demand check), so a caller
+        // naming someone else's account must be refused before it can make
+        // loyalty do either on that account's behalf — and before it can learn
+        // that account's state from USER_PENDING / USER_BLOCKED.
         if (enforceCallerOwnership) {
             users.requireCallerOwns(sender);
         }
+        // Senders cannot be PENDING — you must be registered to spend.
+        users.requireSpendable(sender);
 
         var recipient = hasToUserId
                 ? users.require(tenantId, req.toUserId())

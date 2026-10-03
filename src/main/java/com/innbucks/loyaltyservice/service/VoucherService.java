@@ -643,7 +643,9 @@ public class VoucherService {
             List<String> pending = new ArrayList<>(candidates);
             for (int from = 0; from < pending.size(); from += CODE_CHECK_CHUNK) {
                 List<String> chunk = pending.subList(from, Math.min(pending.size(), from + CODE_CHECK_CHUNK));
-                candidates.removeAll(vouchers.findExistingCodes(chunk));
+                // forEach(remove), not removeAll: Set.removeAll(List) can fall back to
+                // List.contains per element, quadratic in the batch size.
+                vouchers.findExistingCodes(chunk).forEach(candidates::remove);
             }
             accepted.addAll(candidates);
         }

@@ -62,6 +62,15 @@ public class VoucherService {
     private final ExchangeRateService fx;
     /** Platform fallback for voucher expiry when no rule sets one (V45). */
     private final int defaultValidityDays;
+    /** Most vouchers one bulk issue may create ({@code loyalty.voucher.bulk-max-quantity}). */
+    private final int bulkMaxQuantity;
+
+    /** Bulk issue refusal: the quantity is over {@link #bulkMaxQuantity}. */
+    public static final String BULK_QUANTITY_TOO_LARGE = "BULK_QUANTITY_TOO_LARGE";
+    /** Codes per collision-check query; far under Postgres' bind-parameter limit. */
+    private static final int CODE_CHECK_CHUNK = 1000;
+    /** Rounds of regenerating colliding codes before giving up (as {@link #uniqueCode}). */
+    private static final int CODE_ALLOCATION_ROUNDS = 8;
 
     /**
      * Carries REFUSED redemptions out to be recorded after this service's
@@ -103,6 +112,8 @@ public class VoucherService {
         this.signer = new CryptoSigner(props.voucher().secret());
         this.fx = fx;
         this.defaultValidityDays = props.voucher().defaultValidityDays();
+        int cap = props.voucher().bulkMaxQuantity();
+        this.bulkMaxQuantity = cap > 0 ? cap : LoyaltyProperties.Voucher.DEFAULT_BULK_MAX_QUANTITY;
     }
 
     public Dtos.VoucherResponse issue(UUID tenantId, Dtos.IssueVoucherRequest req) {
@@ -287,8 +298,21 @@ public class VoucherService {
     public List<Dtos.VoucherResponse> issueBulk(UUID tenantId, Dtos.BulkIssueRequest req) {
         Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
                 tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
+        // Capped in the service, not with @Max, because the cap is per-cell
+        // config. One request is one transaction: without a cap a single call
+        // could hold a pod and a connection for as long as it took.
+        if (req.quantity() > bulkMaxQuantity) {
+            throw LoyaltyException.badRequest(BULK_QUANTITY_TOO_LARGE,
+                    "A bulk issue can create at most " + bulkMaxQuantity
+                            + " vouchers. Split the batch into requests of " + bulkMaxQuantity + " or fewer.");
+        }
         int usageLimit = resolveUsageLimit(req.voucherType(), req.usageLimit());
         Voucher.VoucherType type = voucherTypeOrDefault(req.voucherType());
+        // Everything every voucher in the batch shares is resolved ONCE: the
+        // currency, the frozen FX rate and the expiry. They used to be looked
+        // up per voucher, and every lookup auto-flushed the vouchers created so
+        // far — work that grew with the square of the quantity.
+        IssueTerms terms = resolveTerms(tenantId, merchant, req.value(), req.currency());
         VoucherBatch batch = new VoucherBatch();
         batch.setTenantId(tenantId);
         batch.setQuantity(req.quantity());
@@ -296,13 +320,16 @@ public class VoucherService {
         batches.save(batch);
 
         List<Dtos.VoucherResponse> result = new ArrayList<>(req.quantity());
-        for (int i = 0; i < req.quantity(); i++) {
+        // One collision query for the whole batch instead of one per voucher.
+        // The vouchers are then only persisted, with no query in between, so
+        // the inserts go out in JDBC batches at commit.
+        for (String code : allocateUniqueCodes(req.quantity())) {
             // No sender identity on bulk: it is unassigned campaign stock, and a
             // per-voucher sender confirmation would message one phone `quantity`
             // times over.
-            Voucher v = createVoucher(tenantId, merchant, batch.getId(),
+            Voucher v = buildVoucher(tenantId, merchant, batch.getId(),
                     null, null, null, null, null, req.deliveryChannel(),
-                    req.campaign(), req.value(), req.currency(), type, usageLimit);
+                    req.campaign(), req.value(), type, usageLimit, terms, code);
             vouchers.save(v);
             result.add(toResponse(v));
         }
@@ -433,18 +460,8 @@ public class VoucherService {
                                   Voucher.DeliveryChannel channel, String campaign,
                                   BigDecimal value, String currency,
                                   Voucher.VoucherType type, int usageLimit) {
-        if (value == null || value.signum() <= 0) {
-            // Defence-in-depth behind the DTO @NotNull @Positive — a voucher's
-            // face value is always money now (V45), so a missing or
-            // non-positive one is never issuable.
-            throw LoyaltyException.badRequest("MISSING_VALUE",
-                    "A voucher's face value must be a positive amount.");
-        }
-        // Fail closed on currency, like every other write entry point that
-        // accepts or defaults one: absent inherits the merchant's currency,
-        // anything outside the cell's allowlist is refused.
-        String resolvedCurrency = supportedCurrencies.requireSupported(
-                currency != null && !currency.isBlank() ? currency : merchant.getCurrency());
+        requirePositiveValue(value);
+        String resolvedCurrency = resolveCurrency(merchant, currency);
         if (assignedUserId != null) {
             LoyaltyUser u = users.findById(assignedUserId)
                     .orElseThrow(() -> LoyaltyException.notFound("user"));
@@ -476,6 +493,67 @@ public class VoucherService {
         }
 
         String code = uniqueCode();
+        IssueTerms terms = new IssueTerms(resolvedCurrency,
+                fx.toBaseWithRate(tenantId, value, resolvedCurrency),
+                resolveExpiry(tenantId, merchant));
+        return buildVoucher(tenantId, merchant, batchId, assignedUserId, assigneePhone, assigneeName,
+                senderName, senderPhone, channel, campaign, value, type, usageLimit, terms, code);
+    }
+
+    /**
+     * What every voucher of one issue shares, resolved before any is built:
+     * the currency, the USD worth frozen at the in-force rate, and the expiry.
+     * Bulk issue resolves it once for the whole batch.
+     */
+    private record IssueTerms(String currency, ExchangeRateService.Conversion base, Instant expiresAt) {
+    }
+
+    private IssueTerms resolveTerms(UUID tenantId, Merchant merchant, BigDecimal value, String currency) {
+        requirePositiveValue(value);
+        String resolvedCurrency = resolveCurrency(merchant, currency);
+        return new IssueTerms(resolvedCurrency,
+                fx.toBaseWithRate(tenantId, value, resolvedCurrency),
+                resolveExpiry(tenantId, merchant));
+    }
+
+    private static void requirePositiveValue(BigDecimal value) {
+        if (value == null || value.signum() <= 0) {
+            // Defence-in-depth behind the DTO @NotNull @Positive — a voucher's
+            // face value is always money now (V45), so a missing or
+            // non-positive one is never issuable.
+            throw LoyaltyException.badRequest("MISSING_VALUE",
+                    "A voucher's face value must be a positive amount.");
+        }
+    }
+
+    /**
+     * Fail closed on currency, like every other write entry point that accepts
+     * or defaults one: absent inherits the merchant's currency, anything
+     * outside the cell's allowlist is refused.
+     */
+    private String resolveCurrency(Merchant merchant, String currency) {
+        return supportedCurrencies.requireSupported(
+                currency != null && !currency.isBlank() ? currency : merchant.getCurrency());
+    }
+
+    /**
+     * Expiry is commercial config now (V45): merchant rule → tenant's global
+     * rule → the platform default. Resolved per issue so a rule change applies
+     * to the NEXT voucher, never retroactively. Null means no expiry.
+     */
+    private Instant resolveExpiry(UUID tenantId, Merchant merchant) {
+        int validity = EffectiveFees.resolveVoucherValidityDays(
+                rules.findApplicable(tenantId, merchant.getId(), TransactionType.PURCHASE),
+                Instant.now(), defaultValidityDays);
+        return validity > 0 ? Instant.now().plus(validity, ChronoUnit.DAYS) : null;
+    }
+
+    private Voucher buildVoucher(UUID tenantId, Merchant merchant, UUID batchId,
+                                 UUID assignedUserId, String assigneePhone, String assigneeName,
+                                 String senderName, String senderPhone,
+                                 Voucher.DeliveryChannel channel, String campaign,
+                                 BigDecimal value, Voucher.VoucherType type, int usageLimit,
+                                 IssueTerms terms, String code) {
         Voucher v = new Voucher();
         v.setTenantId(tenantId);
         v.setMerchantId(merchant.getId());
@@ -508,7 +586,7 @@ public class VoucherService {
         // Always a money AMOUNT in an explicit currency since V45.
         v.setVoucherType(type);
         v.setValue(value);
-        v.setCurrency(resolvedCurrency);
+        v.setCurrency(terms.currency());
         // Multi-currency liability freeze (V38). An outstanding voucher is a
         // promise the platform hasn't paid yet, and that promise is priced when
         // it is MADE — so the USD worth is pinned here, at issuance, not
@@ -517,20 +595,11 @@ public class VoucherService {
         // Unconditional since V45: every voucher's value is money. A supported
         // currency with no in-force rate refuses (NO_FX_RATE) rather than
         // silently pricing at 1.0 — provision the rate before selling in it.
-        ExchangeRateService.Conversion base =
-                fx.toBaseWithRate(tenantId, value, resolvedCurrency);
-        v.setBaseValue(base.amount());
-        v.setFxRateId(base.rateId());
+        // Resolved in IssueTerms, before the voucher is built.
+        v.setBaseValue(terms.base().amount());
+        v.setFxRateId(terms.base().rateId());
         v.setUsesRemaining(usageLimit);
-        // Expiry is commercial config now (V45): merchant rule → tenant's
-        // global rule → the platform default. Resolved per issue so a rule
-        // change applies to the NEXT voucher, never retroactively.
-        int validity = EffectiveFees.resolveVoucherValidityDays(
-                rules.findApplicable(tenantId, merchant.getId(), TransactionType.PURCHASE),
-                Instant.now(), defaultValidityDays);
-        if (validity > 0) {
-            v.setExpiresAt(Instant.now().plus(validity, ChronoUnit.DAYS));
-        }
+        v.setExpiresAt(terms.expiresAt());
         return v;
     }
 
@@ -553,6 +622,35 @@ public class VoucherService {
             if (vouchers.findByCode(code).isEmpty()) return code;
         }
         throw new IllegalStateException("Failed to allocate unique voucher code");
+    }
+
+    /**
+     * {@code count} distinct codes no stored voucher holds, checked in batched
+     * queries rather than one per code. Generate them all, ask which exist,
+     * regenerate only those (and any duplicate inside the batch), repeat. A
+     * collision is about one in 10^11 per code, so the second round almost
+     * never runs. The UNIQUE constraint on {@code vouchers.code} stays the final
+     * backstop for a code minted concurrently by another request.
+     */
+    List<String> allocateUniqueCodes(int count) {
+        java.util.LinkedHashSet<String> accepted = new java.util.LinkedHashSet<>(count * 2);
+        for (int round = 0; round < CODE_ALLOCATION_ROUNDS && accepted.size() < count; round++) {
+            java.util.LinkedHashSet<String> candidates = new java.util.LinkedHashSet<>();
+            while (accepted.size() + candidates.size() < count) {
+                String code = CryptoSigner.randomNumericVoucherCode();
+                if (!accepted.contains(code)) candidates.add(code);
+            }
+            List<String> pending = new ArrayList<>(candidates);
+            for (int from = 0; from < pending.size(); from += CODE_CHECK_CHUNK) {
+                List<String> chunk = pending.subList(from, Math.min(pending.size(), from + CODE_CHECK_CHUNK));
+                candidates.removeAll(vouchers.findExistingCodes(chunk));
+            }
+            accepted.addAll(candidates);
+        }
+        if (accepted.size() < count) {
+            throw new IllegalStateException("Failed to allocate unique voucher codes");
+        }
+        return new ArrayList<>(accepted);
     }
 
     // markDelivered(UUID) was removed in V48 with the DELIVERED status it set.

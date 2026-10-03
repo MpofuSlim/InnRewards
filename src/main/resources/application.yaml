@@ -398,6 +398,10 @@ loyalty:
     # in any other currency cannot be confirmed as paid by card (confirm-card),
     # because the machine would charge the same number in its own currency.
     card-pos-currencies: ${LOYALTY_CARD_POS_CURRENCIES:USD,ZWG}
+    # The most vouchers one POST /loyalty/vouchers/issue-bulk may create. More is
+    # a 400 BULK_QUANTITY_TOO_LARGE: split the batch. One request is one
+    # transaction, so an unbounded quantity could tie up a pod.
+    bulk-max-quantity: ${LOYALTY_VOUCHER_BULK_MAX_QUANTITY:1000}
     fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
     fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
     # Voucher guessing lockout (VoucherGuessGuard): this many unknown or

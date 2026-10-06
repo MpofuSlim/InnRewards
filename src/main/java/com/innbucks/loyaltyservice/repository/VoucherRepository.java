@@ -110,9 +110,95 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
             " com.innbucks.loyaltyservice.entity.Voucher.Status.REVOKED)")
     List<Voucher> findExpired(@Param("now") Instant now);
 
+    /**
+     * How many vouchers {@link #findExpired} would return, without loading them.
+     * Same predicate, so the operator dashboard's expiring counts are unchanged;
+     * it used to materialise every such voucher on the platform to call
+     * {@code size()}.
+     */
+    @Query("SELECT COUNT(v) FROM Voucher v WHERE v.expiresAt IS NOT NULL AND v.expiresAt < :now AND v.status NOT IN " +
+            "(com.innbucks.loyaltyservice.entity.Voucher.Status.REDEEMED, " +
+            " com.innbucks.loyaltyservice.entity.Voucher.Status.EXPIRED, " +
+            " com.innbucks.loyaltyservice.entity.Voucher.Status.REVOKED)")
+    long countExpired(@Param("now") Instant now);
+
     long countByMerchantIdAndIssuedAtBetween(UUID merchantId, Instant from, Instant to);
 
     long countByMerchantIdAndRedeemedAtBetween(UUID merchantId, Instant from, Instant to);
+
+    // --- Grouped twins of the per-merchant voucher reads, for the reports and
+    // the invoice run that used to call them once per merchant. Each keeps its
+    // twin's predicate (BETWEEN stays BETWEEN — inclusive, as the derived
+    // queries are) and only replaces the one merchant with a set or a
+    // sub-select. Never called with an empty set: IN () is not portable SQL.
+
+    /** {@link #countByMerchantIdAndIssuedAtBetween}, summed over every merchant
+     *  whose tenant is NOT {@code excludedTenantId} (the operator dashboard). */
+    @Query("""
+        SELECT COUNT(v) FROM Voucher v
+        WHERE v.merchantId IN (SELECT m.id FROM Merchant m WHERE m.tenantId <> :excludedTenantId)
+          AND v.issuedAt BETWEEN :from AND :to
+        """)
+    long countIssuedBetweenExcludingTenant(@Param("excludedTenantId") UUID excludedTenantId,
+                                           @Param("from") Instant from,
+                                           @Param("to") Instant to);
+
+    /** {@link #countByMerchantIdAndRedeemedAtBetween}, summed over every merchant
+     *  whose tenant is NOT {@code excludedTenantId} (the operator dashboard). */
+    @Query("""
+        SELECT COUNT(v) FROM Voucher v
+        WHERE v.merchantId IN (SELECT m.id FROM Merchant m WHERE m.tenantId <> :excludedTenantId)
+          AND v.redeemedAt BETWEEN :from AND :to
+        """)
+    long countRedeemedBetweenExcludingTenant(@Param("excludedTenantId") UUID excludedTenantId,
+                                             @Param("from") Instant from,
+                                             @Param("to") Instant to);
+
+    /** {@link #countByMerchantIdAndIssuedAtBetween} per merchant: {@code [merchantId, count]}. */
+    @Query("""
+        SELECT v.merchantId, COUNT(v) FROM Voucher v
+        WHERE v.merchantId IN :merchantIds AND v.issuedAt BETWEEN :from AND :to
+        GROUP BY v.merchantId
+        """)
+    List<Object[]> countIssuedBetweenByMerchant(@Param("merchantIds") Collection<UUID> merchantIds,
+                                                @Param("from") Instant from,
+                                                @Param("to") Instant to);
+
+    /** {@link #countByMerchantIdAndRedeemedAtBetween} per merchant: {@code [merchantId, count]}. */
+    @Query("""
+        SELECT v.merchantId, COUNT(v) FROM Voucher v
+        WHERE v.merchantId IN :merchantIds AND v.redeemedAt BETWEEN :from AND :to
+        GROUP BY v.merchantId
+        """)
+    List<Object[]> countRedeemedBetweenByMerchant(@Param("merchantIds") Collection<UUID> merchantIds,
+                                                  @Param("from") Instant from,
+                                                  @Param("to") Instant to);
+
+    /**
+     * The rows {@link #findByMerchantIdAndIssuedAtBetween} returns, for several
+     * merchants, as {@code [merchantId, issuedAt, faceValue]} — the only fields
+     * fee pricing reads ({@code EffectiveFees#feeForIssuedFaceValue}), so a
+     * period's vouchers are not loaded as entities. {@code faceValue} is
+     * {@code value}, the per-voucher amount a PERCENTAGE fee multiplies; it is
+     * never summed across vouchers here.
+     */
+    @Query("""
+        SELECT v.merchantId, v.issuedAt, v.value FROM Voucher v
+        WHERE v.merchantId IN :merchantIds AND v.issuedAt BETWEEN :from AND :to
+        """)
+    List<Object[]> issuedFaceValuesBetween(@Param("merchantIds") Collection<UUID> merchantIds,
+                                           @Param("from") Instant from,
+                                           @Param("to") Instant to);
+
+    /** {@link #findByMerchantIdAndRedeemedAtBetween} for several merchants, as
+     *  {@code [merchantId, redeemedAt, faceValue]} — see {@link #issuedFaceValuesBetween}. */
+    @Query("""
+        SELECT v.merchantId, v.redeemedAt, v.value FROM Voucher v
+        WHERE v.merchantId IN :merchantIds AND v.redeemedAt BETWEEN :from AND :to
+        """)
+    List<Object[]> redeemedFaceValuesBetween(@Param("merchantIds") Collection<UUID> merchantIds,
+                                             @Param("from") Instant from,
+                                             @Param("to") Instant to);
 
     // Per-merchant voucher pulls used by InvoicingService + ReportingService to
     // compute per-voucher fees under the merchant's 3-mode fee model. The
@@ -238,6 +324,43 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
     // revoked ones can't "expire soon".
     long countByMerchantIdAndExpiresAtBetweenAndStatusIn(UUID merchantId, Instant from, Instant to,
                                                          Collection<Voucher.Status> statuses);
+
+    /** {@link #reportSummaryByStatus} for the merchant-360 page: one tenant-less,
+     *  shop-less summary per merchant, {@code [merchantId, status, count,
+     *  baseValueSum]}. Sums {@code baseValue} for the same reason. */
+    @Query("""
+        SELECT v.merchantId, v.status, COUNT(v), COALESCE(SUM(v.baseValue), 0)
+        FROM Voucher v
+        WHERE v.merchantId IN :merchantIds
+          AND v.issuedAt >= :from AND v.issuedAt < :to
+        GROUP BY v.merchantId, v.status
+        """)
+    List<Object[]> summaryByMerchantAndStatus(@Param("merchantIds") Collection<UUID> merchantIds,
+                                              @Param("from") Instant from,
+                                              @Param("to") Instant to);
+
+    /** {@link #sumRedeemedValueByMerchantId} per merchant: {@code [merchantId,
+     *  baseValueSum]}. Sums {@code baseValue}, never the local {@code value}. */
+    @Query("""
+        SELECT v.merchantId, COALESCE(SUM(v.baseValue), 0) FROM Voucher v
+        WHERE v.merchantId IN :merchantIds AND v.redeemedAt IS NOT NULL
+        GROUP BY v.merchantId
+        """)
+    List<Object[]> sumRedeemedValueByMerchantIds(@Param("merchantIds") Collection<UUID> merchantIds);
+
+    /** {@link #countByMerchantIdAndExpiresAtBetweenAndStatusIn} per merchant:
+     *  {@code [merchantId, count]}. Pass {@link Voucher#LIVE_STATUSES}. */
+    @Query("""
+        SELECT v.merchantId, COUNT(v) FROM Voucher v
+        WHERE v.merchantId IN :merchantIds
+          AND v.expiresAt BETWEEN :from AND :to
+          AND v.status IN :statuses
+        GROUP BY v.merchantId
+        """)
+    List<Object[]> countExpiringBetweenByMerchant(@Param("merchantIds") Collection<UUID> merchantIds,
+                                                  @Param("from") Instant from,
+                                                  @Param("to") Instant to,
+                                                  @Param("statuses") Collection<Voucher.Status> statuses);
 
     /** Unredeemed vouchers entering the warning window (expiring after
      *  {@code now} but by {@code cutoff}) that were never warned and have a

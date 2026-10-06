@@ -14,6 +14,10 @@ public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
     Page<Merchant> findByTenantId(UUID tenantId, Pageable pageable);
     long countByTenantIdAndStatus(UUID tenantId, Merchant.Status status);
 
+    /** Operator dashboard: merchants in {@code status} outside one tenant (the
+     *  internal ticketing tenant), counted rather than loaded. */
+    long countByTenantIdNotAndStatus(UUID tenantId, Merchant.Status status);
+
     // Every loyalty merchant an organization owns — user-service's shop-staff
     // screens ask for this (ids-by-organization) to decide which merchants'
     // staff a merchant admin may manage. Oldest first, so the answer is stable.

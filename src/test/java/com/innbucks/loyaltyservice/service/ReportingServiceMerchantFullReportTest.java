@@ -141,19 +141,25 @@ class ReportingServiceMerchantFullReportTest {
         other.setTransactionType(TransactionType.PURCHASE);
         when(rules.findByTenantId(TENANT)).thenReturn(List.of(own, global, other));
 
-        // Alpha's numbers.
-        when(transactions.sumPointsIssued(eq(M_ALPHA), any(), any())).thenReturn(new BigDecimal("100"));
-        when(transactions.sumPointsRedeemed(eq(M_ALPHA), any(), any())).thenReturn(new BigDecimal("40"));
-        when(transactions.countByMerchantIdAndCreatedAtBetween(eq(M_ALPHA), any(), any())).thenReturn(7L);
-        when(transactions.countByType(eq(TENANT), eq(M_ALPHA), any(), any()))
-                .thenReturn(List.<Object[]>of(new Object[]{TransactionType.PURCHASE, 5L},
-                        new Object[]{TransactionType.REDEMPTION, 2L}));
-        when(vouchers.reportSummaryByStatus(eq(null), eq(null), eq(M_ALPHA), eq(null), any(), any()))
+        // Alpha's numbers — each block is ONE grouped query for the whole page,
+        // keyed by merchant. Beta has no rows anywhere, which must read as the
+        // zeros / empties the per-merchant queries answered.
+        when(transactions.sumPointsByMerchant(any(), any(), any())).thenReturn(List.<Object[]>of(
+                new Object[]{M_ALPHA, new BigDecimal("100"), new BigDecimal("40")}));
+        java.time.Instant first = java.time.Instant.parse("2026-01-02T08:00:00Z");
+        java.time.Instant last = java.time.Instant.parse("2026-06-30T17:30:00Z");
+        when(transactions.activityByMerchant(any(), any(), any())).thenReturn(List.<Object[]>of(
+                new Object[]{M_ALPHA, 7L, first, last, 3L}));
+        when(transactions.countByTypeByMerchant(eq(TENANT), any(), any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{M_ALPHA, TransactionType.PURCHASE, 5L},
+                        new Object[]{M_ALPHA, TransactionType.REDEMPTION, 2L}));
+        when(vouchers.summaryByMerchantAndStatus(any(), any(), any()))
                 .thenReturn(List.<Object[]>of(
-                        new Object[]{Voucher.Status.ISSUED, 2L, new BigDecimal("30")},
-                        new Object[]{Voucher.Status.REDEEMED, 3L, new BigDecimal("45")}));
-        when(vouchers.sumRedeemedValueByMerchantId(M_ALPHA)).thenReturn(new BigDecimal("45"));
-        when(invoices.findByMerchantIdOrderByPeriodEndDesc(M_ALPHA)).thenReturn(List.of(
+                        new Object[]{M_ALPHA, Voucher.Status.ISSUED, 2L, new BigDecimal("30")},
+                        new Object[]{M_ALPHA, Voucher.Status.REDEEMED, 3L, new BigDecimal("45")}));
+        when(vouchers.sumRedeemedValueByMerchantIds(any()))
+                .thenReturn(List.<Object[]>of(new Object[]{M_ALPHA, new BigDecimal("45")}));
+        when(invoices.findByMerchantIdInOrderByPeriodEndDesc(any())).thenReturn(List.of(
                 invoice(M_ALPHA, "10.00", Invoice.Status.PAID),
                 invoice(M_ALPHA, "5.00", Invoice.Status.PENDING)));
         Shop shop = new Shop();
@@ -161,8 +167,15 @@ class ReportingServiceMerchantFullReportTest {
         shop.setTenantId(TENANT);
         shop.setMerchantId(M_ALPHA);
         shop.setName("Alpha Cafe Westgate");
-        when(shops.findByTenantIdAndMerchantId(TENANT, M_ALPHA)).thenReturn(List.of(shop));
-        when(transactions.countDistinctUsersByMerchantId(M_ALPHA)).thenReturn(3L);
+        when(shops.findByTenantIdAndMerchantIdIn(eq(TENANT), any())).thenReturn(List.of(shop));
+        when(fraud.countByMerchantSince(any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{M_ALPHA, 2L}));
+        when(vouchers.countExpiringBetweenByMerchant(any(), any(), any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{M_ALPHA, 4L}));
+        when(vouchers.countIssuedBetweenByMerchant(any(), any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{M_ALPHA, 6L}));
+        when(vouchers.countRedeemedBetweenByMerchant(any(), any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{M_ALPHA, 1L}));
 
         authenticate("op@innbucks.co.zw", new CallerDetails(null, null, null, null), "ROLE_SUPER_ADMIN");
         Page<Dtos.MerchantFullReport> page = reporting.merchantFullReports(TENANT, PageRequest.of(0, 20));
@@ -200,6 +213,63 @@ class ReportingServiceMerchantFullReportTest {
         assertEquals(1, alphaReport.stats().shopCount());
         assertEquals(1, alphaReport.stats().activeShopCount());
         assertEquals(3L, alphaReport.stats().uniqueCustomers());
+        assertEquals(2L, alphaReport.stats().fraudAlerts30Days());
+        assertEquals(first, alphaReport.points().firstTransactionAt());
+        assertEquals(last, alphaReport.points().lastTransactionAt());
+        assertEquals(6L, alphaReport.vouchers().issuedLast30Days());
+        assertEquals(1L, alphaReport.vouchers().redeemedLast30Days());
+
+        // Beta: absent from every grouped result = nothing happened there.
+        Dtos.MerchantFullReport betaReport = page.getContent().get(1);
+        assertEquals(BigDecimal.ZERO, betaReport.points().issuedAllTime());
+        assertEquals(0L, betaReport.points().transactionCount());
+        assertTrue(betaReport.points().transactionsByType().isEmpty());
+        assertNull(betaReport.points().firstTransactionAt());
+        assertEquals(0L, betaReport.vouchers().total());
+        assertEquals(BigDecimal.ZERO, betaReport.vouchers().valueRedeemedAllTime());
+        assertEquals(0, betaReport.invoices().total());
+        assertEquals(0, betaReport.shops().size());
+        assertEquals(0L, betaReport.stats().uniqueCustomers());
+
+        // ONE query per block for the page, never one per merchant.
+        org.mockito.Mockito.verify(transactions, org.mockito.Mockito.times(1)).sumPointsByMerchant(any(), any(), any());
+        org.mockito.Mockito.verify(transactions, org.mockito.Mockito.never()).sumPointsIssued(any(), any(), any());
+        org.mockito.Mockito.verify(invoices, org.mockito.Mockito.never()).findByMerchantIdOrderByPeriodEndDesc(any());
+        org.mockito.Mockito.verify(vouchers, org.mockito.Mockito.never())
+                .findByMerchantIdAndIssuedAtBetween(any(), any(), any());
+    }
+
+    @Test
+    void theFeeEstimate_countsOnlyVouchersInsideEachMerchantsOwnCurrentPeriod() {
+        Merchant daily = merchant(M_ALPHA, "Alpha", ORG_BETA);
+        daily.setBillingCycle(Merchant.BillingCycle.DAILY);
+        daily.setFeeIssuedType(Merchant.FeeType.FIXED);
+        daily.setFeeIssuedFixed(new BigDecimal("0.50"));
+        Merchant monthly = merchant(M_BETA, "Beta", ORG_BETA);
+        monthly.setBillingCycle(Merchant.BillingCycle.MONTHLY);
+        monthly.setFeeIssuedType(Merchant.FeeType.FIXED);
+        monthly.setFeeIssuedFixed(new BigDecimal("0.50"));
+        when(merchants.findByTenantId(TENANT)).thenReturn(List.of(daily, monthly));
+
+        // One read from the EARLIEST period start (the monthly merchant's); a
+        // voucher from before today belongs to the monthly merchant's period
+        // but not to the daily merchant's, so only the monthly one is priced.
+        java.time.LocalDate today = java.time.LocalDate.now();
+        java.time.Instant todayStart = today.atStartOfDay().toInstant(java.time.ZoneOffset.UTC);
+        java.time.Instant monthStart = today.withDayOfMonth(1).atStartOfDay().toInstant(java.time.ZoneOffset.UTC);
+        java.time.Instant beforeToday = todayStart.minusSeconds(60);
+        org.junit.jupiter.api.Assumptions.assumeTrue(!beforeToday.isBefore(monthStart),
+                "needs a day of the month after the 1st");
+        when(vouchers.issuedFaceValuesBetween(any(), eq(monthStart), any())).thenReturn(List.<Object[]>of(
+                new Object[]{M_ALPHA, beforeToday, new BigDecimal("10")},   // yesterday: not today's DAILY period
+                new Object[]{M_ALPHA, todayStart, new BigDecimal("10")},    // today, inclusive start
+                new Object[]{M_BETA, beforeToday, new BigDecimal("10")}));  // inside the month
+
+        authenticate("op@innbucks.co.zw", new CallerDetails(null, null, null, null), "ROLE_SUPER_ADMIN");
+        Page<Dtos.MerchantFullReport> page = reporting.merchantFullReports(TENANT, PageRequest.of(0, 20));
+
+        assertEquals(0, new BigDecimal("0.50").compareTo(page.getContent().get(0).invoices().estimatedCurrentPeriodFees()));
+        assertEquals(0, new BigDecimal("0.50").compareTo(page.getContent().get(1).invoices().estimatedCurrentPeriodFees()));
     }
 
     @Test

@@ -171,34 +171,44 @@ class ReportingServiceTest {
     @Test
     void operator_excludesTicketingTenantAndItsMerchant_fromEveryFigure() {
         UUID ticketing = TicketingLoyaltyService.TICKETING_TENANT_ID;
-        UUID realMerchantId = UUID.randomUUID();
-
-        Merchant real = new Merchant();
-        real.setId(realMerchantId);
-        real.setTenantId(TENANT_A);
-        real.setStatus(Merchant.Status.ACTIVE);
-
-        Merchant ticketMerchant = new Merchant();
-        ticketMerchant.setId(UUID.randomUUID());
-        ticketMerchant.setTenantId(ticketing);
-        ticketMerchant.setStatus(Merchant.Status.ACTIVE);
 
         when(tenants.countByIdNot(ticketing)).thenReturn(2L);
-        when(merchants.findAll()).thenReturn(List.of(real, ticketMerchant));
+        when(merchants.countByTenantIdNotAndStatus(ticketing, Merchant.Status.ACTIVE)).thenReturn(1L);
         when(transactions.countSinceExcludingTenant(any(), eq(ticketing))).thenReturn(5L);
-        when(transactions.sumPointsIssued(eq(realMerchantId), any(), any())).thenReturn(BigDecimal.ZERO);
-        when(transactions.sumPointsRedeemed(eq(realMerchantId), any(), any())).thenReturn(BigDecimal.ZERO);
-        when(vouchers.findExpired(any())).thenReturn(List.of());
+        when(transactions.sumPointsIssuedAndRedeemedExcludingTenant(eq(ticketing), any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{new BigDecimal("120.0000"), new BigDecimal("30.0000")}));
+        when(vouchers.countIssuedBetweenExcludingTenant(eq(ticketing), any(), any())).thenReturn(4L);
+        when(vouchers.countRedeemedBetweenExcludingTenant(eq(ticketing), any(), any())).thenReturn(1L);
+        when(vouchers.countExpired(any())).thenReturn(0L);
 
         Dtos.OperatorDashboard d = reporting.operator();
 
         assertEquals(2L, d.totalTenants());     // ticketing tenant NOT counted (dashboard was showing 3)
         assertEquals(1L, d.activeMerchants());  // ticketing merchant excluded
         assertEquals(5L, d.transactionsToday());
-        // The ticketing merchant's activity is never aggregated, and the plain
-        // count() (which includes ticketing) is never used.
-        verify(transactions, never()).sumPointsIssued(eq(ticketMerchant.getId()), any(), any());
+        assertEquals(new BigDecimal("120.0000"), d.pointsIssuedToday());
+        assertEquals(new BigDecimal("30.0000"), d.pointsRedeemedToday());
+        assertEquals(4L, d.vouchersIssuedToday());
+        assertEquals(1L, d.vouchersRedeemedToday());
+        // Every per-merchant figure is ONE query excluding the ticketing tenant —
+        // never a loop over the merchants, never the plain count() (which
+        // includes ticketing), and never a full load of the merchant table.
+        verify(transactions, never()).sumPointsIssued(any(), any(), any());
+        verify(vouchers, never()).countByMerchantIdAndIssuedAtBetween(any(), any(), any());
+        verify(merchants, never()).findAll();
+        verify(vouchers, never()).findExpired(any());
         verify(tenants, never()).count();
+    }
+
+    @Test
+    void operator_withNoRealActivity_reportsPlainZeros() {
+        when(transactions.sumPointsIssuedAndRedeemedExcludingTenant(any(), any(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{BigDecimal.ZERO, BigDecimal.ZERO}));
+
+        Dtos.OperatorDashboard d = reporting.operator();
+
+        assertEquals(BigDecimal.ZERO, d.pointsIssuedToday());
+        assertEquals(BigDecimal.ZERO, d.pointsRedeemedToday());
     }
 
     @Test

@@ -87,6 +87,11 @@ class QrStaffSelfEarnTest {
         verify(qrs).save(saved.capture());
         token = saved.getValue();
         when(qrs.lockByToken(token.getToken())).thenReturn(Optional.of(token));
+        when(transactionService.postForShop(any(), any(), any(), any(), any()))
+                .thenReturn(new Dtos.TransactionResponse(UUID.randomUUID(), TransactionType.QR_PAY,
+                        new BigDecimal("20.00"), new BigDecimal("20.0000"), new BigDecimal("20.0000"),
+                        null, null, null, null, EarnChannel.QR_PRESENCE, "ref-1",
+                        java.time.Instant.now(), null, "USD", new BigDecimal("20.00")));
         SecurityContextHolder.clearContext();
     }
 
@@ -138,8 +143,8 @@ class QrStaffSelfEarnTest {
 
         qrService.consume(TENANT, consume(customer));
 
-        verify(transactionService).post(eq(TENANT), eq(MERCHANT), any(Dtos.TransactionRequest.class),
-                eq(EarnChannel.QR_PRESENCE));
+        verify(transactionService).postForShop(eq(TENANT), eq(MERCHANT), any(Dtos.TransactionRequest.class),
+                any(), eq(EarnChannel.QR_PRESENCE));
         assertThat(token.getUsedAt()).isNotNull();
     }
 
@@ -152,8 +157,8 @@ class QrStaffSelfEarnTest {
 
         qrService.consume(TENANT, consume(shopper));
 
-        verify(transactionService).post(eq(TENANT), eq(MERCHANT), any(Dtos.TransactionRequest.class),
-                eq(EarnChannel.QR_PRESENCE));
+        verify(transactionService).postForShop(eq(TENANT), eq(MERCHANT), any(Dtos.TransactionRequest.class),
+                any(), eq(EarnChannel.QR_PRESENCE));
     }
 
     private Dtos.QrConsumeRequest consume(LoyaltyUser who) {

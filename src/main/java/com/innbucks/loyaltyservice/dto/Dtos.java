@@ -997,6 +997,43 @@ public class Dtos {
             String reference
     ) {}
 
+    /**
+     * {@code POST /loyalty/qr/status} body. The token rides the BODY, never a
+     * URL: it is a consumable credential, and URLs are logged by nginx, the
+     * gateway and the browser.
+     */
+    public record QrStatusRequest(
+            @Schema(example = "qr_2026_e8f7c4d2a1b3",
+                    description = "The `token` from the QR payload returned by POST /loyalty/qr/issue.")
+            @NotBlank @Size(max = 64) String token
+    ) {}
+
+    /** Where a QR token is in its life. CONSUMED wins over EXPIRED: a token
+     *  scanned in time stays CONSUMED after its TTL passes. */
+    public enum QrStatus { PENDING, CONSUMED, EXPIRED }
+
+    public record QrStatusResponse(
+            @Schema(example = "CONSUMED", allowableValues = {"PENDING", "CONSUMED", "EXPIRED"},
+                    description = "PENDING — not scanned yet and still inside its TTL; CONSUMED — scanned "
+                            + "(single-use, so it can never be scanned again); EXPIRED — its TTL passed "
+                            + "unscanned. Issue a fresh QR for anything but PENDING.")
+            QrStatus status,
+            @Schema(example = "2026-05-04T11:05:00Z")
+            Instant expiresAt,
+            @Schema(example = "2026-05-04T11:02:00Z", nullable = true,
+                    description = "When it was scanned. Null unless CONSUMED.")
+            Instant consumedAt,
+            @Schema(example = "44444444-5555-6666-7777-888888888888", nullable = true,
+                    description = "The earn ledger row a MERCHANT QR produced (it carries the issuing "
+                            + "till's shopId). Null for a P2P transfer QR, an unscanned QR, and QRs "
+                            + "consumed before this was recorded.")
+            UUID transactionId,
+            @Schema(example = "200.0000", nullable = true,
+                    description = "Points the scan credited (the earn's points, or the points a transfer "
+                            + "QR moved). Null when not consumed or not recorded — never read it as zero.")
+            BigDecimal pointsAwarded
+    ) {}
+
     public record InvoiceResponse(UUID id, String invoiceNumber, UUID merchantId,
                                   LocalDate periodStart, LocalDate periodEnd,
                                   BigDecimal pointsIssued, BigDecimal pointsRedeemed,

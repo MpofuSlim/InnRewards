@@ -8,6 +8,7 @@ import com.innbucks.loyaltyservice.entity.QrToken;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.QrTokenRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
 import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import org.springframework.stereotype.Service;
@@ -86,6 +87,13 @@ public class QrService {
 
         QrToken q = new QrToken();
         q.setTenantId(tenantId);
+        if (req.sourceType() == QrToken.SourceType.MERCHANT) {
+            // The till that showed the QR. Its earn is attributed here at
+            // consume, because the scanning customer's token carries no shop.
+            // The claim belongs to the QR's merchant: shop staff were pinned to
+            // their token's merchant by the authz check above.
+            q.setShopId(CallerDetails.currentShopId());
+        }
         q.setSourceType(req.sourceType());
         q.setSourceId(req.sourceId());
         q.setTransactionType(req.transactionType());
@@ -196,7 +204,7 @@ public class QrService {
                     fraud.record(tenantId, req.userId(), null, null,
                             FraudAttempt.Reason.INVALID_CODE, "qr token not found",
                             null, null);
-                    return new LoyaltyException(org.springframework.http.HttpStatus.NOT_FOUND, "NOT_FOUND", "This QR code is invalid or has expired.");
+                    return unknownQr();
                 });
         if (!q.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "QR belongs to a different tenant");
@@ -222,12 +230,23 @@ public class QrService {
         q.setUsedAt(Instant.now());
 
         if (q.getSourceType() == QrToken.SourceType.MERCHANT) {
-            // Merchant-issued QR awards points to the scanning user.
-            return transactionService.post(tenantId, q.getSourceId(), new Dtos.TransactionRequest(
-                    null, req.userId(), null, q.getTransactionType(),
-                    q.getAmount() == null ? BigDecimal.ZERO : q.getAmount(),
-                    q.getCurrency(), req.reference()),
+            // Merchant-issued QR awards points to the scanning user, attributed
+            // to the ISSUING till's shop (stored at issue). Never the scanner's
+            // shop claim: the scanner is the customer, who has none, and that is
+            // how every QR earn used to land with a null shop.
+            Dtos.TransactionResponse earned = transactionService.postForShop(tenantId, q.getSourceId(),
+                    new Dtos.TransactionRequest(
+                            null, req.userId(), null, q.getTransactionType(),
+                            q.getAmount() == null ? BigDecimal.ZERO : q.getAmount(),
+                            q.getCurrency(), req.reference()),
+                    q.getShopId(),
                     com.innbucks.loyaltyservice.entity.EarnChannel.QR_PRESENCE);
+            // What the scan produced, for the issuer's POST /qr/status. Written
+            // on the locked row in the same transaction, so it commits with
+            // used_at or not at all.
+            q.setTransactionId(earned.id());
+            q.setPointsAwarded(earned.pointsDelta());
+            return earned;
         } else {
             // User-issued QR initiates a P2P transfer; sourceId is the sender.
             // Skip the caller-ownership check on the transfer: the CALLER here is
@@ -237,6 +256,7 @@ public class QrService {
             BigDecimal points = q.getAmount() == null ? BigDecimal.ZERO : q.getAmount();
             transferService.transfer(tenantId, new Dtos.TransferRequest(
                     q.getSourceId(), req.userId(), null, points, "qr-transfer"), false);
+            q.setPointsAwarded(points);
             return new Dtos.TransactionResponse(null, TransactionType.TRANSFER, points,
                     points, null, null, null, null,
                     com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(), null,
@@ -249,5 +269,61 @@ public class QrService {
                     // why it must never be rendered as a zero amount.
                     null, null);
         }
+    }
+
+    /**
+     * Where a QR token is: PENDING, CONSUMED or EXPIRED — so the till that showed
+     * a QR can tell it was scanned. {@code POST /loyalty/qr/status}, the token in
+     * the BODY (it is a consumable credential; URLs are logged).
+     *
+     * <p>Who may see it is who could have issued it: a MERCHANT QR needs
+     * {@link MerchantAuthz#requireCallerAdministersMerchant} on the QR's merchant
+     * (shop staff by their token's merchant, a merchant admin by organization,
+     * SUPER_ADMIN always); a USER (transfer) QR needs its sender, strictly — no
+     * admin bypass. Everything else — an unknown token, one of another tenant,
+     * one the caller may not see — is the SAME 404 consume answers for an
+     * unknown token, so the endpoint is not an existence oracle. A read: no
+     * fraud row (the token is 192 random bits, so there is nothing to guess).
+     */
+    @Transactional(readOnly = true)
+    public Dtos.QrStatusResponse status(UUID tenantId, String token) {
+        QrToken q = qrs.findByToken(token)
+                .filter(t -> tenantId.equals(t.getTenantId()))
+                .orElseThrow(QrService::unknownQr);
+        if (!callerMaySee(tenantId, q)) {
+            throw unknownQr();
+        }
+        Dtos.QrStatus status;
+        if (q.getUsedAt() != null) {
+            status = Dtos.QrStatus.CONSUMED;
+        } else if (Instant.now().isAfter(q.getExpiresAt())) {
+            // The same test consume() applies, so the two never disagree.
+            status = Dtos.QrStatus.EXPIRED;
+        } else {
+            status = Dtos.QrStatus.PENDING;
+        }
+        return new Dtos.QrStatusResponse(status, q.getExpiresAt(), q.getUsedAt(),
+                q.getTransactionId(), q.getPointsAwarded());
+    }
+
+    private boolean callerMaySee(UUID tenantId, QrToken q) {
+        try {
+            if (q.getSourceType() == QrToken.SourceType.MERCHANT) {
+                merchantAuthz.requireCallerAdministersMerchant(tenantId, q.getSourceId());
+                return true;
+            }
+            LoyaltyUser sender = userService.require(tenantId, q.getSourceId());
+            String callerPhone = CallerDetails.currentPhoneNumber();
+            return callerPhone != null && callerPhone.equals(sender.getPhoneNumber());
+        } catch (LoyaltyException refused) {
+            // Not theirs (or the source is gone): indistinguishable from unknown.
+            return false;
+        }
+    }
+
+    /** consume's answer for an unknown token, shared with {@link #status}. */
+    private static LoyaltyException unknownQr() {
+        return new LoyaltyException(org.springframework.http.HttpStatus.NOT_FOUND, "NOT_FOUND",
+                "This QR code is invalid or has expired.");
     }
 }

@@ -60,5 +60,21 @@ public class QrToken {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
+    /** V58: the ISSUING caller's token shopId (null when the issuer has none —
+     *  a merchant admin, a customer's transfer QR, or a pre-V58 row). The earn a
+     *  merchant QR produces is attributed to this outlet, never to the scanner's. */
+    @Column(name = "shop_id")
+    private UUID shopId;
+
+    /** V58: the ledger row consume produced — the earn for a MERCHANT QR; null
+     *  for a USER (transfer) QR, an unconsumed one, or a pre-V58 consume. */
+    @Column(name = "transaction_id")
+    private UUID transactionId;
+
+    /** V58: points credited by the consume (earn delta, or points a transfer QR
+     *  moved). Null until consumed, and on pre-V58 consumes — never read as zero. */
+    @Column(name = "points_awarded", precision = 19, scale = 4)
+    private BigDecimal pointsAwarded;
+
     public enum SourceType { MERCHANT, USER }
 }

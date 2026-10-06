@@ -368,6 +368,37 @@ public class UserService {
     }
 
     /**
+     * Who may burn {@code target}'s points through {@code POST /loyalty/redeem}:
+     * the wallet's owner (caller phone == target phone), or a staff caller —
+     * SUPER_ADMIN, MERCHANT_ADMIN, SHOP_ADMIN or <b>SHOP_USER</b> — acting for a
+     * customer standing at the till (owner decision 2026-10: cashiers burn
+     * points). Throws 403 {@code NOT_WALLET_OWNER} otherwise, with the same
+     * message as {@link #requireCallerOwnsOrIsAdmin}.
+     *
+     * <p><b>Redemption only.</b> It is deliberately a separate method rather than
+     * SHOP_USER added to {@link #requireCallerOwnsOrIsAdmin}, which also gates
+     * {@code GET /users/{id}/transactions}: a cashier gains the burn and nothing
+     * else. This check alone does NOT bind the staff caller to a merchant —
+     * {@code RedemptionService} runs {@code MerchantAuthz} for every caller that
+     * is not a plain customer, so a cashier burns only at its own merchant.
+     */
+    public void requireCallerMayRedeemFor(LoyaltyUser target) {
+        String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
+        if (callerPhone != null && callerPhone.equals(target.getPhoneNumber())) {
+            return; // the wallet's own holder
+        }
+        if (com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole(REDEEM_ON_BEHALF_ROLES)) {
+            return; // staff serving a customer — merchant-pinned by the caller
+        }
+        throw LoyaltyException.forbidden("NOT_WALLET_OWNER",
+                "you can only act on your own loyalty account");
+    }
+
+    /** Roles that may burn a customer's points on their behalf — see {@link #requireCallerMayRedeemFor}. */
+    private static final String[] REDEEM_ON_BEHALF_ROLES = {
+            "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN", "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER"};
+
+    /**
      * Strict owner check: the caller must be acting on their OWN loyalty account.
      * Unlike {@link #requireCallerOwnsOrIsAdmin}, admin roles do NOT bypass this.
      *

@@ -118,6 +118,31 @@ public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UU
     }
 
     /**
+     * True when the current caller's ROLE authorities are exactly
+     * {@code {ROLE_CUSTOMER}} — an ordinary customer acting for themselves, with
+     * no staff or admin hat. False when unauthenticated.
+     *
+     * <p>Only {@code ROLE_*} authorities are compared: {@code JwtFilter} also
+     * grants {@code SERVICE_*}, {@code TIER_*}, {@code VERIFIED} and bare
+     * permission codes, which describe the token, not a role. Equality rather
+     * than a deny-list of known staff roles, so a role invented later fails
+     * closed (is treated as staff) instead of inheriting customer treatment.
+     */
+    public static boolean isPlainCustomer() {
+        return isPlainCustomer(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    /** {@link #isPlainCustomer()} for an explicit authentication. */
+    public static boolean isPlainCustomer(Authentication auth) {
+        if (auth == null) return false;
+        java.util.Set<String> roles = auth.getAuthorities().stream()
+                .map(org.springframework.security.core.GrantedAuthority::getAuthority)
+                .filter(a -> a != null && a.startsWith("ROLE_"))
+                .collect(java.util.stream.Collectors.toSet());
+        return roles.equals(java.util.Set.of("ROLE_CUSTOMER"));
+    }
+
+    /**
      * Returns the JWT merchantId claim if present, otherwise the supplied body value.
      * Throws BAD_REQUEST if neither is set. Used by write endpoints that need a
      * merchant scope and accept callers from both classes:

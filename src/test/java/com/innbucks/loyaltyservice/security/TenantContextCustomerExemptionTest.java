@@ -132,7 +132,7 @@ class TenantContextCustomerExemptionTest {
     }
 
     @Test
-    @DisplayName("SHOP_USER, SHOP_ADMIN, EVENT_ORGANIZER, TENANT_ADMIN all still need membership")
+    @DisplayName("SHOP_USER/SHOP_ADMIN with no merchant claim, EVENT_ORGANIZER, TENANT_ADMIN all still need membership")
     void otherStaffRoles_stillNeedMembership() {
         for (String role : List.of("ROLE_SHOP_USER", "ROLE_SHOP_ADMIN",
                 "ROLE_EVENT_ORGANIZER", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN")) {

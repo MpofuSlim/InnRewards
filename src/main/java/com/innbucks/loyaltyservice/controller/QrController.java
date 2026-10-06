@@ -43,7 +43,9 @@ public class QrController {
             description = "Generates a token + signature for a specific source (MERCHANT or USER), bound to " +
                           "a transaction type (e.g. QR_PAY) and an amount. The merchant POS or sender app " +
                           "renders this as a QR code. `ttlSeconds` overrides the default TTL configured " +
-                          "via `loyalty.qr.ttl-seconds`.")
+                          "via `loyalty.qr.ttl-seconds`. A MERCHANT QR issued by shop staff remembers the " +
+                          "issuer's `shopId`, and the earn its scan produces is attributed to that shop. Poll " +
+                          "`POST /loyalty/qr/status` to learn when it has been scanned.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -154,7 +156,9 @@ public class QrController {
     @Operation(summary = "Consume a QR token",
             description = "Verifies the token signature + expiry + single-use flag, then posts the underlying " +
                           "transaction (earn or transfer) on behalf of the scanning user. Reusing the same " +
-                          "token returns 4xx — the token is marked CONSUMED on first success.")
+                          "token returns 4xx — the token is marked CONSUMED on first success. A MERCHANT QR's " +
+                          "earn carries the ISSUING till's `shopId` (never the scanner's), so it appears in " +
+                          "that shop's `GET /loyalty/transactions/my-shop`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -280,5 +284,133 @@ public class QrController {
         // outside the consume's transaction and QR row lock (EligibilityDeferral).
         Dtos.TransactionResponse data = eligibilityDeferral.run(() -> qrService.consume(tenantId, req));
         return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));
+    }
+
+    @PostMapping("/status")
+    @Operation(summary = "Check whether a QR token was scanned",
+            description = "Lets the till (or the app) that issued a QR learn what became of it: PENDING "
+                          + "(not scanned, still inside its TTL), CONSUMED (scanned — with when, the earn "
+                          + "`transactionId` and the `pointsAwarded`) or EXPIRED (its TTL passed unscanned). "
+                          + "Poll it after showing a QR; stop on anything but PENDING.\n\n"
+                          + "The token goes in the BODY, never the URL: it is a consumable credential and "
+                          + "URLs are logged. No signature is needed — this reads, it never consumes.\n\n"
+                          + "**Who may see a QR.** A MERCHANT QR: staff of its merchant — SHOP_ADMIN / "
+                          + "SHOP_USER by the merchant in their token (any till of that merchant), "
+                          + "MERCHANT_ADMIN by organization, SUPER_ADMIN always. A USER (transfer) QR: its "
+                          + "sender only. Anything else is the same 404 as an unknown token, so the endpoint "
+                          + "never confirms a QR exists. Requires X-Tenant-Id; a token of another tenant is "
+                          + "also that 404.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "The QR's current state. `consumedAt`, `transactionId` and `pointsAwarded` "
+                            + "are null until it is scanned; `transactionId` stays null for a transfer QR.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Scanned", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "QR status retrieved successfully",
+                                      "data": {
+                                        "status": "CONSUMED",
+                                        "expiresAt": "2026-05-04T11:05:00Z",
+                                        "consumedAt": "2026-05-04T11:02:00Z",
+                                        "transactionId": "44444444-5555-6666-7777-888888888888",
+                                        "pointsAwarded": 200.0000
+                                      }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Not scanned yet", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "QR status retrieved successfully",
+                                      "data": {
+                                        "status": "PENDING",
+                                        "expiresAt": "2026-05-04T11:05:00Z",
+                                        "consumedAt": null,
+                                        "transactionId": null,
+                                        "pointsAwarded": null
+                                      }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Expired unscanned", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "QR status retrieved successfully",
+                                      "data": {
+                                        "status": "EXPIRED",
+                                        "expiresAt": "2026-05-04T11:05:00Z",
+                                        "consumedAt": null,
+                                        "transactionId": null,
+                                        "pointsAwarded": null
+                                      }
+                                    }
+                                    """)}
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Bean validation (`token` blank or over 64 characters; field detail in "
+                            + "`data`), or MISSING_TENANT when neither X-Tenant-Id nor X-Tenant-Code is sent.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Validation failed",
+                                      "data": { "token": "must not be blank" }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "No tenant header", value = """
+                                    {
+                                      "code": "MISSING_TENANT",
+                                      "message": "X-Tenant-Id or X-Tenant-Code header is required",
+                                      "data": null
+                                    }
+                                    """)}
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "The caller's role may not use this endpoint, or the caller is not a member "
+                            + "of the tenant. A QR the caller may not see is NOT a 403 — it is the 404 below.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not permitted", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "You don't have permission to do that.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "The token is unknown, belongs to another tenant, or is a QR the caller may "
+                            + "not see (another merchant's QR, someone else's transfer QR). One answer for all "
+                            + "three — the same one POST /consume gives an unknown token.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Unknown or not yours", value = """
+                                    {
+                                      "code": "NOT_FOUND",
+                                      "message": "This QR code is invalid or has expired.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.QrStatusResponse>> status(@Valid @RequestBody Dtos.QrStatusRequest req) {
+        Dtos.QrStatusResponse data = qrService.status(tenantContext.requireTenantId(), req.token());
+        return ResponseEntity.ok(ApiResult.ok("QR status retrieved successfully", data));
     }
 }

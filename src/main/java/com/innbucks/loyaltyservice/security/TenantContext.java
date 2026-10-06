@@ -33,6 +33,11 @@ import java.util.UUID;
  * {@code userId} matches a {@code tenant_members} row, OR (fallback) when their
  * email (the principal name) matches a legacy row created before membership
  * moved to UUIDs. Either match grants access.
+ *
+ * <p>Two further paths are checked BEFORE {@code tenant_members}, because that
+ * table only ever holds a tenant's creator: a business's OWNER/ADMIN is a member
+ * through its ORGANIZATION, and SHOP staff (SHOP_ADMIN / SHOP_USER) through the
+ * MERCHANT named in their token. See {@link #verifyMembership}.
  */
 @Component
 @RequestScope
@@ -121,15 +126,18 @@ public class TenantContext {
         // to the caller's own phone or id, and the mint/drain paths use the
         // STRICT variant that not even an admin bypasses:
         //   POST /loyalty/transfer            TransferService requireCallerOwns (strict)
-        //   POST /loyalty/redeem              RedemptionService requireCallerOwnsOrIsAdmin
+        //   POST /loyalty/redeem              RedemptionService requireCallerMayRedeemFor
+        //                                     (owner, or staff pinned to its merchant)
         //   GET  /users/{id}/transactions     requireCallerOwnsOrIsAdmin
         //   POST /vouchers/redeem             assignee-phone check (VoucherService)
         //   POST /vouchers/{id}/transfer      requireCallerMayViewVoucher
         //   GET  /vouchers/.../active         requireCallerOwnsPhoneOrIsAdmin
         //   POST /qr/issue                    requireCallerAdministersMerchant / requireCallerOwns (strict)
         //   POST /qr/consume                  requireCallerOwns (strict)
+        //   POST /qr/status                   USER QR: strict owner; MERCHANT QR: MerchantAuthz
+        //                                     (a customer administers no merchant, so 404)
         //   GET  /mini-apps/manifest          none — tenant mini-app CATALOGUE, storefront content
-        // Membership was therefore redundant on all nine, and load-bearing on
+        // Membership was therefore redundant on all ten, and load-bearing on
         // none. What a customer gains is the ability to act on THEIR OWN
         // projection in whichever tenant they name — the position PR #87 already
         // settled, since wallets are global per phone and the tenant decides
@@ -156,6 +164,28 @@ public class TenantContext {
         if (organizationId != null
                 && (organizationId.equals(tenant.getOrganizationId())
                     || lookup.organizationOwnsMerchantIn(tenant.getId(), organizationId))) {
+            return;
+        }
+        // Membership by MERCHANT, for shop staff. A SHOP_ADMIN / SHOP_USER works
+        // for exactly one merchant, named by the merchantId claim user-service
+        // row-stamps from the staff account (the same claim MerchantAuthz pins
+        // every shop-staff action to), so they are members of the program that
+        // merchant belongs to — and of no other. Before this, a till could reach
+        // no tenant-scoped endpoint at all: tenant_members has no writer that
+        // could ever add a cashier (tenant creation adds the creator; the
+        // backfill is keyed on tenant.ownerEmail; there is no add-member
+        // endpoint), so every till call was a 403.
+        //
+        // Role-gated on purpose: only shop staff carry a merchant claim today,
+        // and a claim on any other token shape must not become a way in. The
+        // lookup is uncached for the reason organizationOwnsMerchantIn is: it
+        // must turn false the moment the merchant moves to another program.
+        // A claim naming a merchant of a DIFFERENT program matches nothing here
+        // and falls through to the tenant_members check below.
+        UUID staffMerchant = CallerDetails.currentMerchantId();
+        if (staffMerchant != null
+                && (hasRole(authentication, "ROLE_SHOP_USER") || hasRole(authentication, "ROLE_SHOP_ADMIN"))
+                && lookup.merchantBelongsTo(tenant.getId(), staffMerchant)) {
             return;
         }
         // Dual-mode membership: prefer the caller's stable UUID (JWT userId
@@ -194,10 +224,7 @@ public class TenantContext {
      * considered deliberately.
      */
     private static boolean isPlainCustomer(Authentication authentication) {
-        java.util.Set<String> roles = authentication.getAuthorities().stream()
-                .map(org.springframework.security.core.GrantedAuthority::getAuthority)
-                .filter(a -> a != null && a.startsWith("ROLE_"))
-                .collect(java.util.stream.Collectors.toSet());
-        return roles.equals(java.util.Set.of("ROLE_CUSTOMER"));
+        // One definition, shared with RedemptionService's staff/customer split.
+        return CallerDetails.isPlainCustomer(authentication);
     }
 }

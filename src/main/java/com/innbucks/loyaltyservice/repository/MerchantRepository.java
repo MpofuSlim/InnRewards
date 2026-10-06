@@ -24,6 +24,11 @@ public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
     // created (TenantContext). Index-backed by idx_merchant_organization.
     boolean existsByTenantIdAndOrganizationId(UUID tenantId, UUID organizationId);
 
+    // Tenant membership for SHOP STAFF: a SHOP_ADMIN / SHOP_USER whose token's
+    // merchantId names a merchant of this program works in it (TenantContext).
+    // A primary-key probe; deliberately never cached.
+    boolean existsByIdAndTenantId(UUID id, UUID tenantId);
+
     // The ticketing bridge maps an event organizer (user_uuid) to one merchant.
     // Unique when set (uk_merchant_organizer), so at most one row matches.
     Optional<Merchant> findByOrganizerUuid(UUID organizerUuid);

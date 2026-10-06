@@ -225,14 +225,16 @@ check was not a gate but a wall, and `POST /loyalty/transfer` and
 `POST /loyalty/redeem` would have 403'd every one of them. That is why the
 customer app has only ever reached loyalty through `/loyalty/public/**`.
 
-**Why skipping it was safe.** All nine tenant-scoped endpoints a CUSTOMER can
+**Why skipping it was safe.** All ten tenant-scoped endpoints a CUSTOMER can
 reach already bind the acted-on account to the caller, and the mint/drain paths
 use the STRICT check: transfer (`requireCallerOwns`), redeem
-(`requireCallerOwnsOrIsAdmin`), `/users/{id}/transactions`, voucher redeem
+(`requireCallerMayRedeemFor` — owner, or staff pinned to its merchant),
+`/users/{id}/transactions` (`requireCallerOwnsOrIsAdmin`), voucher redeem
 (assignee phone), voucher transfer (`requireCallerMayTransferVoucher`),
 vouchers-by-phone (`requireCallerOwnsPhoneOrIsAdmin`), QR issue
 (`requireCallerAdministersMerchant` / `requireCallerOwns`), QR consume
-(`requireCallerOwns`). The ninth, `GET /loyalty/mini-apps/manifest`, returns the
+(`requireCallerOwns`), QR status (strict owner of a transfer QR; a merchant
+QR needs `MerchantAuthz`, so a customer gets the 404). The tenth, `GET /loyalty/mini-apps/manifest`, returns the
 tenant's mini-app catalogue — storefront content whose role list already names
 CUSTOMER.
 
@@ -466,7 +468,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V57**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V58**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -2179,6 +2181,63 @@ SUPER_ADMIN and would 403 a TENANT_ADMIN in their own tenant. Pinned by
   phone's balance. That is disclosure, not theft, and the POS displays it.
 - A MERCHANT_ADMIN on guest checkout is still bounded by tenant only, not by
   organization.
+
+## Till flows: cashier burn, shop-staff membership, QR shop + status (V58)
+
+**Owner decision (2026-10): a cashier (SHOP_USER) may burn a customer's points
+at the till.** Three gaps stopped a POS till working end to end; all closed
+together.
+
+- **Burn — `POST /loyalty/redeem`.** The path used `requireCallerOwnsOrIsAdmin`
+  (SUPER_ADMIN / MERCHANT_ADMIN / SHOP_ADMIN only), so every cashier burn was
+  `403 NOT_WALLET_OWNER` — and `TransactionControllerSecurityTest` mocked the
+  service, so nothing noticed. It now uses `UserService.requireCallerMayRedeemFor`
+  (owner, or SUPER_ADMIN / MERCHANT_ADMIN / SHOP_ADMIN / SHOP_USER), **on the
+  redemption path only**: `requireCallerOwnsOrIsAdmin` is unchanged, so a cashier
+  gains no other read (`/users/{id}/transactions` stays shut) and transfer stays
+  strict. **Every caller that is not a plain customer** (`CallerDetails.isPlainCustomer`,
+  the role-set-equality rule `TenantContext` uses) then passes
+  `MerchantAuthz.requireCallerAdministersMerchant` — shop staff by their token
+  `merchantId` (which the controller already prefers over the body), a merchant
+  admin by organization, SUPER_ADMIN exempt — AFTER `requireMerchant` and BEFORE
+  `requireSpendable`, so a refused caller never triggers the eligibility check or
+  reads `USER_PENDING`. A mixed CUSTOMER+staff token is staff, so it is pinned even
+  on its own wallet. The REDEMPTION row carries the caller's token `shopId` on the
+  JWT path only (S2S burns keep their own attribution), so burns appear in
+  `/transactions/my-shop`. Pinned by `CashierRedemptionTest` and `TillCashierFlowsIT`.
+- **Shop staff are tenant members by MERCHANT.** `tenant_members` has no writer
+  that can add a cashier, so every tenant-scoped till call was a 403.
+  `TenantContext` now admits a SHOP_USER / SHOP_ADMIN whose `merchantId` claim
+  names a merchant of the tenant, after the organization path and before
+  `tenant_members`. Role-gated (a merchant claim on any other token is not a way
+  in), and `TenantCachedLookup.merchantBelongsTo` is **never cached**, like
+  `organizationOwnsMerchantIn`. Pinned by `TenantContextShopStaffMembershipTest`.
+- **QR earns belong to the ISSUING shop.** Consume used the scanner's shop claim —
+  a customer's, i.e. none — so every QR earn had `shop_id` NULL. V58 adds
+  `qr_tokens.shop_id` (stamped from the issuer's claim, merchant QRs only) and
+  consume posts through `TransactionService.postForShop` (explicit shop, keeps the
+  earn alert — the 5-arg `post` does NOT notify). Never take the shop from the
+  scanner. V58 also records `transaction_id` / `points_awarded` at consume.
+- **`POST /loyalty/qr/status`** (`{ "token" }` in the BODY — a token is a
+  consumable credential, never put it in a URL) returns
+  `{status: PENDING|CONSUMED|EXPIRED, expiresAt, consumedAt, transactionId, pointsAwarded}`.
+  CONSUMED wins over EXPIRED; EXPIRED uses consume's own `isAfter` test. A merchant
+  QR is visible to whoever `MerchantAuthz` admits for its merchant (any till of
+  it); a transfer QR to its sender only, strictly. Unknown, other-tenant and
+  not-yours are ONE answer — consume's `404 NOT_FOUND` "This QR code is invalid or
+  has expired." — so it is no existence oracle. Pinned by
+  `QrShopAttributionAndStatusTest` and `TillCashierFlowsIT`.
+- **A QR's amount is signed at the column's scale.** `qr_tokens.amount` is
+  NUMERIC(19,4) and the signature covers the amount's plain string, so an amount
+  sent as `40.00` was signed "40.00", read back at consume as "40.0000", and
+  every such QR was refused `403 BAD_SIGNATURE` — no merchant QR whose amount
+  did not carry exactly four decimals could ever be scanned. Issue now stores and
+  signs `setScale(4)` (more than four decimals is `400 INVALID_AMOUNT`). A new
+  value in the signed payload must be normalised to what the database hands
+  back. Pinned by `QrAmountScaleSignatureTest` and `TillCashierFlowsIT`.
+- **Not changed:** `POST /loyalty/qr/issue` still excludes SHOP_USER (a merchant QR
+  mints points, so a till's QR is issued by its SHOP_ADMIN); SELF_EARN /
+  STAFF_RECIPIENT consume guards are untouched.
 
 ## A voucher is worth its face value, ONCE — MULTI_USE is retired
 

@@ -16,6 +16,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -32,6 +33,8 @@ class RedemptionServiceTest {
     private final LoyaltyTransactionRepository transactions = mock(LoyaltyTransactionRepository.class);
     private final LoyaltyMetrics metrics = mock(LoyaltyMetrics.class);
     private final RedemptionRateService rateService = mock(RedemptionRateService.class);
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz =
+            mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class);
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier =
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class);
     @SuppressWarnings("unchecked")
@@ -41,7 +44,8 @@ class RedemptionServiceTest {
     private final RedemptionService service =
             new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier, self,
                     new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
-                    usdOnlyFx());
+                    usdOnlyFx(),
+                    merchantAuthz);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();
@@ -57,7 +61,7 @@ class RedemptionServiceTest {
         target.setId(USER);
         when(users.require(TENANT, USER)).thenReturn(target);
         doThrow(LoyaltyException.forbidden("NOT_WALLET_OWNER", "you can only act on your own loyalty account"))
-                .when(users).requireCallerOwnsOrIsAdmin(target);
+                .when(users).requireCallerMayRedeemFor(target);
 
         assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req(), true))
                 .isInstanceOf(LoyaltyException.class);
@@ -87,6 +91,8 @@ class RedemptionServiceTest {
                 .isInstanceOf(LoyaltyException.class);
 
         verify(users, never()).requireCallerOwnsOrIsAdmin(any());
+        verify(users, never()).requireCallerMayRedeemFor(any());
+        verifyNoInteractions(merchantAuthz);
     }
 
     /** Real FX service on a USD-only allowlist: USD converts by identity without

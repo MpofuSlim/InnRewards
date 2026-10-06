@@ -101,11 +101,23 @@ public class TransactionService {
         // JWT-gated callers (SHOP_USER / SHOP_ADMIN): attribute the transaction to
         // the shop on the caller's token. Server-side callers that resolved the
         // shop from a trusted path param use the overload below.
-        Dtos.TransactionResponse resp = post(tenantId, merchantId, req,
+        return postForShop(tenantId, merchantId, req,
                 com.innbucks.loyaltyservice.security.CallerDetails.currentShopId(), channel);
-        // Earn alert for the registered customer. Fires only on this (3-arg)
-        // entry — the public /loyalty/transactions endpoint plus the QR and
-        // ticketing accrual flows — NOT the 4-arg overload the guest /
+    }
+
+    /**
+     * Post an earn attributed to an explicitly-resolved {@code shopId}, WITH the
+     * customer's earn alert — the QR consume path, whose caller is the scanning
+     * customer (no shop claim) while the outlet is the one that ISSUED the QR
+     * (stored on the token, V58). Same as {@link #post(UUID, UUID, Dtos.TransactionRequest, EarnChannel)}
+     * except for where the shop comes from.
+     */
+    public Dtos.TransactionResponse postForShop(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req,
+                                                UUID shopId, EarnChannel channel) {
+        Dtos.TransactionResponse resp = post(tenantId, merchantId, req, shopId, channel);
+        // Earn alert for the registered customer. Fires only on this entry and
+        // the 4-arg one above — the public /loyalty/transactions endpoint plus
+        // the QR and ticketing accrual flows — NOT the 5-arg overload the guest /
         // shop-checkout path calls (that path already notifies via
         // GuestCheckoutNotifier, so routing earn here avoids double-texting).
         if (resp.pointsDelta() != null && resp.pointsDelta().signum() > 0) {

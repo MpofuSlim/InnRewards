@@ -9,6 +9,8 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.exception.RedemptionRaceException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -36,6 +38,7 @@ public class RedemptionService {
     private final ObjectProvider<RedemptionService> self;
     private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
     private final ExchangeRateService fx;
+    private final MerchantAuthz merchantAuthz;
 
     public RedemptionService(UserService users, MerchantService merchants,
                              WalletService walletService,
@@ -45,7 +48,8 @@ public class RedemptionService {
                              com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                              ObjectProvider<RedemptionService> self,
                              com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
-                             ExchangeRateService fx) {
+                             ExchangeRateService fx,
+                             MerchantAuthz merchantAuthz) {
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
@@ -56,6 +60,7 @@ public class RedemptionService {
         this.self = self;
         this.supportedCurrencies = supportedCurrencies;
         this.fx = fx;
+        this.merchantAuthz = merchantAuthz;
     }
 
     /**
@@ -135,17 +140,29 @@ public class RedemptionService {
                     "Provide points, or a currency amount, greater than zero.");
         }
         var u = users.require(tenantId, req.userId());
-        // A JWT caller (CUSTOMER) may only redeem their OWN balance; admins may
+        // A JWT caller (CUSTOMER) may only redeem their OWN balance; staff —
+        // the till's cashier (SHOP_USER) included, owner decision 2026-10 — may
         // act on behalf. Without this a logged-in customer could burn — or, via
         // the idempotent-replay branch below, read the balance of — ANY user by
-        // passing that user's id.
+        // passing that user's id. Deliberately NOT requireCallerOwnsOrIsAdmin:
+        // widening that would hand a cashier the other reads it gates.
         if (enforceCallerOwnership) {
-            users.requireCallerOwnsOrIsAdmin(u);
+            users.requireCallerMayRedeemFor(u);
         }
         // The merchant is resolved BEFORE the spend gate: the gate may defer to
         // the eligibility directory (EligibilityDeferral), and a request naming
         // a merchant that does not exist must be refused without that call.
         var m = merchants.requireMerchant(tenantId, merchantId);
+        // A staff caller burns only at a merchant it administers or works for:
+        // SUPER_ADMIN anywhere, SHOP_ADMIN / SHOP_USER at the merchant in their
+        // token, MERCHANT_ADMIN at its organization's merchants. Also BEFORE the
+        // spend gate, so a refused caller never makes loyalty ask the
+        // eligibility directory or learn the holder's state from USER_PENDING.
+        // A plain customer is already bound to their own wallet above and
+        // administers no merchant, so the check would refuse every self-redeem.
+        if (enforceCallerOwnership && !CallerDetails.isPlainCustomer()) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, m.getId());
+        }
         // PENDING (not yet registered) users may accrue but not spend.
         users.requireSpendable(u);
 
@@ -222,9 +239,18 @@ public class RedemptionService {
         LoyaltyTransaction t = new LoyaltyTransaction();
         // Attribution (V32): the caller who keyed the redemption (cashier or
         // customer). Channel stays null — a redemption isn't an earn.
-        t.setPostedBy(com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+        t.setPostedBy(CallerDetails.currentUserId());
         t.setTenantId(tenantId);
         t.setMerchantId(m.getId());
+        // Outlet attribution, mirroring the earn path (TransactionService.post
+        // stamps the caller's shopId): a cashier's burn carries their till's
+        // shop, so it shows up in GET /loyalty/transactions/my-shop and the
+        // per-shop report. Only on the JWT path — the S2S callers carry no
+        // token, and a shop claim is row-stamped by user-service for shop staff
+        // only (null for customers and merchant/super admins).
+        if (enforceCallerOwnership) {
+            t.setShopId(CallerDetails.currentShopId());
+        }
         t.setUserId(u.getId());
         t.setType(TransactionType.REDEMPTION);
         t.setPointsDelta(pointsToDebit.negate());

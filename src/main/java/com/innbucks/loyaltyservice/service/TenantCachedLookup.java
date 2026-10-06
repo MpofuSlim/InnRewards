@@ -69,4 +69,17 @@ public class TenantCachedLookup {
     public boolean organizationOwnsMerchantIn(UUID tenantId, UUID organizationId) {
         return merchants.existsByTenantIdAndOrganizationId(tenantId, organizationId);
     }
+
+    /**
+     * Whether {@code merchantId} is a merchant of this program — the way SHOP
+     * staff are members of a tenant (their token's row-stamped {@code merchantId}
+     * claim names the merchant they work for). Deliberately NOT cached, for the
+     * same reason as {@link #organizationOwnsMerchantIn}: it must turn false the
+     * moment the merchant moves to another program, and a stale true would keep
+     * its staff inside the old one. One primary-key probe, reached only by shop
+     * staff that no cheaper rule admitted.
+     */
+    public boolean merchantBelongsTo(UUID tenantId, UUID merchantId) {
+        return merchants.existsByIdAndTenantId(merchantId, tenantId);
+    }
 }

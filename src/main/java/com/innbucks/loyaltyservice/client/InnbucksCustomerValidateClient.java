@@ -2,13 +2,13 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.loyaltyservice.config.OutboundHttp;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.util.SingleFlightTokenCache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -110,6 +110,7 @@ public class InnbucksCustomerValidateClient {
     private final SingleFlightTokenCache tokens;
 
     public InnbucksCustomerValidateClient(
+            OutboundHttp outboundHttp,
             @Value("${loyalty.registration.innbucks-validate.base-url:}") String baseUrl,
             @Value("${loyalty.registration.innbucks-validate.api-key:}") String apiKey,
             @Value("${loyalty.registration.innbucks-validate.username:}") String username,
@@ -132,14 +133,11 @@ public class InnbucksCustomerValidateClient {
                 .map(String::trim).filter(s -> !s.isEmpty()).toList());
         this.tokenTtl = Duration.ofSeconds(Math.max(30, tokenTtlSeconds));
         this.objectMapper = objectMapper;
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeoutMs);
-        factory.setReadTimeout(readTimeoutMs);
         // Built unconditionally so a blank config can never fail a boot; a blank
         // base URL is never called because checkCustomer() guards first.
         this.restClient = RestClient.builder()
                 .baseUrl(this.baseUrl.isBlank() ? "http://innbucks-unconfigured.invalid" : this.baseUrl)
-                .requestFactory(factory)
+                .requestFactory(outboundHttp.requestFactory(connectTimeoutMs, readTimeoutMs))
                 .build();
         this.tokens = new SingleFlightTokenCache(this::login, REFRESH_MARGIN,
                 Duration.ofMillis((long) Math.max(0, connectTimeoutMs) + Math.max(0, readTimeoutMs))

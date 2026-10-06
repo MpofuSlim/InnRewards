@@ -1,16 +1,16 @@
 package com.innbucks.loyaltyservice.integration;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.config.NotificationClientConfig;
 import com.innbucks.loyaltyservice.config.WhatsAppProperties;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
-import java.time.Duration;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
@@ -42,13 +42,8 @@ class WhatsAppNotificationClientContractTest {
         props.setConnectTimeoutMs(500);
         props.setReadTimeoutMs(2000);
 
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(props.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(props.getReadTimeoutMs()));
-        RestClient restClient = RestClient.builder()
-                .baseUrl(props.getBaseUrl())
-                .requestFactory(factory)
-                .build();
+        // Built exactly as production builds it: the config bean's pooled client.
+        RestClient restClient = new NotificationClientConfig().whatsAppRestClient(props, TestOutboundHttp.POOL);
         client = new WhatsAppNotificationClient(restClient, props);
     }
 
@@ -116,12 +111,9 @@ class WhatsAppNotificationClientContractTest {
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             closedPort = s.getLocalPort();
         }
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(500));
-        factory.setReadTimeout(Duration.ofMillis(500));
         RestClient dead = RestClient.builder()
                 .baseUrl("http://localhost:" + closedPort)
-                .requestFactory(factory)
+                .requestFactory(TestOutboundHttp.POOL.requestFactory(500, 500))
                 .build();
         WhatsAppNotificationClient unreachable = new WhatsAppNotificationClient(dead, props);
 
@@ -167,7 +159,7 @@ class WhatsAppNotificationClientContractTest {
         WhatsAppProperties p = new WhatsAppProperties();
         p.setBaseUrl("http://localhost:" + wireMock.port());
         p.setApiKey("real-key");
-        RestClient rc = RestClient.builder().baseUrl(p.getBaseUrl()).build();
+        RestClient rc = new NotificationClientConfig().whatsAppRestClient(p, TestOutboundHttp.POOL);
         assertThat(new WhatsAppNotificationClient(rc, p).isConfigured()).isTrue();
 
         p.setApiKey("change-me-whatsapp-api-key");

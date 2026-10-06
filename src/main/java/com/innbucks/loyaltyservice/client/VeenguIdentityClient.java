@@ -2,10 +2,10 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.loyaltyservice.config.OutboundHttp;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -65,6 +65,7 @@ public class VeenguIdentityClient {
     private final String tenant;
 
     public VeenguIdentityClient(
+            OutboundHttp outboundHttp,
             @Value("${loyalty.registration.partner.veengu.base-url:}") String baseUrl,
             @Value("${loyalty.registration.partner.veengu.tenant:}") String tenant,
             @Value("${loyalty.registration.partner.veengu.connect-timeout-ms:3000}") int connectTimeoutMs,
@@ -73,14 +74,11 @@ public class VeenguIdentityClient {
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.tenant = tenant == null ? "" : tenant.trim();
         this.objectMapper = objectMapper;
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeoutMs);
-        factory.setReadTimeout(readTimeoutMs);
         // Built unconditionally (a blank baseUrl never gets called — identify()
         // guards on isConfigured() first) so construction can't fail a boot.
         this.restClient = RestClient.builder()
                 .baseUrl(this.baseUrl.isBlank() ? "http://veengu-unconfigured.invalid" : this.baseUrl)
-                .requestFactory(factory)
+                .requestFactory(outboundHttp.requestFactory(connectTimeoutMs, readTimeoutMs))
                 .build();
     }
 

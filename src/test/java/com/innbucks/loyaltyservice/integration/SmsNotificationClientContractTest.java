@@ -4,12 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import com.innbucks.loyaltyservice.config.InnbucksNotifyProperties;
+import com.innbucks.loyaltyservice.config.NotificationClientConfig;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.client.RestClient;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
@@ -62,7 +63,7 @@ class SmsNotificationClientContractTest {
         props.setUsername("test-user");
         props.setPassword("test-pass");
         return new SmsNotificationClient(
-                RestClient.builder().baseUrl("http://localhost:" + port).build(),
+                new NotificationClientConfig().innbucksNotifyRestClient(props, TestOutboundHttp.POOL),
                 props, new ObjectMapper());
     }
 
@@ -184,7 +185,8 @@ class SmsNotificationClientContractTest {
         props.setUsername("test-user");
         props.setPassword(" ");
         SmsNotificationClient noPassword = new SmsNotificationClient(
-                RestClient.builder().baseUrl(props.getBaseUrl()).build(), props, new ObjectMapper());
+                new NotificationClientConfig().innbucksNotifyRestClient(props, TestOutboundHttp.POOL),
+                props, new ObjectMapper());
         assertThat(noPassword.isConfigured()).isFalse();
         // Asking never touches the network — no login, no send.
         wireMock.verify(0, postRequestedFor(urlEqualTo(LOGIN)));

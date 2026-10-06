@@ -60,6 +60,21 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
+# The ONE pooled outbound HTTP client (OutboundHttp) every RestClient uses —
+# user-service, the InnBucks notification + client-service APIs, the WhatsApp
+# gateway. Small-cell sizing; a client's own connect/read timeouts (below and
+# in each client's block) override the two defaults here. HTTP/1.1, no
+# automatic retries — see "Outbound HTTP clients are pooled" in CLAUDE.md.
+outbound-http:
+  max-total: ${OUTBOUND_HTTP_MAX_TOTAL:50}
+  max-per-route: ${OUTBOUND_HTTP_MAX_PER_ROUTE:20}
+  connect-timeout: ${OUTBOUND_HTTP_CONNECT_TIMEOUT:2s}
+  response-timeout: ${OUTBOUND_HTTP_RESPONSE_TIMEOUT:10s}
+  connection-request-timeout: ${OUTBOUND_HTTP_CONNECTION_REQUEST_TIMEOUT:2s}
+  idle-eviction: ${OUTBOUND_HTTP_IDLE_EVICTION:30s}
+  time-to-live: ${OUTBOUND_HTTP_TIME_TO_LIVE:5m}
+  validate-after-inactivity: ${OUTBOUND_HTTP_VALIDATE_AFTER_INACTIVITY:2s}
+
 user-service:
   base-url: http://user-service
   connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}

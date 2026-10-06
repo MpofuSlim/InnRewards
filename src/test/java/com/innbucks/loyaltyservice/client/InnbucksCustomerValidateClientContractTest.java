@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.client;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -77,7 +78,7 @@ class InnbucksCustomerValidateClientContractTest {
      * next test's login expectations.
      */
     private static InnbucksCustomerValidateClient newClient(String baseUrl) {
-        return new InnbucksCustomerValidateClient(
+        return new InnbucksCustomerValidateClient(TestOutboundHttp.POOL,
                 baseUrl, API_KEY, "svc-user", "svc-pass",
                 LOGIN, "/auth/client-service/msisdn/{msisdn}/validate",
                 "00,000,0", 480, 500, 2000, new ObjectMapper());
@@ -389,7 +390,7 @@ class InnbucksCustomerValidateClientContractTest {
     @Test
     @DisplayName("an unconfigured client is Unavailable and never calls out")
     void check_unconfigured_isUnavailable() {
-        InnbucksCustomerValidateClient unconfigured = new InnbucksCustomerValidateClient(
+        InnbucksCustomerValidateClient unconfigured = new InnbucksCustomerValidateClient(TestOutboundHttp.POOL,
                 "", "", "", "", LOGIN, "/auth/client-service/msisdn/{msisdn}/validate",
                 "00", 480, 300, 300, new ObjectMapper());
 
@@ -404,17 +405,17 @@ class InnbucksCustomerValidateClientContractTest {
     void isConfigured_needsEverything() {
         ObjectMapper m = new ObjectMapper();
         String vp = "/auth/client-service/msisdn/{msisdn}/validate";
-        assertThat(new InnbucksCustomerValidateClient("", API_KEY, "u", "p", LOGIN, vp, "00", 480, 300, 300, m)
+        assertThat(new InnbucksCustomerValidateClient(TestOutboundHttp.POOL, "", API_KEY, "u", "p", LOGIN, vp, "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
-        assertThat(new InnbucksCustomerValidateClient("http://x", "", "u", "p", LOGIN, vp, "00", 480, 300, 300, m)
+        assertThat(new InnbucksCustomerValidateClient(TestOutboundHttp.POOL, "http://x", "", "u", "p", LOGIN, vp, "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
-        assertThat(new InnbucksCustomerValidateClient("http://x", API_KEY, "", "p", LOGIN, vp, "00", 480, 300, 300, m)
+        assertThat(new InnbucksCustomerValidateClient(TestOutboundHttp.POOL, "http://x", API_KEY, "", "p", LOGIN, vp, "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
-        assertThat(new InnbucksCustomerValidateClient("http://x", API_KEY, "u", "", LOGIN, vp, "00", 480, 300, 300, m)
+        assertThat(new InnbucksCustomerValidateClient(TestOutboundHttp.POOL, "http://x", API_KEY, "u", "", LOGIN, vp, "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
-        assertThat(new InnbucksCustomerValidateClient("http://x", API_KEY, "u", "p", "", vp, "00", 480, 300, 300, m)
+        assertThat(new InnbucksCustomerValidateClient(TestOutboundHttp.POOL, "http://x", API_KEY, "u", "p", "", vp, "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
-        assertThat(new InnbucksCustomerValidateClient("http://x", API_KEY, "u", "p", LOGIN, "", "00", 480, 300, 300, m)
+        assertThat(new InnbucksCustomerValidateClient(TestOutboundHttp.POOL, "http://x", API_KEY, "u", "p", LOGIN, "", "00", 480, 300, 300, m)
                 .isConfigured()).isFalse();
         assertThat(client().isConfigured()).isTrue();
     }
@@ -427,7 +428,7 @@ class InnbucksCustomerValidateClientContractTest {
         // a success code. Reading it as unconfigured turns that into a clean 503 /
         // skipped sweep. This is the config analogue of the /validate footgun.
         ObjectMapper m = new ObjectMapper();
-        InnbucksCustomerValidateClient noPlaceholder = new InnbucksCustomerValidateClient(
+        InnbucksCustomerValidateClient noPlaceholder = new InnbucksCustomerValidateClient(TestOutboundHttp.POOL,
                 "http://localhost:" + wireMock.port(), API_KEY, "u", "p", LOGIN,
                 "/auth/client-service/validate", "00", 480, 300, 300, m);
 

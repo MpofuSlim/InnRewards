@@ -84,7 +84,11 @@ class SmsNotificationClientContractTest {
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
                 .withRequestBody(matchingJsonPath("$.message", equalTo("You earned 5 InnBucks points")))
                 .withRequestBody(matchingJsonPath("$.destinationMsisdn", equalTo("+263782606983")))
-                .withRequestBody(matchingJsonPath("$.reference", equalTo("LOY-EARN-1"))));
+                .withRequestBody(matchingJsonPath("$.reference", equalTo("LOY-EARN-1")))
+                // The InnBucks platform is a partner: it never receives our trace
+                // (CLAUDE.md "Tracing"), on the login or on the send.
+                .withoutHeader("traceparent"));
+        wireMock.verify(postRequestedFor(urlEqualTo(LOGIN)).withoutHeader("traceparent"));
     }
 
     @Test

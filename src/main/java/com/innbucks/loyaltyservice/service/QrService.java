@@ -97,7 +97,7 @@ public class QrService {
         q.setSourceType(req.sourceType());
         q.setSourceId(req.sourceId());
         q.setTransactionType(req.transactionType());
-        q.setAmount(req.amount());
+        q.setAmount(atColumnScale(req.amount()));
         // Allowlist-validated (fail closed) — a QR encodes a money value; an
         // unknown currency code must never be minted into a signed token.
         q.setCurrency(supportedCurrencies.requireSupported(
@@ -111,6 +111,25 @@ public class QrService {
                 q.getTenantId().toString(), q.getSourceType().name(),
                 q.getSourceId().toString(), q.getTransactionType().name(),
                 q.getExpiresAt());
+    }
+
+    /**
+     * {@code qr_tokens.amount} is NUMERIC(19,4), and {@link #payload} signs the
+     * amount's plain string. A request amount of {@code 40.00} used to be signed
+     * as "40.00" and read back at consume as "40.0000", so the signature never
+     * verified and every such QR was refused 403 BAD_SIGNATURE. Signing the
+     * value at the column's scale makes the signed text and the stored text the
+     * same; more than four decimals cannot be stored exactly, so it is refused.
+     */
+    static BigDecimal atColumnScale(BigDecimal amount) {
+        if (amount == null) {
+            return null;
+        }
+        try {
+            return amount.setScale(4, java.math.RoundingMode.UNNECESSARY);
+        } catch (ArithmeticException tooPrecise) {
+            throw LoyaltyException.badRequest("INVALID_AMOUNT", "amount can have at most 4 decimal places");
+        }
     }
 
     private String payload(QrToken q) {

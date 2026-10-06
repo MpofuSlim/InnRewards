@@ -2227,6 +2227,14 @@ together.
   not-yours are ONE answer — consume's `404 NOT_FOUND` "This QR code is invalid or
   has expired." — so it is no existence oracle. Pinned by
   `QrShopAttributionAndStatusTest` and `TillCashierFlowsIT`.
+- **A QR's amount is signed at the column's scale.** `qr_tokens.amount` is
+  NUMERIC(19,4) and the signature covers the amount's plain string, so an amount
+  sent as `40.00` was signed "40.00", read back at consume as "40.0000", and
+  every such QR was refused `403 BAD_SIGNATURE` — no merchant QR whose amount
+  did not carry exactly four decimals could ever be scanned. Issue now stores and
+  signs `setScale(4)` (more than four decimals is `400 INVALID_AMOUNT`). A new
+  value in the signed payload must be normalised to what the database hands
+  back. Pinned by `QrAmountScaleSignatureTest` and `TillCashierFlowsIT`.
 - **Not changed:** `POST /loyalty/qr/issue` still excludes SHOP_USER (a merchant QR
   mints points, so a till's QR is issued by its SHOP_ADMIN); SELF_EARN /
   STAFF_RECIPIENT consume guards are untouched.

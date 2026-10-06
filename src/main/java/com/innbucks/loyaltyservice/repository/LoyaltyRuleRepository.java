@@ -27,5 +27,10 @@ public interface LoyaltyRuleRepository extends JpaRepository<LoyaltyRule, UUID> 
 
     List<LoyaltyRule> findByTenantId(UUID tenantId);
 
+    /** Every rule of several tenants, for the invoice run: grouped by tenant and
+     *  narrowed per merchant in memory by {@code EffectiveFees.applicable}, the
+     *  in-memory twin of {@link #findApplicable}. Never an empty set. */
+    List<LoyaltyRule> findByTenantIdIn(java.util.Collection<UUID> tenantIds);
+
     Page<LoyaltyRule> findByTenantId(UUID tenantId, Pageable pageable);
 }

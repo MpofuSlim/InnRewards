@@ -2,11 +2,11 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.loyaltyservice.config.OutboundHttp;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -103,6 +103,7 @@ public class InnbucksSessionClient {
     private final Set<String> successCodes;
 
     public InnbucksSessionClient(
+            OutboundHttp outboundHttp,
             @Value("${loyalty.registration.partner.innbucks.base-url:}") String baseUrl,
             @Value("${loyalty.registration.partner.innbucks.api-key:}") String apiKey,
             @Value("${loyalty.registration.partner.innbucks.probe-path:/api/v1/account/msisdn/{msisdn}/details?currency=USD}") String probePath,
@@ -117,14 +118,11 @@ public class InnbucksSessionClient {
                         (successCodes == null ? "" : successCodes).split(","))
                 .map(String::trim).filter(s -> !s.isEmpty()).toList());
         this.objectMapper = objectMapper;
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeoutMs);
-        factory.setReadTimeout(readTimeoutMs);
         // Built unconditionally so a blank config can never fail a boot; a blank
         // base URL is never called because verifyOwnership() guards first.
         this.restClient = RestClient.builder()
                 .baseUrl(this.baseUrl.isBlank() ? "http://innbucks-unconfigured.invalid" : this.baseUrl)
-                .requestFactory(factory)
+                .requestFactory(outboundHttp.requestFactory(connectTimeoutMs, readTimeoutMs))
                 .build();
     }
 

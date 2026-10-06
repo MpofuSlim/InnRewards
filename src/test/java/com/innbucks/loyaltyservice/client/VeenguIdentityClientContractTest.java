@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -51,7 +52,7 @@ class VeenguIdentityClientContractTest {
     static void start() {
         wireMock = new WireMockServer(wireMockConfig().dynamicPort());
         wireMock.start();
-        client = new VeenguIdentityClient(
+        client = new VeenguIdentityClient(TestOutboundHttp.POOL,
                 "http://localhost:" + wireMock.port(), TENANT, 500, 2000, new ObjectMapper());
     }
 
@@ -154,7 +155,7 @@ class VeenguIdentityClientContractTest {
     void identify_connectRefused_isUnavailable() {
         // Separate client at a port nothing listens on — never stop/restart the
         // shared WireMock, its dynamic port would change under the other tests.
-        VeenguIdentityClient dead = new VeenguIdentityClient(
+        VeenguIdentityClient dead = new VeenguIdentityClient(TestOutboundHttp.POOL,
                 "http://localhost:1", TENANT, 300, 300, new ObjectMapper());
 
         assertThat(dead.identify(TOKEN)).isInstanceOf(VeenguIdentityClient.Unavailable.class);
@@ -172,7 +173,7 @@ class VeenguIdentityClientContractTest {
     @Test
     @DisplayName("an unconfigured client is Unavailable and never calls out")
     void identify_unconfigured_isUnavailableWithoutNetwork() {
-        VeenguIdentityClient unconfigured = new VeenguIdentityClient(
+        VeenguIdentityClient unconfigured = new VeenguIdentityClient(TestOutboundHttp.POOL,
                 "", "", 300, 300, new ObjectMapper());
 
         assertThat(unconfigured.identify(TOKEN))
@@ -184,9 +185,9 @@ class VeenguIdentityClientContractTest {
     @Test
     @DisplayName("configured = base URL AND tenant code, not either alone")
     void isConfigured_needsBoth() {
-        assertThat(new VeenguIdentityClient("http://localhost:1", "", 300, 300, new ObjectMapper())
+        assertThat(new VeenguIdentityClient(TestOutboundHttp.POOL, "http://localhost:1", "", 300, 300, new ObjectMapper())
                 .isConfigured()).isFalse();
-        assertThat(new VeenguIdentityClient("", TENANT, 300, 300, new ObjectMapper())
+        assertThat(new VeenguIdentityClient(TestOutboundHttp.POOL, "", TENANT, 300, 300, new ObjectMapper())
                 .isConfigured()).isFalse();
         assertThat(client.isConfigured()).isTrue();
     }

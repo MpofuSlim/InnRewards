@@ -2,12 +2,12 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClient;
 
 import java.util.Optional;
@@ -55,11 +55,9 @@ class UserServiceClientContactContractTest {
 
     private static UserServiceClient makeClient(String token) {
         RestClient.Builder dummyBuilder = RestClient.builder();
-        UserServiceClient c = new UserServiceClient(
+        UserServiceClient c = new UserServiceClient(TestOutboundHttp.POOL,
                 dummyBuilder, "http://localhost:" + wireMock.port(),
                 500, 2000, token, new ObjectMapper());
-        ReflectionTestUtils.setField(c, "restClient",
-                RestClient.builder().baseUrl("http://localhost:" + wireMock.port()).build());
         return c;
     }
 
@@ -121,11 +119,9 @@ class UserServiceClientContactContractTest {
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             closedPort = s.getLocalPort();
         }
-        UserServiceClient dead = new UserServiceClient(
+        UserServiceClient dead = new UserServiceClient(TestOutboundHttp.POOL,
                 RestClient.builder(), "http://localhost:" + closedPort,
                 500, 500, "the-shared-secret", new ObjectMapper());
-        ReflectionTestUtils.setField(dead, "restClient",
-                RestClient.builder().baseUrl("http://localhost:" + closedPort).build());
 
         assertThat(dead.getUserContact(UUID.randomUUID())).isEmpty();
     }

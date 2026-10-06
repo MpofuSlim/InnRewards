@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -65,7 +66,7 @@ class InnbucksSessionClientContractTest {
     }
 
     private static InnbucksSessionClient newClient(String baseUrl) {
-        return new InnbucksSessionClient(
+        return new InnbucksSessionClient(TestOutboundHttp.POOL,
                 baseUrl, API_KEY,
                 "/api/v1/account/msisdn/{msisdn}/details?currency=USD",
                 "00,000,0", 500, 2000, new ObjectMapper());
@@ -248,7 +249,7 @@ class InnbucksSessionClientContractTest {
     @Test
     @DisplayName("an unconfigured client is Unavailable and never calls out")
     void verify_unconfigured_isUnavailable() {
-        InnbucksSessionClient unconfigured = new InnbucksSessionClient(
+        InnbucksSessionClient unconfigured = new InnbucksSessionClient(TestOutboundHttp.POOL,
                 "", "", "", "00", 300, 300, new ObjectMapper());
 
         assertThat(unconfigured.verifyOwnership(USER_TOKEN, E164))
@@ -262,9 +263,9 @@ class InnbucksSessionClientContractTest {
     void isConfigured_needsAllThree() {
         ObjectMapper m = new ObjectMapper();
         String path = "/api/v1/account/msisdn/{msisdn}/details";
-        assertThat(new InnbucksSessionClient("http://x", "", path, "00", 300, 300, m).isConfigured()).isFalse();
-        assertThat(new InnbucksSessionClient("", API_KEY, path, "00", 300, 300, m).isConfigured()).isFalse();
-        assertThat(new InnbucksSessionClient("http://x", API_KEY, "", "00", 300, 300, m).isConfigured()).isFalse();
+        assertThat(new InnbucksSessionClient(TestOutboundHttp.POOL, "http://x", "", path, "00", 300, 300, m).isConfigured()).isFalse();
+        assertThat(new InnbucksSessionClient(TestOutboundHttp.POOL, "", API_KEY, path, "00", 300, 300, m).isConfigured()).isFalse();
+        assertThat(new InnbucksSessionClient(TestOutboundHttp.POOL, "http://x", API_KEY, "", "00", 300, 300, m).isConfigured()).isFalse();
         assertThat(client.isConfigured()).isTrue();
     }
 }

@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -57,7 +58,7 @@ class InnbucksCustomerValidateClientConcurrencyTest {
     }
 
     private InnbucksCustomerValidateClient client(int readTimeoutMs) {
-        return new InnbucksCustomerValidateClient(
+        return new InnbucksCustomerValidateClient(TestOutboundHttp.POOL,
                 "http://localhost:" + wireMock.port(), "key", "svc-user", "svc-pass",
                 LOGIN, "/auth/client-service/msisdn/{msisdn}/validate",
                 "00,000,0", 480, 500, readTimeoutMs, new ObjectMapper());

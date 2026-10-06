@@ -2,12 +2,12 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClient;
 
 import java.util.Optional;
@@ -70,10 +70,8 @@ class UserServiceClientStaffContractTest {
     }
 
     private static UserServiceClient makeClient(String token, String baseUrl) {
-        UserServiceClient c = new UserServiceClient(
+        UserServiceClient c = new UserServiceClient(TestOutboundHttp.POOL,
                 RestClient.builder(), baseUrl, 500, 2000, token, new ObjectMapper());
-        ReflectionTestUtils.setField(c, "restClient",
-                RestClient.builder().baseUrl(baseUrl).build());
         return c;
     }
 

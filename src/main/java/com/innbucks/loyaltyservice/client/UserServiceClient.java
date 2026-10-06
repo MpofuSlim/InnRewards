@@ -3,13 +3,13 @@ package com.innbucks.loyaltyservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.loyaltyservice.config.CorrelationIdPropagatingInterceptor;
+import com.innbucks.loyaltyservice.config.OutboundHttp;
 import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.UserServiceApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -32,22 +32,20 @@ public class UserServiceClient {
     private final String internalToken;
 
     public UserServiceClient(
+            OutboundHttp outboundHttp,
             @LoadBalanced RestClient.Builder loadBalancedRestClientBuilder,
             @Value("${user-service.base-url:http://user-service}") String baseUrl,
             @Value("${user-service.connect-timeout-ms:2000}") int connectTimeoutMs,
             @Value("${user-service.read-timeout-ms:5000}") int readTimeoutMs,
             @Value("${innbucks.internal-api-token:}") String internalToken,
             ObjectMapper objectMapper) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeoutMs);
-        factory.setReadTimeout(readTimeoutMs);
         // Clone the load-balanced builder so "user-service" resolves through
         // the discovery map (its k8s Service); clone() preserves the LB
         // interceptor alongside our per-client
         // request factory and correlation-id interceptor.
         this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
-                .requestFactory(factory)
+                .requestFactory(outboundHttp.requestFactory(connectTimeoutMs, readTimeoutMs))
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.objectMapper = objectMapper;

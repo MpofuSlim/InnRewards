@@ -2,12 +2,12 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.loyaltyservice.testsupport.TestOutboundHttp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClient;
 
 import java.util.UUID;
@@ -42,9 +42,9 @@ class UserServiceClientContractTest {
         wireMock = new WireMockServer(wireMockConfig().dynamicPort());
         wireMock.start();
 
-        // Build the client with a no-op RestClient builder; we'll swap in the
-        // real RestClient via reflection (the constructor's @LoadBalanced
-        // builder isn't usable outside Spring).
+        // A plain builder stands in for the @LoadBalanced one (no discovery
+        // outside Spring); the client still sets its own pooled request
+        // factory on it, so the calls go over the production transport.
         client = makeClient("the-shared-secret");
     }
 
@@ -60,13 +60,9 @@ class UserServiceClientContractTest {
 
     private static UserServiceClient makeClient(String token) {
         RestClient.Builder dummyBuilder = RestClient.builder();
-        UserServiceClient c = new UserServiceClient(
+        UserServiceClient c = new UserServiceClient(TestOutboundHttp.POOL,
                 dummyBuilder, "http://localhost:" + wireMock.port(),
                 500, 2000, token, new ObjectMapper());
-        // Replace the load-balanced RestClient with a plain one pointed at
-        // WireMock so requests actually go over the wire to our stubs.
-        ReflectionTestUtils.setField(c, "restClient",
-                RestClient.builder().baseUrl("http://localhost:" + wireMock.port()).build());
         return c;
     }
 
@@ -158,9 +154,8 @@ class UserServiceClientContractTest {
     void organizationAdminEmails_connectRefused_isEmpty() {
         // A separate client at a known-closed port; never stop/restart the
         // shared WireMock, whose second start gets a different dynamic port.
-        UserServiceClient offline = makeClient("the-shared-secret");
-        ReflectionTestUtils.setField(offline, "restClient",
-                RestClient.builder().baseUrl("http://localhost:1").build());
+        UserServiceClient offline = new UserServiceClient(TestOutboundHttp.POOL,
+                RestClient.builder(), "http://localhost:1", 500, 500, "the-shared-secret", new ObjectMapper());
 
         assertThat(offline.organizationAdminEmails(ORG)).isEmpty();
     }

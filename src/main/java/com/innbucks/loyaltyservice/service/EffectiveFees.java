@@ -207,14 +207,30 @@ public final class EffectiveFees {
     }
 
     public BigDecimal feeForIssued(Voucher v) {
-        return MerchantFeeCalculator.compute(issued.type(), issued.fixed(), issued.percentage(), faceValue(v));
+        return feeForIssuedFaceValue(v.getValue());
     }
 
     public BigDecimal feeForRedeemed(Voucher v) {
-        return MerchantFeeCalculator.compute(redeemed.type(), redeemed.fixed(), redeemed.percentage(), faceValue(v));
+        return feeForRedeemedFaceValue(v.getValue());
     }
 
-    private static BigDecimal faceValue(Voucher v) {
-        return v.getValue() == null ? BigDecimal.ZERO : v.getValue();
+    /**
+     * {@link #feeForIssued} from the voucher's face value alone ({@code null} =
+     * no face value, priced as zero exactly as a voucher with a null value is),
+     * for callers that read {@code [merchantId, at, value]} projections instead
+     * of loading every voucher of a period as an entity.
+     */
+    public BigDecimal feeForIssuedFaceValue(BigDecimal faceValue) {
+        return MerchantFeeCalculator.compute(issued.type(), issued.fixed(), issued.percentage(), orZero(faceValue));
+    }
+
+    /** {@link #feeForRedeemed} from the face value alone — see {@link #feeForIssuedFaceValue}. */
+    public BigDecimal feeForRedeemedFaceValue(BigDecimal faceValue) {
+        return MerchantFeeCalculator.compute(redeemed.type(), redeemed.fixed(), redeemed.percentage(),
+                orZero(faceValue));
+    }
+
+    private static BigDecimal orZero(BigDecimal faceValue) {
+        return faceValue == null ? BigDecimal.ZERO : faceValue;
     }
 }

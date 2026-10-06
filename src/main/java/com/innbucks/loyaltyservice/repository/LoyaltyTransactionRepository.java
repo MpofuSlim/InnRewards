@@ -394,4 +394,93 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     Optional<LoyaltyTransaction> findFirstByMerchantIdOrderByCreatedAtAsc(UUID merchantId);
 
     Optional<LoyaltyTransaction> findFirstByMerchantIdOrderByCreatedAtDesc(UUID merchantId);
+
+    // --- Grouped twins for the reports that used to loop over merchants. Each
+    // keeps the per-merchant query's predicate and only replaces
+    // "t.merchantId = :merchantId" with a set (or a sub-select), so the rows
+    // counted are the same rows; the caller assembles per merchant in memory.
+    // Never called with an empty set: IN () is not portable SQL.
+
+    /**
+     * Operator dashboard: points issued and redeemed in {@code [from, to)} across
+     * every merchant whose tenant is NOT {@code excludedTenantId}, as ONE row
+     * {@code [issued, redeemed]}. The same CASE, window and POSTED filter as
+     * {@link #sumPointsIssued} / {@link #sumPointsRedeemed}; it replaces calling
+     * both once per merchant and adding the results up.
+     */
+    @Query("""
+        SELECT COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN t.pointsDelta < 0 THEN -t.pointsDelta ELSE 0 END), 0)
+        FROM LoyaltyTransaction t
+        WHERE t.merchantId IN (SELECT m.id FROM Merchant m WHERE m.tenantId <> :excludedTenantId)
+          AND t.createdAt >= :from AND t.createdAt < :to
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+        """)
+    List<Object[]> sumPointsIssuedAndRedeemedExcludingTenant(@Param("excludedTenantId") UUID excludedTenantId,
+                                                             @Param("from") Instant from,
+                                                             @Param("to") Instant to);
+
+    /**
+     * {@link #sumPointsIssued} and {@link #sumPointsRedeemed} for several
+     * merchants at once: {@code [merchantId, issued, redeemed]}, one row per
+     * merchant that has a matching row (absent = zero on both sides).
+     */
+    @Query("""
+        SELECT t.merchantId,
+               COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN t.pointsDelta < 0 THEN -t.pointsDelta ELSE 0 END), 0)
+        FROM LoyaltyTransaction t
+        WHERE t.merchantId IN :merchantIds
+          AND t.createdAt >= :from AND t.createdAt < :to
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+        GROUP BY t.merchantId
+        """)
+    List<Object[]> sumPointsByMerchant(@Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                       @Param("from") Instant from,
+                                       @Param("to") Instant to);
+
+    /** {@link #countByType} for several merchants of one tenant:
+     *  {@code [merchantId, type, count]}. */
+    @Query("""
+        SELECT t.merchantId, t.type, COUNT(t)
+        FROM LoyaltyTransaction t
+        WHERE t.tenantId = :tenantId
+          AND t.merchantId IN :merchantIds
+          AND t.createdAt >= :from AND t.createdAt < :to
+        GROUP BY t.merchantId, t.type
+        """)
+    List<Object[]> countByTypeByMerchant(@Param("tenantId") UUID tenantId,
+                                         @Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                         @Param("from") Instant from,
+                                         @Param("to") Instant to);
+
+    /**
+     * Four per-merchant reads of the merchant-360 report in one grouped query:
+     * {@code [merchantId, countCreatedBetween, firstCreatedAt, lastCreatedAt,
+     * distinctUsers]}.
+     * <ul>
+     *   <li>the count is {@link #countByMerchantIdAndCreatedAtBetween} — BETWEEN,
+     *       inclusive at both ends, as the derived query is;</li>
+     *   <li>first / last are what {@link #findFirstByMerchantIdOrderByCreatedAtAsc}
+     *       / {@code ...Desc} returned the createdAt of, over every row of the
+     *       merchant (no window, no status);</li>
+     *   <li>distinct users is {@link #countDistinctUsersByMerchantId}, also
+     *       over every row.</li>
+     * </ul>
+     * A merchant with no transactions at all has no row: count 0, no first or
+     * last, no customers — exactly what the per-merchant calls answered.
+     */
+    @Query("""
+        SELECT t.merchantId,
+               SUM(CASE WHEN t.createdAt BETWEEN :from AND :to THEN 1 ELSE 0 END),
+               MIN(t.createdAt),
+               MAX(t.createdAt),
+               COUNT(DISTINCT t.userId)
+        FROM LoyaltyTransaction t
+        WHERE t.merchantId IN :merchantIds
+        GROUP BY t.merchantId
+        """)
+    List<Object[]> activityByMerchant(@Param("merchantIds") java.util.Collection<UUID> merchantIds,
+                                      @Param("from") Instant from,
+                                      @Param("to") Instant to);
 }

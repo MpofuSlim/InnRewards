@@ -140,30 +140,27 @@ public class ReportingService {
         UUID ticketing = TicketingLoyaltyService.TICKETING_TENANT_ID;
 
         long totalTenants = tenants.countByIdNot(ticketing);
-        List<Merchant> realMerchants = merchants.findAll().stream()
-                .filter(m -> !ticketing.equals(m.getTenantId()))
-                .toList();
-        long activeMerchants = realMerchants.stream()
-                .filter(m -> m.getStatus() == Merchant.Status.ACTIVE).count();
+        long activeMerchants = merchants.countByTenantIdNotAndStatus(ticketing, Merchant.Status.ACTIVE);
         long txnsToday = transactions.countSinceExcludingTenant(startOfDay, ticketing);
 
-        BigDecimal pointsIssuedToday = BigDecimal.ZERO;
-        BigDecimal pointsRedeemedToday = BigDecimal.ZERO;
-        long vouchersIssuedToday = 0;
-        long vouchersRedeemedToday = 0;
-        for (Merchant m : realMerchants) {
-            pointsIssuedToday = pointsIssuedToday.add(transactions.sumPointsIssued(m.getId(), startOfDay, endOfDay));
-            pointsRedeemedToday = pointsRedeemedToday.add(transactions.sumPointsRedeemed(m.getId(), startOfDay, endOfDay));
-            vouchersIssuedToday += vouchers.countByMerchantIdAndIssuedAtBetween(m.getId(), startOfDay, endOfDay);
-            vouchersRedeemedToday += vouchers.countByMerchantIdAndRedeemedAtBetween(m.getId(), startOfDay, endOfDay);
-        }
+        // Every figure below used to be four queries PER MERCHANT, summed in a
+        // loop over merchants.findAll(). Each is now one query over the same
+        // rows: the per-merchant predicate with "this merchant" replaced by
+        // "any merchant outside the ticketing tenant".
+        List<Object[]> points = transactions.sumPointsIssuedAndRedeemedExcludingTenant(
+                ticketing, startOfDay, endOfDay);
+        Object[] pointsRow = points.isEmpty() ? new Object[]{null, null} : points.get(0);
+        BigDecimal pointsIssuedToday = nz(toBigDecimalOrNull(pointsRow[0]));
+        BigDecimal pointsRedeemedToday = nz(toBigDecimalOrNull(pointsRow[1]));
+        long vouchersIssuedToday = vouchers.countIssuedBetweenExcludingTenant(ticketing, startOfDay, endOfDay);
+        long vouchersRedeemedToday = vouchers.countRedeemedBetweenExcludingTenant(ticketing, startOfDay, endOfDay);
 
         long fraudAttempts = fraud.countByCreatedAtAfter(since24h);
         long invoicesPending = invoices.countByStatus(Invoice.Status.PENDING);
         long invoicesPaid = invoices.countByStatus(Invoice.Status.PAID);
 
-        long expiringIn7 = vouchers.findExpired(in7).size();
-        long expiringIn30 = vouchers.findExpired(in30).size();
+        long expiringIn7 = vouchers.countExpired(in7);
+        long expiringIn30 = vouchers.countExpired(in30);
 
         return new Dtos.OperatorDashboard(totalTenants, activeMerchants, txnsToday,
                 vouchersIssuedToday, vouchersRedeemedToday,
@@ -287,6 +284,12 @@ public class ReportingService {
      * <p>Pagination slices AFTER the visibility filter (name-ordered) so page
      * numbers are stable per caller. Tenant-wide rules + campaigns are fetched
      * once and reused across every merchant on the page.
+     *
+     * <p><b>Cost is fixed per page, not per merchant.</b> Every per-merchant read
+     * (shops, points, transaction mix, voucher summary, invoices, the current
+     * period's fee estimate, stats) runs ONCE for the whole page as a grouped
+     * query keyed by merchant and is assembled in memory — see
+     * {@link MerchantPageData}. It used to be seventeen queries per merchant.
      */
     public Page<Dtos.MerchantFullReport> merchantFullReports(UUID tenantId, Pageable pageable) {
         List<Merchant> visible = merchants.findByTenantId(tenantId).stream()
@@ -300,8 +303,15 @@ public class ReportingService {
 
         int start = (int) Math.min(pageable.getOffset(), visible.size());
         int end = Math.min(start + pageable.getPageSize(), visible.size());
-        List<Dtos.MerchantFullReport> content = visible.subList(start, end).stream()
-                .map(m -> buildMerchantFullReport(m, tenantRules, tenantCampaigns))
+        List<Merchant> pageMerchants = visible.subList(start, end);
+        if (pageMerchants.isEmpty()) {
+            // Nothing to aggregate — and never an IN () below.
+            return new PageImpl<>(List.of(), pageable, visible.size());
+        }
+        Instant now = Instant.now();
+        MerchantPageData data = loadMerchantPage(tenantId, pageMerchants, now);
+        List<Dtos.MerchantFullReport> content = pageMerchants.stream()
+                .map(m -> buildMerchantFullReport(m, tenantRules, tenantCampaigns, data, now))
                 .toList();
         return new PageImpl<>(content, pageable, visible.size());
     }
@@ -319,16 +329,148 @@ public class ReportingService {
         return callerOrganization != null && callerOrganization.equals(m.getOrganizationId());
     }
 
-    private Dtos.MerchantFullReport buildMerchantFullReport(Merchant m,
-                                                            List<LoyaltyRule> tenantRules,
-                                                            List<Campaign> tenantCampaigns) {
-        UUID id = m.getId();
-        Instant now = Instant.now();
+    /** One voucher's contribution to a fee estimate: when it happened and its face value. */
+    private record FaceValueAt(Instant at, BigDecimal faceValue) {}
+
+    /** A merchant's transaction activity: what {@code activityByMerchant} returns per row. */
+    private record TxnActivity(long countInWindow, Instant first, Instant last, long distinctUsers) {
+        static final TxnActivity NONE = new TxnActivity(0, null, null, 0);
+    }
+
+    /**
+     * Everything the merchant-360 report reads per merchant, loaded for a whole
+     * page with one grouped query per block. A merchant absent from a map had no
+     * matching rows, which is the zero / empty / null the per-merchant query
+     * answered for it.
+     */
+    private record MerchantPageData(
+            Map<UUID, List<Shop>> shops,
+            Map<UUID, BigDecimal[]> points,
+            Map<UUID, Map<String, Long>> txnsByType,
+            Map<UUID, TxnActivity> activity,
+            Map<UUID, List<Object[]>> voucherStatus,
+            Map<UUID, BigDecimal> redeemedValue,
+            Map<UUID, Long> issued30,
+            Map<UUID, Long> redeemed30,
+            Map<UUID, List<Invoice>> invoices,
+            Map<UUID, List<FaceValueAt>> periodIssued,
+            Map<UUID, List<FaceValueAt>> periodRedeemed,
+            Map<UUID, Long> fraud30,
+            Map<UUID, Long> expiring30) {}
+
+    /**
+     * Loads {@link MerchantPageData} for a non-empty page: a fixed number of
+     * queries whatever the page size. Each grouped query keeps its per-merchant
+     * twin's predicate (window bounds, BETWEEN inclusivity, status filters), so
+     * every figure is computed over exactly the rows it was before.
+     */
+    private MerchantPageData loadMerchantPage(UUID tenantId, List<Merchant> page, Instant now) {
+        List<UUID> ids = page.stream().map(Merchant::getId).toList();
         Instant epoch = Instant.EPOCH;
         Instant thirtyDaysAgo = now.minus(30, ChronoUnit.DAYS);
 
+        Map<UUID, List<Shop>> shopsByMerchant = new HashMap<>();
+        for (Shop s : shops.findByTenantIdAndMerchantIdIn(tenantId, ids)) {
+            shopsByMerchant.computeIfAbsent(s.getMerchantId(), k -> new ArrayList<>()).add(s);
+        }
+
+        Map<UUID, BigDecimal[]> points = new HashMap<>();
+        for (Object[] r : transactions.sumPointsByMerchant(ids, epoch, now)) {
+            points.put((UUID) r[0], new BigDecimal[]{toBigDecimalOrNull(r[1]), toBigDecimalOrNull(r[2])});
+        }
+
+        Map<UUID, Map<String, Long>> byType = new HashMap<>();
+        for (Object[] r : transactions.countByTypeByMerchant(tenantId, ids, epoch, now)) {
+            byType.computeIfAbsent((UUID) r[0], k -> new TreeMap<>())
+                    .put(String.valueOf(r[1]), ((Number) r[2]).longValue());
+        }
+
+        Map<UUID, TxnActivity> activity = new HashMap<>();
+        for (Object[] r : transactions.activityByMerchant(ids, epoch, now)) {
+            activity.put((UUID) r[0], new TxnActivity(
+                    r[1] == null ? 0 : ((Number) r[1]).longValue(),
+                    toInstantOrNull(r[2]), toInstantOrNull(r[3]),
+                    r[4] == null ? 0 : ((Number) r[4]).longValue()));
+        }
+
+        Map<UUID, List<Object[]>> voucherStatus = new HashMap<>();
+        for (Object[] r : vouchers.summaryByMerchantAndStatus(ids, epoch, now)) {
+            voucherStatus.computeIfAbsent((UUID) r[0], k -> new ArrayList<>())
+                    .add(new Object[]{r[1], r[2], r[3]});
+        }
+
+        Map<UUID, BigDecimal> redeemedValue = new HashMap<>();
+        for (Object[] r : vouchers.sumRedeemedValueByMerchantIds(ids)) {
+            redeemedValue.put((UUID) r[0], toBigDecimalOrNull(r[1]));
+        }
+
+        Map<UUID, List<Invoice>> invoicesByMerchant = new HashMap<>();
+        // Ordered by periodEnd DESC overall, so each merchant's list keeps that order.
+        for (Invoice inv : invoices.findByMerchantIdInOrderByPeriodEndDesc(ids)) {
+            invoicesByMerchant.computeIfAbsent(inv.getMerchantId(), k -> new ArrayList<>()).add(inv);
+        }
+
+        // The fee estimate's window starts at each merchant's own current billing
+        // period. One read from the EARLIEST of those starts, then each merchant
+        // keeps only the rows inside its own [periodFrom, now] — BETWEEN, both
+        // ends inclusive, exactly as the per-merchant query bounded them.
+        LocalDate today = LocalDate.now();
+        Instant earliest = page.stream().map(m -> currentPeriodFrom(m, today))
+                .min(Comparator.naturalOrder()).orElse(now);
+        Map<UUID, List<FaceValueAt>> periodIssued = faceValuesByMerchant(
+                vouchers.issuedFaceValuesBetween(ids, earliest, now));
+        Map<UUID, List<FaceValueAt>> periodRedeemed = faceValuesByMerchant(
+                vouchers.redeemedFaceValuesBetween(ids, earliest, now));
+
+        return new MerchantPageData(shopsByMerchant, points, byType, activity, voucherStatus, redeemedValue,
+                countsByMerchant(vouchers.countIssuedBetweenByMerchant(ids, thirtyDaysAgo, now)),
+                countsByMerchant(vouchers.countRedeemedBetweenByMerchant(ids, thirtyDaysAgo, now)),
+                invoicesByMerchant, periodIssued, periodRedeemed,
+                countsByMerchant(fraud.countByMerchantSince(ids, thirtyDaysAgo)),
+                countsByMerchant(vouchers.countExpiringBetweenByMerchant(ids, now,
+                        now.plus(30, ChronoUnit.DAYS), Voucher.LIVE_STATUSES)));
+    }
+
+    private static Map<UUID, Long> countsByMerchant(List<Object[]> rows) {
+        Map<UUID, Long> out = new HashMap<>();
+        for (Object[] r : rows) {
+            out.put((UUID) r[0], ((Number) r[1]).longValue());
+        }
+        return out;
+    }
+
+    private static Map<UUID, List<FaceValueAt>> faceValuesByMerchant(List<Object[]> rows) {
+        Map<UUID, List<FaceValueAt>> out = new HashMap<>();
+        for (Object[] r : rows) {
+            out.computeIfAbsent((UUID) r[0], k -> new ArrayList<>())
+                    .add(new FaceValueAt(toInstantOrNull(r[1]), toBigDecimalOrNull(r[2])));
+        }
+        return out;
+    }
+
+    /** Start of the merchant's current (not yet invoiced) billing period, UTC. */
+    private static Instant currentPeriodFrom(Merchant m, LocalDate today) {
+        LocalDate currentPeriodStart = switch (m.getBillingCycle()) {
+            case DAILY -> today;
+            case WEEKLY -> today.with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+            case MONTHLY -> today.withDayOfMonth(1);
+        };
+        return currentPeriodStart.atStartOfDay().toInstant(ZoneOffset.UTC);
+    }
+
+    private static boolean within(Instant at, Instant from, Instant to) {
+        return at != null && !at.isBefore(from) && !at.isAfter(to);
+    }
+
+    private Dtos.MerchantFullReport buildMerchantFullReport(Merchant m,
+                                                            List<LoyaltyRule> tenantRules,
+                                                            List<Campaign> tenantCampaigns,
+                                                            MerchantPageData data,
+                                                            Instant now) {
+        UUID id = m.getId();
+
         // Shops — every outlet under the merchant.
-        List<Dtos.ShopResponse> shopList = shops.findByTenantIdAndMerchantId(m.getTenantId(), id).stream()
+        List<Dtos.ShopResponse> shopList = data.shops().getOrDefault(id, List.of()).stream()
                 .map(s -> new Dtos.ShopResponse(s.getId(), s.getTenantId(), s.getMerchantId(),
                         s.getName(), s.getAddress(), s.getStatus(), s.getCreatedAt()))
                 .toList();
@@ -352,27 +494,24 @@ public class ReportingService {
                         c.getMatchedTransactions()))
                 .toList();
 
-        // Points — lifetime activity.
-        BigDecimal ptsIssued = nz(transactions.sumPointsIssued(id, epoch, now));
-        BigDecimal ptsRedeemed = nz(transactions.sumPointsRedeemed(id, epoch, now));
-        Map<String, Long> txnsByType = new TreeMap<>();
-        for (Object[] row : transactions.countByType(m.getTenantId(), id, epoch, now)) {
-            txnsByType.put(String.valueOf(row[0]), ((Number) row[1]).longValue());
-        }
+        // Points — lifetime activity. A merchant with no POSTED rows has no
+        // grouped row, which is the COALESCE-to-0 the per-merchant sums answered.
+        BigDecimal[] pts = data.points().get(id);
+        BigDecimal ptsIssued = nz(pts == null ? null : pts[0]);
+        BigDecimal ptsRedeemed = nz(pts == null ? null : pts[1]);
+        TxnActivity act = data.activity().getOrDefault(id, TxnActivity.NONE);
         Dtos.PointsSummary points = new Dtos.PointsSummary(
                 ptsIssued, ptsRedeemed, ptsIssued.subtract(ptsRedeemed),
-                transactions.countByMerchantIdAndCreatedAtBetween(id, epoch, now),
-                txnsByType,
-                transactions.findFirstByMerchantIdOrderByCreatedAtAsc(id)
-                        .map(LoyaltyTransaction::getCreatedAt).orElse(null),
-                transactions.findFirstByMerchantIdOrderByCreatedAtDesc(id)
-                        .map(LoyaltyTransaction::getCreatedAt).orElse(null));
+                act.countInWindow(),
+                data.txnsByType().getOrDefault(id, new TreeMap<>()),
+                act.first(),
+                act.last());
 
-        // Vouchers — lifetime status breakdown + face values in ONE grouped query.
+        // Vouchers — lifetime status breakdown + face values (baseValue, USD).
         Map<String, Long> vouchersByStatus = new TreeMap<>();
         long voucherTotal = 0;
         BigDecimal valueIssued = BigDecimal.ZERO;
-        for (Object[] row : vouchers.reportSummaryByStatus(null, null, id, null, epoch, now)) {
+        for (Object[] row : data.voucherStatus().getOrDefault(id, List.of())) {
             long count = ((Number) row[1]).longValue();
             vouchersByStatus.put(String.valueOf(row[0]), count);
             voucherTotal += count;
@@ -380,12 +519,12 @@ public class ReportingService {
         }
         Dtos.VoucherSummary voucherSummary = new Dtos.VoucherSummary(
                 voucherTotal, vouchersByStatus, valueIssued,
-                nz(vouchers.sumRedeemedValueByMerchantId(id)),
-                vouchers.countByMerchantIdAndIssuedAtBetween(id, thirtyDaysAgo, now),
-                vouchers.countByMerchantIdAndRedeemedAtBetween(id, thirtyDaysAgo, now));
+                nz(data.redeemedValue().get(id)),
+                data.issued30().getOrDefault(id, 0L),
+                data.redeemed30().getOrDefault(id, 0L));
 
         // Invoices — full history rolled up, most recent 12 inlined.
-        List<Invoice> invoiceRows = invoices.findByMerchantIdOrderByPeriodEndDesc(id);
+        List<Invoice> invoiceRows = data.invoices().getOrDefault(id, List.of());
         long pending = 0, paid = 0, overdue = 0, cancelled = 0;
         BigDecimal billed = BigDecimal.ZERO, paidAmount = BigDecimal.ZERO, outstanding = BigDecimal.ZERO;
         for (Invoice inv : invoiceRows) {
@@ -406,19 +545,16 @@ public class ReportingService {
         // Fees accrued in the CURRENT (not yet invoiced) billing period, priced
         // per voucher with the merchant's fee model — same math the invoice run
         // will apply, so the figure previews the next bill.
-        LocalDate currentPeriodStart = switch (m.getBillingCycle()) {
-            case DAILY -> today;
-            case WEEKLY -> today.with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
-            case MONTHLY -> today.withDayOfMonth(1);
-        };
-        Instant periodFrom = currentPeriodStart.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant periodFrom = currentPeriodFrom(m, today);
         EffectiveFees fees = EffectiveFees.resolve(m,
                 EffectiveFees.applicable(tenantRules, id, TransactionType.PURCHASE), now);
-        BigDecimal estimatedFees = vouchers.findByMerchantIdAndIssuedAtBetween(id, periodFrom, now).stream()
-                .map(fees::feeForIssued)
+        BigDecimal estimatedFees = data.periodIssued().getOrDefault(id, List.of()).stream()
+                .filter(f -> within(f.at(), periodFrom, now))
+                .map(f -> fees.feeForIssuedFaceValue(f.faceValue()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .add(vouchers.findByMerchantIdAndRedeemedAtBetween(id, periodFrom, now).stream()
-                        .map(fees::feeForRedeemed)
+                .add(data.periodRedeemed().getOrDefault(id, List.of()).stream()
+                        .filter(f -> within(f.at(), periodFrom, now))
+                        .map(f -> fees.feeForRedeemedFaceValue(f.faceValue()))
                         .reduce(BigDecimal.ZERO, BigDecimal::add));
         Dtos.InvoiceSummary invoiceSummary = new Dtos.InvoiceSummary(
                 invoiceRows.size(), pending, paid, overdue, cancelled,
@@ -429,11 +565,10 @@ public class ReportingService {
         Dtos.MerchantStats stats = new Dtos.MerchantStats(
                 shopList.size(),
                 shopList.stream().filter(s -> s.status() == Shop.Status.ACTIVE).count(),
-                transactions.countDistinctUsersByMerchantId(id),
-                fraud.countByMerchantIdAndCreatedAtAfter(id, thirtyDaysAgo),
+                act.distinctUsers(),
+                data.fraud30().getOrDefault(id, 0L),
                 campaignLines.stream().filter(Dtos.CampaignLine::active).count(),
-                vouchers.countByMerchantIdAndExpiresAtBetweenAndStatusIn(id, now,
-                        now.plus(30, ChronoUnit.DAYS), Voucher.LIVE_STATUSES));
+                data.expiring30().getOrDefault(id, 0L));
 
         return new Dtos.MerchantFullReport(id, m.getTenantId(), m.getName(), m.getCategory(),
                 m.getCurrency(), m.getBillingCycle(), m.getStatus(), m.getOrganizationId(), m.getCreatedAt(),
@@ -445,6 +580,12 @@ public class ReportingService {
     /** Mock/driver safety: aggregate queries COALESCE to 0, but a null must never NPE a report. */
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /** A projected aggregate as a BigDecimal, keeping a SQL NULL as null (and the
+     *  driver's own scale — {@link #toBigDecimal} would turn a null into ZERO). */
+    private static BigDecimal toBigDecimalOrNull(Object o) {
+        return o == null ? null : toBigDecimal(o);
     }
 
     public Map<String, Long> transactionMix(UUID tenantId, UUID merchantId,
@@ -1054,7 +1195,8 @@ public class ReportingService {
      * The optional report filters as one Specification ({@code null} or empty =
      * no narrowing). Every predicate is appended only when its filter is set —
      * never a nullable bind. Text matches escape LIKE wildcards, so a {@code %}
-     * typed into the search box is literal.
+     * typed into the search box is literal, and every one goes through
+     * {@link VoucherSearchColumn} — the expressions V59's trigram indexes cover.
      */
     private Specification<Voucher> reportFilters(VoucherReportFilters f) {
         return (root, query, cb) -> {
@@ -1071,9 +1213,9 @@ public class ReportingService {
             if (notBlank(f.issuedBy())) {
                 String term = f.issuedBy().strip().toLowerCase(java.util.Locale.ROOT);
                 List<Predicate> any = new ArrayList<>();
-                any.add(cb.like(cb.lower(root.get("issuerEmail")), contains(term), '\\'));
+                any.add(VoucherSearchColumn.ISSUER_EMAIL.like(root, cb, contains(term)));
                 String digits = term.replaceAll("[^0-9]", "");
-                if (digits.length() >= 4) any.add(cb.like(root.get("issuerPhone"), contains(digits), '\\'));
+                if (digits.length() >= 4) any.add(VoucherSearchColumn.ISSUER_PHONE.like(root, cb, contains(digits)));
                 p.add(cb.or(any.toArray(new Predicate[0])));
             }
             if (notBlank(f.phone())) {
@@ -1084,22 +1226,22 @@ public class ReportingService {
                     // The national number, so 0777… and +263777… match each other
                     // (and sender phones stored as typed before V56).
                     String tail = digits.length() > 9 ? digits.substring(digits.length() - 9) : digits;
-                    p.add(cb.or(cb.like(root.get("assigneePhone"), endsWith(tail), '\\'),
-                            cb.like(root.get("senderPhone"), endsWith(tail), '\\')));
+                    p.add(cb.or(VoucherSearchColumn.ASSIGNEE_PHONE.like(root, cb, endsWith(tail)),
+                            VoucherSearchColumn.SENDER_PHONE.like(root, cb, endsWith(tail))));
                 }
             }
             if (notBlank(f.q())) {
                 String term = f.q().strip().toLowerCase(java.util.Locale.ROOT);
                 List<Predicate> any = new ArrayList<>();
-                any.add(cb.like(cb.lower(root.get("assigneeName")), contains(term), '\\'));
-                any.add(cb.like(cb.lower(root.get("senderName")), contains(term), '\\'));
-                any.add(cb.like(cb.lower(root.get("issuerEmail")), contains(term), '\\'));
+                any.add(VoucherSearchColumn.ASSIGNEE_NAME.like(root, cb, contains(term)));
+                any.add(VoucherSearchColumn.SENDER_NAME.like(root, cb, contains(term)));
+                any.add(VoucherSearchColumn.ISSUER_EMAIL.like(root, cb, contains(term)));
                 String code = term.replaceAll("[^0-9a-z]", "").toUpperCase(java.util.Locale.ROOT);
-                if (code.length() >= 4) any.add(cb.like(root.get("code"), contains(code), '\\'));
+                if (code.length() >= 4) any.add(VoucherSearchColumn.CODE.like(root, cb, contains(code)));
                 String digits = term.replaceAll("[^0-9]", "");
                 if (digits.length() >= 4) {
-                    any.add(cb.like(root.get("assigneePhone"), contains(digits), '\\'));
-                    any.add(cb.like(root.get("senderPhone"), contains(digits), '\\'));
+                    any.add(VoucherSearchColumn.ASSIGNEE_PHONE.like(root, cb, contains(digits)));
+                    any.add(VoucherSearchColumn.SENDER_PHONE.like(root, cb, contains(digits)));
                 }
                 p.add(cb.or(any.toArray(new Predicate[0])));
             }
@@ -1513,6 +1655,10 @@ public class ReportingService {
         if (o instanceof BigDecimal bd) return bd;
         if (o instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
         return new BigDecimal(o.toString());
+    }
+
+    private static Instant toInstantOrNull(Object o) {
+        return o == null ? null : toInstantUtc(o);
     }
 
     private static Instant toInstantUtc(Object o) {

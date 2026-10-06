@@ -408,6 +408,47 @@ MERCHANT_ADMIN or SHOP_ADMIN read every sibling merchant's figures (and codes).
   activity across the tenant, and the merchant / rule / campaign / invoice
   LISTS outside `/reports`.
 
+## Reports and the invoice run cost a fixed number of queries, not one set per merchant (V59)
+
+The operator dashboard, the merchant-360 report and the nightly invoice run
+used to call per-merchant repository methods in a `for` over merchants (4, 17
+and 7 queries per merchant). Each now runs a fixed set of grouped queries
+(`GROUP BY merchant_id`, `merchant_id IN (:ids)`, or a `NOT IN ticketing
+tenant` sub-select) and assembles per merchant in memory. Pinned by
+`ReportingAndInvoicingQueryCountIT` (2 vs 6 merchants, Hibernate statistics).
+
+- **A grouped twin keeps its per-merchant query's predicate exactly** — same
+  window, same `BETWEEN` (inclusive, as the derived queries are) vs `>=`/`<`,
+  same POSTED filter, `baseValue` for money. Only "this merchant" becomes a
+  set. A merchant with no row in a grouped result had no matching rows: read it
+  as the zero / empty / null the per-merchant query answered. Never call one
+  with an empty set (`IN ()`); short-circuit first.
+- **Don't add a repository call inside a per-merchant loop in a report.** Add a
+  grouped twin and look the merchant up in the map. Fee pricing stays in
+  `EffectiveFees` (`applicable(...)` over one rule query; the
+  `feeFor*FaceValue` overloads take the `[merchantId, at, value]` projections).
+- **The invoice run gives every merchant its OWN transaction**
+  (`TransactionTemplate`, `REQUIRES_NEW`; the run itself is `NOT_SUPPORTED`).
+  One merchant failing rolls back alone, is logged and counted on
+  `loyalty.invoice.run.failed` (registered at 0 — alert on any `increase()`),
+  and the next run retries it. Each commit fires its own `InvoiceGeneratedEvent`.
+  ShedLock is unchanged.
+- **What is pre-loaded, and what is not.** The run reads, once per billing
+  period: who is already invoiced, the voucher face values, and every rule of
+  the merchants' tenants; a merchant owing nothing costs no further query. The
+  **points sums are NOT pre-loaded**: they run inside the merchant's write
+  transaction right before `stampInvoice`, as they always did, because a POSTED
+  row can still be reversed after a pre-load and the stamped set must be the
+  summed set. The write transaction also re-checks "already invoiced" (a manual
+  generate may have landed since the pre-load). Both paths price through
+  `InvoicingService.Billing.of`.
+- **Voucher text search has GIN trigram indexes (V59, `pg_trgm`) on exactly the
+  expressions it LIKEs** — `lower(name/email)`, bare `code`/phones — listed in
+  `VoucherSearchColumn`. The filters OR them, and one unindexed branch sends
+  the whole search back to a scan, so a new searchable column is a constant
+  there plus an index in a new migration. `VoucherSearchIndexTest` ties the
+  enum, the `@Column` names, V59 and the report's source together.
+
 ## Customer messages go out AFTER COMMIT, on a pool that drops and counts
 
 **Every SMS/WhatsApp/email hand-off a transactional service makes goes through
@@ -468,7 +509,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V58**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V59**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]

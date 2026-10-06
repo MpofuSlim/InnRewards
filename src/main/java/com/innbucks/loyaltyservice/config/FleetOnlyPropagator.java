@@ -5,7 +5,6 @@ import io.micrometer.tracing.TraceContext;
 import io.micrometer.tracing.propagation.Propagator;
 import org.springframework.http.HttpRequest;
 
-import java.net.URI;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -65,8 +64,7 @@ public final class FleetOnlyPropagator implements Propagator {
         if (!(carrier instanceof HttpRequest request)) {
             return false;
         }
-        URI uri = request.getURI();
-        String host = uri == null ? null : uri.getHost();
+        String host = request.getURI().getHost();
         return host != null && FLEET_HOST.matcher(host).matches();
     }
 }

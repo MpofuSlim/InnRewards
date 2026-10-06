@@ -194,10 +194,7 @@ public class TenantContext {
      * considered deliberately.
      */
     private static boolean isPlainCustomer(Authentication authentication) {
-        java.util.Set<String> roles = authentication.getAuthorities().stream()
-                .map(org.springframework.security.core.GrantedAuthority::getAuthority)
-                .filter(a -> a != null && a.startsWith("ROLE_"))
-                .collect(java.util.stream.Collectors.toSet());
-        return roles.equals(java.util.Set.of("ROLE_CUSTOMER"));
+        // One definition, shared with RedemptionService's staff/customer split.
+        return CallerDetails.isPlainCustomer(authentication);
     }
 }

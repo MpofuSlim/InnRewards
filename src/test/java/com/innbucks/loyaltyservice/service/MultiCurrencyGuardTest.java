@@ -126,7 +126,8 @@ class MultiCurrencyGuardTest {
         return new RedemptionService(users, merchants, walletService, transactions,
                 mock(LoyaltyMetrics.class), rateService,
                 mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
-                (ObjectProvider<RedemptionService>) mock(ObjectProvider.class), CURRENCIES, fx);
+                (ObjectProvider<RedemptionService>) mock(ObjectProvider.class), CURRENCIES, fx,
+                org.mockito.Mockito.mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class));
     }
 
     private Dtos.TransactionRequest purchase(BigDecimal amount, String currency) {

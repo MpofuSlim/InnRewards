@@ -41,6 +41,8 @@ class RedemptionValuationTest {
     private final LoyaltyTransactionRepository transactions = mock(LoyaltyTransactionRepository.class);
     private final LoyaltyMetrics metrics = mock(LoyaltyMetrics.class);
     private final RedemptionRateService rateService = mock(RedemptionRateService.class);
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz =
+            mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class);
     private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier =
             mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class);
     @SuppressWarnings("unchecked")
@@ -50,7 +52,8 @@ class RedemptionValuationTest {
     private final RedemptionService service =
             new RedemptionService(users, merchants, walletService, transactions, metrics, rateService, memberNotifier, self,
                     new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
-                    usdOnlyFx());
+                    usdOnlyFx(),
+                    merchantAuthz);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT = UUID.randomUUID();

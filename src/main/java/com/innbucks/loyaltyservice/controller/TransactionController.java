@@ -583,7 +583,13 @@ public class TransactionController {
     @Operation(summary = "Redeem points (raw, non-voucher)",
             description = "Burns points from the user's main wallet at the merchant's redeem rate without " +
                           "going through a voucher. Used by checkout flows that apply a points discount " +
-                          "directly. For voucher-based redemption, use `POST /loyalty/vouchers/redeem`.")
+                          "directly. For voucher-based redemption, use `POST /loyalty/vouchers/redeem`.\n\n" +
+                          "**Who may burn whose points.** A CUSTOMER burns only their OWN wallet. Staff burn a " +
+                          "customer's points on their behalf — the till's cashier (SHOP_USER) included — but only " +
+                          "at a merchant they work for: SHOP_ADMIN / SHOP_USER at the merchant in their token " +
+                          "(a body `merchantId` is ignored for them), MERCHANT_ADMIN at its organization's " +
+                          "merchants, SUPER_ADMIN anywhere. A shop-staff burn is stamped with the caller's " +
+                          "`shopId`, so it appears in `GET /loyalty/transactions/my-shop`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -626,20 +632,45 @@ public class TransactionController {
                             + "proved yet — the account keeps EARNING, it just can't spend), USER_BLOCKED "
                             + "(fraud hold; cleared only by POST /loyalty/users/{userId}/unblock) or "
                             + "USER_INACTIVE. Also NOT_WALLET_OWNER when a CUSTOMER names an account that "
-                            + "isn't theirs, and CROSS_TENANT when the user belongs to another tenant. "
-                            + "`message` on all of these is customer-safe — render it verbatim. "
+                            + "isn't theirs, NOT_MERCHANT_OWNER when a staff caller (cashier, shop admin, "
+                            + "merchant admin) burns at a merchant it does not work for, and CROSS_TENANT "
+                            + "when the user or merchant belongs to another tenant. The merchant check runs "
+                            + "BEFORE the spend gate, so a refused staff caller never learns the holder's "
+                            + "state. `message` on the USER_* codes is customer-safe — render it verbatim. "
                             + "USER_PENDING is the one a customer app meets most: branch on it rather than "
                             + "on the 403 alone.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Account not spendable yet", value = """
+                            examples = {
+                                    @ExampleObject(name = "Account not spendable yet", value = """
                                     {
                                       "code": "USER_PENDING",
                                       "message": "Your rewards account is still being set up, so these points can't be spent yet. You'll keep earning in the meantime.",
                                       "data": null
                                     }
-                                    """)
+                                    """),
+                                    @ExampleObject(name = "Customer named another wallet", value = """
+                                    {
+                                      "code": "NOT_WALLET_OWNER",
+                                      "message": "you can only act on your own loyalty account",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Staff burning at a merchant they don't work for", value = """
+                                    {
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Account suspended", value = """
+                                    {
+                                      "code": "USER_BLOCKED",
+                                      "message": "Your account is currently suspended. Please contact support.",
+                                      "data": null
+                                    }
+                                    """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -662,12 +693,38 @@ public class TransactionController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "The `userId` or the merchant does not exist.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Unknown user", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "user not found",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Unknown merchant", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "merchant not found",
+                                      "data": null
+                                    }
+                                    """)}
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
         // enforceCallerOwnership=true: a CUSTOMER may only redeem their own
-        // wallet (admins may act on behalf). The S2S callers use the 3-arg form.
+        // wallet; staff (the cashier included) act on behalf, pinned to their
+        // merchant by MerchantAuthz. merchantId: the token's claim wins for
+        // shop staff, so a body merchantId cannot move a cashier's burn
+        // elsewhere. The S2S callers use the 3-arg form.
         // Idempotent variant: a concurrent double-tap replays to a clean 200
         // instead of surfacing a 409 for a redemption that actually went through.
         // A spend: the V44 eligibility check runs outside its transaction

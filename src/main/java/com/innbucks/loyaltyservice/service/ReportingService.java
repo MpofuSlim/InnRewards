@@ -1195,7 +1195,8 @@ public class ReportingService {
      * The optional report filters as one Specification ({@code null} or empty =
      * no narrowing). Every predicate is appended only when its filter is set —
      * never a nullable bind. Text matches escape LIKE wildcards, so a {@code %}
-     * typed into the search box is literal.
+     * typed into the search box is literal, and every one goes through
+     * {@link VoucherSearchColumn} — the expressions V59's trigram indexes cover.
      */
     private Specification<Voucher> reportFilters(VoucherReportFilters f) {
         return (root, query, cb) -> {
@@ -1212,9 +1213,9 @@ public class ReportingService {
             if (notBlank(f.issuedBy())) {
                 String term = f.issuedBy().strip().toLowerCase(java.util.Locale.ROOT);
                 List<Predicate> any = new ArrayList<>();
-                any.add(cb.like(cb.lower(root.get("issuerEmail")), contains(term), '\\'));
+                any.add(VoucherSearchColumn.ISSUER_EMAIL.like(root, cb, contains(term)));
                 String digits = term.replaceAll("[^0-9]", "");
-                if (digits.length() >= 4) any.add(cb.like(root.get("issuerPhone"), contains(digits), '\\'));
+                if (digits.length() >= 4) any.add(VoucherSearchColumn.ISSUER_PHONE.like(root, cb, contains(digits)));
                 p.add(cb.or(any.toArray(new Predicate[0])));
             }
             if (notBlank(f.phone())) {
@@ -1225,22 +1226,22 @@ public class ReportingService {
                     // The national number, so 0777… and +263777… match each other
                     // (and sender phones stored as typed before V56).
                     String tail = digits.length() > 9 ? digits.substring(digits.length() - 9) : digits;
-                    p.add(cb.or(cb.like(root.get("assigneePhone"), endsWith(tail), '\\'),
-                            cb.like(root.get("senderPhone"), endsWith(tail), '\\')));
+                    p.add(cb.or(VoucherSearchColumn.ASSIGNEE_PHONE.like(root, cb, endsWith(tail)),
+                            VoucherSearchColumn.SENDER_PHONE.like(root, cb, endsWith(tail))));
                 }
             }
             if (notBlank(f.q())) {
                 String term = f.q().strip().toLowerCase(java.util.Locale.ROOT);
                 List<Predicate> any = new ArrayList<>();
-                any.add(cb.like(cb.lower(root.get("assigneeName")), contains(term), '\\'));
-                any.add(cb.like(cb.lower(root.get("senderName")), contains(term), '\\'));
-                any.add(cb.like(cb.lower(root.get("issuerEmail")), contains(term), '\\'));
+                any.add(VoucherSearchColumn.ASSIGNEE_NAME.like(root, cb, contains(term)));
+                any.add(VoucherSearchColumn.SENDER_NAME.like(root, cb, contains(term)));
+                any.add(VoucherSearchColumn.ISSUER_EMAIL.like(root, cb, contains(term)));
                 String code = term.replaceAll("[^0-9a-z]", "").toUpperCase(java.util.Locale.ROOT);
-                if (code.length() >= 4) any.add(cb.like(root.get("code"), contains(code), '\\'));
+                if (code.length() >= 4) any.add(VoucherSearchColumn.CODE.like(root, cb, contains(code)));
                 String digits = term.replaceAll("[^0-9]", "");
                 if (digits.length() >= 4) {
-                    any.add(cb.like(root.get("assigneePhone"), contains(digits), '\\'));
-                    any.add(cb.like(root.get("senderPhone"), contains(digits), '\\'));
+                    any.add(VoucherSearchColumn.ASSIGNEE_PHONE.like(root, cb, contains(digits)));
+                    any.add(VoucherSearchColumn.SENDER_PHONE.like(root, cb, contains(digits)));
                 }
                 p.add(cb.or(any.toArray(new Predicate[0])));
             }

@@ -79,7 +79,11 @@ class WhatsAppNotificationClientContractTest {
                 .withHeader("x-api-key", equalTo("test-api-key"))
                 .withRequestBody(matchingJsonPath("$.to", equalTo("+263771234567")))
                 .withRequestBody(matchingJsonPath("$.notification",
-                        equalTo("Thanks for shopping at Pizza Inn! You earned 10 loyalty points."))));
+                        equalTo("Thanks for shopping at Pizza Inn! You earned 10 loyalty points.")))
+                // A partner never receives our trace (CLAUDE.md "Tracing"): partner
+                // WAFs have refused headers they did not expect.
+                .withoutHeader("traceparent")
+                .withoutHeader("tracestate"));
     }
 
     @Test

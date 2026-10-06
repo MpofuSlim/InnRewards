@@ -53,6 +53,11 @@ import java.util.concurrent.ThreadPoolExecutor;
  * resolves to, so dropping stays something a call site opts into by name, never
  * a default it inherits.
  *
+ * <p>All three run each task inside the submitting thread's trace
+ * ({@link TracingConfig#traceContextTaskDecorator()}), so a message's log lines
+ * carry the {@code traceId} of the request that caused it. The decorator only
+ * wraps the task; it changes nothing about queueing or rejection.
+ *
  * <p>Uncaught exceptions go to {@link SimpleAsyncUncaughtExceptionHandler}.
  * Every notifier already swallows its own gateway exceptions; this handler is
  * defence in depth for anything that escapes.
@@ -76,6 +81,7 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("loyalty-notify-");
+        executor.setTaskDecorator(TracingConfig.traceContextTaskDecorator());
         executor.setRejectedExecutionHandler(
                 new DropAndCountPolicy("notification", rejectedCounter("notification")));
         executor.setWaitForTasksToCompleteOnShutdown(true);
@@ -91,6 +97,7 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("loyalty-expiry-warn-");
+        executor.setTaskDecorator(TracingConfig.traceContextTaskDecorator());
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
@@ -105,6 +112,7 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(1000);
         executor.setThreadNamePrefix("loyalty-billing-");
+        executor.setTaskDecorator(TracingConfig.traceContextTaskDecorator());
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);

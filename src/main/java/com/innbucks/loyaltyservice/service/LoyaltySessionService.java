@@ -172,8 +172,19 @@ public class LoyaltySessionService {
      * opaque 401. Which one it was is logged, never returned: telling a holder
      * that a token was revoked rather than unknown tells them something about an
      * account they may not own.
+     *
+     * <h2>The refusal COMMITS</h2>
+     * {@code noRollbackFor = LoyaltyException.class} is load-bearing. Two
+     * refusals write before they throw — the reuse revocation and the
+     * registration-revoked revocation — and a plain {@code @Transactional}
+     * rolled both back with the very exception that reported them: the chain
+     * was logged and counted as revoked and stayed renewable, so the thief's copy
+     * of the tip kept working. Every {@link LoyaltyException} thrown here is a
+     * refusal ({@link #rejected()}), and none follows a write that should be
+     * undone; anything else (a failed mint, a database error) still rolls back.
+     * Pinned end to end by {@code TokenRetentionPurgeIT}.
      */
-    @Transactional
+    @Transactional(noRollbackFor = LoyaltyException.class)
     public Session refresh(String presentedToken) {
         Instant now = Instant.now();
         LoyaltyRefreshToken row = lookup(presentedToken)

@@ -446,6 +446,20 @@ loyalty:
     # entering the warning window get one notification each. 08:00 UTC =
     # mid-morning in ZW (UTC+2) — a humane send time.
     expiry-warning-cron: ${LOYALTY_EXPIRY_WARNING_CRON:0 0 8 * * *}
+  # Nightly purge of dead QR tokens and dead refresh-token CHAINS
+  # (TokenRetentionPurgeJob, V60). A QR goes once it expired (and, if consumed,
+  # was consumed) more than qr-tokens-days ago; a refresh chain goes only when
+  # EVERY row of it ended (revoked, else expired) more than refresh-tokens-days
+  # ago — never a spent row of a live chain, which is the reuse tripwire.
+  # Non-positive numbers mean the default. Each batch is its own transaction;
+  # a run stops after max-batches-per-run per table and resumes next night.
+  retention:
+    enabled: ${LOYALTY_RETENTION_PURGE_ENABLED:true}
+    purge-cron: ${LOYALTY_RETENTION_PURGE_CRON:0 25 3 * * *}
+    qr-tokens-days: ${LOYALTY_RETENTION_QR_TOKENS_DAYS:90}
+    refresh-tokens-days: ${LOYALTY_RETENTION_REFRESH_TOKENS_DAYS:90}
+    batch-size: ${LOYALTY_RETENTION_PURGE_BATCH_SIZE:1000}
+    max-batches-per-run: ${LOYALTY_RETENTION_PURGE_MAX_BATCHES:500}
   expiry-warning:
     days: ${LOYALTY_EXPIRY_WARNING_DAYS:7}
   public-test:

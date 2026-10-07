@@ -12,6 +12,19 @@ import java.util.UUID;
 
 public interface LoyaltyRefreshTokenRepository extends JpaRepository<LoyaltyRefreshToken, UUID> {
 
+    /** {@link #purgeChainsEndedBefore}'s statement — a constant so a test can EXPLAIN exactly it. */
+    String PURGE_SQL = """
+            DELETE FROM loyalty_refresh_tokens
+             WHERE chain_id IN (
+                   SELECT d.chain_id FROM loyalty_refresh_tokens d
+                    WHERE COALESCE(d.revoked_at, d.expires_at) < :cutoff
+                      AND NOT EXISTS (
+                          SELECT 1 FROM loyalty_refresh_tokens l
+                           WHERE l.chain_id = d.chain_id
+                             AND COALESCE(l.revoked_at, l.expires_at) >= :cutoff)
+                    LIMIT :batch)
+            """;
+
     /**
      * The one read on the refresh path. Keyed by hash, because the token itself
      * is never stored.
@@ -72,4 +85,32 @@ public interface LoyaltyRefreshTokenRepository extends JpaRepository<LoyaltyRefr
                AND t.expiresAt > :now
             """)
     long countActiveChains(@Param("phoneNumber") String phoneNumber, @Param("now") Instant now);
+
+    /**
+     * Retention purge (V60, {@code TokenRetentionPurgeJob}): deletes every row of
+     * up to {@code batch} DEAD chains. Returns the rows deleted; fewer than
+     * {@code batch} means nothing else qualifies (each candidate row belongs to a
+     * dead chain, and all of that chain's rows go, so a full batch always
+     * deletes at least {@code batch} rows).
+     *
+     * <p><b>A chain is the unit, never a row.</b> Reuse detection needs every
+     * SPENT row ({@code used_at} set) of a live chain: presenting one revokes the
+     * whole chain. A spent row's own {@code expires_at} is earlier than its
+     * successor's, and {@code LoyaltySessionService.refresh} checks {@code
+     * used_at} BEFORE expiry, so a spent row past its own window is still a
+     * live tripwire while its chain lives. Deleting it would turn a replay into
+     * an ordinary "unknown" refusal and leave the thief's copy of the tip
+     * working.
+     *
+     * <p>A row "ends" at {@code revoked_at} if revoked, else at {@code
+     * expires_at}. A chain is dead before {@code cutoff} only when EVERY row of
+     * it ended before {@code cutoff} — so a chain with any unrevoked row still
+     * inside (or within the grace of) its window survives whole, including a
+     * successor written by a refresh racing a revocation. Served by
+     * {@code idx_loyalty_refresh_purge_end} (the expression must stay
+     * character-identical to the index) and {@code idx_loyalty_refresh_chain}.
+     */
+    @Modifying
+    @Query(value = PURGE_SQL, nativeQuery = true)
+    int purgeChainsEndedBefore(@Param("cutoff") Instant cutoff, @Param("batch") int batch);
 }

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -173,6 +174,18 @@ class LoyaltySessionServiceTest {
         // point. Nothing distinguishes the two holders, so both are signed out
         // and the customer proves the phone again.
         verify(tokens).revokeChain(eq(chainId), any(Instant.class), eq("reuse_detected"));
+    }
+
+    @Test
+    @DisplayName("SECURITY: refresh's refusals COMMIT — the revocation must not roll back with the 401")
+    void refreshRefusalsDoNotRollBackTheirRevocation() throws NoSuchMethodException {
+        // This mocked test cannot see a transaction: verify(revokeChain) above
+        // passed while the real UPDATE rolled back with the refusal's exception.
+        // The annotation is the fix; TokenRetentionPurgeIT proves it on Postgres.
+        Transactional tx = LoyaltySessionService.class.getMethod("refresh", String.class)
+                .getAnnotation(Transactional.class);
+        assertThat(tx).isNotNull();
+        assertThat(tx.noRollbackFor()).contains(LoyaltyException.class);
     }
 
     @Test

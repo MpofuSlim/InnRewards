@@ -1,0 +1,30 @@
+-- Retention purge for loyalty_refresh_tokens and qr_tokens
+-- (TokenRetentionPurgeJob). Neither table was ever pruned, so both grew by one
+-- row per refresh / per QR issued, forever.
+--
+-- loyalty_refresh_tokens is purged a whole CHAIN at a time, and only a chain in
+-- which every row ended — revoked_at if revoked, else expires_at — before the
+-- retention cutoff. Never a single row: a SPENT row of a live chain is the
+-- reuse-detection tripwire (presenting it revokes the chain), and the refresh
+-- path checks used_at before expiry, so it matters even past its own window.
+-- This supersedes the retention NOTE at the end of V43, which proposed keeping
+-- each chain's newest row: a chain dead for the whole retention period answers
+-- the same opaque 401 SESSION_REFRESH_REJECTED whether its rows exist or not,
+-- so keeping its tip forever bought only a metric label.
+--
+-- The purge's predicate is COALESCE(revoked_at, expires_at) < :cutoff, which no
+-- existing index serves (idx_loyalty_refresh_chain answers the NOT EXISTS
+-- probe, not the candidate scan). The expression below must stay
+-- character-identical to LoyaltyRefreshTokenRepository.purgeChainsEndedBefore,
+-- or Postgres will not use it. TokenRetentionPurgeIT EXPLAINs the query.
+--
+-- qr_tokens needs nothing new: its purge predicate leads with expires_at,
+-- which idx_qr_expires (V1) already indexes.
+--
+-- Plain CREATE INDEX (not CONCURRENTLY), like V57/V59: Flyway runs this in a
+-- transaction. The build holds a SHARE lock on loyalty_refresh_tokens until the
+-- migration commits — refreshes wait for it. At the cell's row counts that is
+-- well under a second; on a much larger table, build it CONCURRENTLY by hand
+-- first (IF NOT EXISTS then makes this file a no-op).
+CREATE INDEX IF NOT EXISTS idx_loyalty_refresh_purge_end
+    ON loyalty_refresh_tokens ((COALESCE(revoked_at, expires_at)));

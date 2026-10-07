@@ -25,6 +25,10 @@ import java.math.BigDecimal;
 @Component
 public class LoyaltyMetrics {
 
+    /** {@code table} tag values of {@code loyalty.retention.purged}. */
+    public static final String TABLE_QR_TOKENS = "qr_tokens";
+    public static final String TABLE_REFRESH_TOKENS = "loyalty_refresh_tokens";
+
     private final MeterRegistry registry;
 
     private final Counter vouchersIssued;
@@ -86,6 +90,29 @@ public class LoyaltyMetrics {
                 .description("End-to-end voucher redemption latency")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
+        // Registered at 0 for both tables so the series exists before the first
+        // purge deletes anything: increase() cannot see a series' first sample.
+        retentionPurged(TABLE_QR_TOKENS);
+        retentionPurged(TABLE_REFRESH_TOKENS);
+    }
+
+    private Counter retentionPurged(String table) {
+        return Counter.builder("loyalty.retention.purged")
+                .description("Rows deleted by the token retention purge, by table")
+                .baseUnit("rows")
+                .tag("table", table)
+                .register(registry);
+    }
+
+    /**
+     * Rows the retention purge ({@code TokenRetentionPurgeJob}) deleted from
+     * {@code table}. A flat line on a busy cell after the first weeks means the
+     * job stopped running; a run's own counts are in its log line.
+     */
+    public void incRetentionPurged(String table, long rows) {
+        if (rows > 0) {
+            retentionPurged(table).increment(rows);
+        }
     }
 
     public void incVouchersIssued() {

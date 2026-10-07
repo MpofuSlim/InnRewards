@@ -601,6 +601,49 @@ another connection inside the send: only committed data is visible there).
   refusal code and its order are still the service's own. A new caller of
   `isStaffPhone` inside a transaction should get a pre-load too.
 
+## Token retention purge — dead QR tokens and dead refresh chains (V60)
+
+`TokenRetentionPurgeJob` (nightly, `0 25 3 * * *`, `@SchedulerLock
+tokenRetentionPurge`) deletes what `qr_tokens` and `loyalty_refresh_tokens` no
+longer need; both used to grow forever. On by default.
+
+- **QR tokens go** once they expired, and if consumed were consumed, more than
+  `LOYALTY_RETENTION_QR_TOKENS_DAYS` (90) ago. Nothing references a QR row (no
+  FK; its `transaction_id` points OUT to the earn row, which stays), and every
+  reader is keyed by the token value, so a purged token answers exactly like an
+  unknown one: status and consume say 404 `NOT_FOUND` "This QR code is invalid
+  or has expired." (a replay of a long-dead consumed QR now gets that instead of
+  `QR_REUSED`).
+- **Refresh tokens go a whole CHAIN at a time, never a row**, and only a chain
+  in which EVERY row ended — at `revoked_at` if revoked, else `expires_at` —
+  more than `LOYALTY_RETENTION_REFRESH_TOKENS_DAYS` (90) ago.
+- **Never purged: any row of a chain that is, or within retention was,
+  renewable** — above all its SPENT rows. A spent row is the reuse tripwire,
+  and the refresh path checks `used_at` before expiry, so it matters even past
+  its own window; deleting it would turn a replay into an ordinary "unknown"
+  refusal and leave the thief's copy of the tip working. This supersedes V43's
+  "keep each chain's newest row" note: a chain dead for the whole retention
+  period answers the same opaque 401 either way.
+- **Shape:** batches of `LOYALTY_RETENTION_PURGE_BATCH_SIZE` (1000), each its own
+  transaction, stop at a short batch; at most `LOYALTY_RETENTION_PURGE_MAX_BATCHES`
+  (500) per table per run, the rest next night. Non-positive settings mean the
+  default (retention can never be configured to zero). A failure on one table
+  does not stop the other. `loyalty.retention.purged{table}` counts rows
+  (registered at 0); each run logs one line with both counts and cutoffs.
+  Off switch: `LOYALTY_RETENTION_PURGE_ENABLED=false`.
+- **Indexes:** the QR predicate leads with `expires_at` (`idx_qr_expires`, V1);
+  V60 adds `idx_loyalty_refresh_purge_end` on `(COALESCE(revoked_at,
+  expires_at))`, which must stay character-identical to
+  `LoyaltyRefreshTokenRepository.PURGE_SQL`. `TokenRetentionPurgeIT` EXPLAINs
+  both statements, pins that no FK points at either table, and that a spent row
+  of a live chain survives and still revokes the chain.
+- **Found alongside, and fixed:** `LoyaltySessionService.refresh` was a plain
+  `@Transactional`, so the chain revocation written on `reuse_detected` and on
+  `registration_revoked` ROLLED BACK with the 401 that reported it — the chain
+  was logged as revoked and stayed renewable. It is now
+  `noRollbackFor = LoyaltyException.class` (every `LoyaltyException` there is a
+  refusal). A mocked repository cannot see this; only the Postgres IT can.
+
 ## Timestamps — UTC
 
 Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
@@ -610,7 +653,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V59**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V60**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]

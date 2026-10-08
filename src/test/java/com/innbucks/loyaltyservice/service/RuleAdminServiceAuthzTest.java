@@ -114,9 +114,24 @@ class RuleAdminServiceAuthzTest {
     }
 
     @Test
-    @DisplayName("a MERCHANT_ADMIN may NOT create the tenant-wide global rule")
-    void merchantAdminCannotWriteGlobalRule() {
+    @DisplayName("the MERCHANT_ADMIN who runs the brand's merchants may create the tenant standard")
+    void merchantAdminCanWriteGlobalRule() {
+        // Owner decision (2026-10-08): the tenant is the brand (e.g. Simbisa) and
+        // its merchant admin runs every merchant under it. Which tenant is bounded
+        // by TenantContext's membership check before the service runs.
         authenticateWithRoles("ROLE_MERCHANT_ADMIN");
+        when(rules.save(any(LoyaltyRule.class))).thenAnswer(i -> i.getArgument(0));
+
+        LoyaltyRule saved = service.createRule(TENANT, null, globalRule("1"));
+        assertThat(saved.getMerchantId()).isNull();
+        verify(rules).save(any());
+        verify(merchantAuthz, never()).requireCallerAdministersMerchant(any(), any());
+    }
+
+    @Test
+    @DisplayName("a SHOP_ADMIN may NOT create the tenant standard")
+    void shopAdminCannotWriteGlobalRule() {
+        authenticateWithRoles("ROLE_SHOP_ADMIN");
 
         assertThatThrownBy(() -> service.createRule(TENANT, null, globalRule("1")))
                 .isInstanceOf(LoyaltyException.class)
@@ -140,9 +155,23 @@ class RuleAdminServiceAuthzTest {
     }
 
     @Test
-    @DisplayName("deactivating a global rule as a MERCHANT_ADMIN is refused (the null-claim bypass is closed)")
-    void merchantAdminCannotDeactivateGlobalRule() {
+    @DisplayName("the tenant's MERCHANT_ADMIN may deactivate the tenant standard")
+    void merchantAdminCanDeactivateGlobalRule() {
         authenticateWithRoles("ROLE_MERCHANT_ADMIN");
+        LoyaltyRule global = new LoyaltyRule();
+        global.setTenantId(TENANT);
+        global.setMerchantId(null);
+        UUID ruleId = UUID.randomUUID();
+        when(rules.findById(ruleId)).thenReturn(java.util.Optional.of(global));
+
+        service.deactivateRule(TENANT, ruleId);
+        assertThat(global.isActive()).isFalse();
+    }
+
+    @Test
+    @DisplayName("deactivating the tenant standard as a SHOP_ADMIN is refused (the null-claim bypass stays closed)")
+    void shopAdminCannotDeactivateGlobalRule() {
+        authenticateWithRoles("ROLE_SHOP_ADMIN");
         LoyaltyRule global = new LoyaltyRule();
         global.setTenantId(TENANT);
         global.setMerchantId(null);

@@ -1433,6 +1433,30 @@ merchant-specific first):
   The only sanctioned way to be unbilled is `merchants.fee_waived` (V30), which
   records who decided it and why. The REDEEM side may be zero freely.
 
+> [!IMPORTANT]
+> **The tenant is the BRAND, and its merchant admin runs every merchant under it
+> (owner decision, 2026-10-08).** Example: tenant **Simbisa**, merchants **Chicken
+> Inn** and **Pizza Inn**, run by the MERCHANT_ADMIN (an OWNER or ADMIN of the one
+> business behind the brand; one business per tenant). So that merchant admin
+> writes the brand's standard: the global rule (`merchantId` omitted), its
+> deactivation, and global campaigns. Every merchant under the brand inherits it,
+> and each can still carry its own override. That is
+> `RuleAdminService.TENANT_STANDARD_WRITERS`. A
+> SHOP_ADMIN is not the tenant and is refused (`403 GLOBAL_RULE_ROLE`).
+> Merchant-scoped writes are unchanged: confined to merchants the caller
+> administers through `MerchantAuthz`. Which tenant the caller writes is bounded
+> by `TenantContext`'s membership check on `X-Tenant-Id`.
+>
+> **Don't take this away from the merchant admin again.** PR #72 (2026-09-01)
+> did, as part of an audit fix: it reserved the standard to
+> TENANT_ADMIN / PLATFORM_ADMIN / SUPER_ADMIN, which was a policy decision nobody
+> asked for. Nothing in the fleet mints TENANT_ADMIN or PLATFORM_ADMIN, so only
+> SUPER_ADMIN could set a standard, and merchant admins hit `GLOBAL_RULE_ROLE`
+> on the console's Tenant Standard page. The rule rests on one business per
+> tenant: if a tenant ever holds a second business, its admin could change the
+> shared standard, fees included, for both. Raise that with the owner before it
+> happens; don't re-restrict silently.
+
 Every fee call-site goes through `EffectiveFees` (invoicing and both reporting
 estimates) so the previewed figure and the eventual bill can't drift —
 `MerchantFeeCalculator` still owns the arithmetic but must not be called

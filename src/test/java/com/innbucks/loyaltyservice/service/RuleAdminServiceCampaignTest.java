@@ -120,10 +120,26 @@ class RuleAdminServiceCampaignTest {
     }
 
     @Test
-    void createCampaign_tenantWide_byMerchantAdmin_isForbidden() {
-        // The escalation the audit found: a MERCHANT_ADMIN (no tenant-level role)
-        // omitting merchantId must NOT be able to write the tenant-wide campaign.
+    void createCampaign_tenantWide_byMerchantAdmin_isAllowed() {
+        // Owner decision (2026-10-08): the tenant is the brand and its merchant
+        // admin runs every merchant under it, so it writes the brand-wide campaign.
         authenticateWithRoles("ROLE_MERCHANT_ADMIN");
+        CampaignRepository campaigns = mock(CampaignRepository.class);
+        MerchantService merchants = mock(MerchantService.class);
+        UUID tenantId = UUID.randomUUID();
+        when(campaigns.save(any(Campaign.class))).thenAnswer(i -> i.getArgument(0));
+
+        Campaign saved = newService(campaigns, merchants).createCampaign(tenantId, null, req(null, "black friday"));
+
+        assertThat(saved.getMerchantId()).isNull();
+        verify(campaigns).save(any(Campaign.class));
+    }
+
+    @Test
+    void createCampaign_tenantWide_byShopAdmin_isForbidden() {
+        // A SHOP_ADMIN is not the tenant: omitting merchantId must NOT reach the
+        // tenant-wide campaign.
+        authenticateWithRoles("ROLE_SHOP_ADMIN");
         CampaignRepository campaigns = mock(CampaignRepository.class);
         MerchantService merchants = mock(MerchantService.class);
         UUID tenantId = UUID.randomUUID();

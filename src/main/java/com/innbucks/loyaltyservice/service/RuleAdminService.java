@@ -32,6 +32,20 @@ public class RuleAdminService {
     private static final String[] TENANT_LEVEL_ROLES =
             {"ROLE_SUPER_ADMIN", "ROLE_PLATFORM_ADMIN", "ROLE_TENANT_ADMIN"};
 
+    /**
+     * Who may write the tenant STANDARD (the global rule and global campaigns):
+     * the tenant-level roles plus MERCHANT_ADMIN. Owner decision (2026-10-08):
+     * the tenant is the BRAND (e.g. Simbisa), and its merchant admin runs every
+     * merchant under it (Chicken Inn, Pizza Inn) — one business per tenant. So
+     * that merchant admin sets the brand's standard. Nothing in the
+     * fleet mints TENANT_ADMIN or PLATFORM_ADMIN, so without this only
+     * SUPER_ADMIN could. Which tenant they write is still bounded by
+     * {@code TenantContext}'s membership check on {@code X-Tenant-Id}. A
+     * SHOP_ADMIN is not the tenant and stays refused.
+     */
+    private static final String[] TENANT_STANDARD_WRITERS =
+            {"ROLE_SUPER_ADMIN", "ROLE_PLATFORM_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_MERCHANT_ADMIN"};
+
     private final LoyaltyRuleRepository rules;
     private final CampaignRepository campaigns;
     private final MerchantService merchants;
@@ -56,15 +70,15 @@ public class RuleAdminService {
 
     /**
      * Object-level authorization for a rule/campaign WRITE at a given scope —
-     * the gate the audit found missing, which let any tenant MERCHANT_ADMIN
-     * rewrite a sibling merchant's earn rate or the tenant-wide standard.
+     * the gate the audit found missing, which let a MERCHANT_ADMIN rewrite a
+     * sibling merchant's earn rate.
      *
      * <ul>
      *   <li><b>Global (merchantId == null)</b> — the tenant STANDARD every
-     *       merchant inherits, so only a tenant-level role may write it. A
-     *       MERCHANT_ADMIN reaches this branch by omitting merchantId (its token
-     *       carries no merchant claim), which is exactly the escalation to
-     *       refuse.</li>
+     *       merchant inherits. Written by a tenant-level role or by the
+     *       MERCHANT_ADMIN who runs the brand's merchants
+     *       ({@link #TENANT_STANDARD_WRITERS}; owner decision, 2026-10-08). A
+     *       SHOP_ADMIN is refused.</li>
      *   <li><b>Merchant-scoped</b> — a tenant-level role may act on any merchant
      *       in the tenant (existence + tenant checked); a single-merchant
      *       principal is confined by {@link MerchantAuthz} to the merchant it
@@ -79,11 +93,11 @@ public class RuleAdminService {
      */
     private void authorizeRuleScopeWrite(UUID tenantId, UUID merchantId) {
         if (merchantId == null) {
-            if (!CallerDetails.hasAnyRole(TENANT_LEVEL_ROLES)) {
+            if (!CallerDetails.hasAnyRole(TENANT_STANDARD_WRITERS)) {
                 throw LoyaltyException.forbidden("GLOBAL_RULE_ROLE",
-                        "Only a tenant administrator may create or change the tenant-wide "
-                                + "(global) rule or campaign. Specify a merchantId to configure your "
-                                + "own merchant instead.");
+                        "Only the merchant admin who runs this tenant may create or change its "
+                                + "tenant-wide (global) rule or campaign. Specify a merchantId to "
+                                + "configure your own merchant instead.");
             }
             return;
         }

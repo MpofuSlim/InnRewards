@@ -644,6 +644,36 @@ longer need; both used to grow forever. On by default.
   `noRollbackFor = LoyaltyException.class` (every `LoyaltyException` there is a
   refusal). A mocked repository cannot see this; only the Postgres IT can.
 
+## Concurrent purchases by one customer must all land (2026-10-08)
+
+**Two checkouts for the same phone at the same moment both earn.** Before this,
+one of them failed — a failed checkout reported to the shop for a sale that
+happened — in two different ways, both only under concurrency
+(`ConcurrentShopCheckoutIT` reproduces both on the old code):
+
+- **Lock a wallet with `WalletRepository.lockForUpdate`, never a `@Lock` query.**
+  Almost every caller has read the wallet before it changes it (a checkout reads
+  the balance, then the MAIN wallet). When a locking QUERY returns an entity the
+  persistence context already holds, Hibernate keeps the earlier copy and
+  compares versions, so a commit in between made the lock throw
+  `ObjectOptimisticLockingFailureException` ("conflicting version of entity
+  already held in persistence context") instead of waiting. `lockForUpdate`
+  flushes, then refreshes the entity WITH the lock, which re-reads it. The old
+  `WalletRepository.lockById` is gone so it cannot be reached for again. The
+  voucher and transaction `lockById`s were not changed here; the same trap
+  applies to them if a caller ever reads the row before locking it.
+- **Create a phone's records under `lockPhoneForCreate`.** A first purchase
+  creates the `loyalty_users` projection and the global MAIN wallet. Two of them
+  for one new phone both missed and both inserted; the loser hit the unique
+  index, and **a unique violation aborts the Postgres transaction**, so the
+  old catch-and-re-read fallback in `createMainWallet` could never work either.
+  `createWithWallet` and `createMainWallet` now take a transaction-scoped
+  advisory lock keyed by the PHONE (the wallet is global, so two tenants' first
+  purchases race on it too), look again, and create only on a second miss. It is
+  taken only on a miss, so a returning customer pays nothing for it. Never "fix"
+  a create race by catching `DataIntegrityViolationException` inside the
+  transaction — nothing runs after it.
+
 ## Timestamps — UTC
 
 Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass

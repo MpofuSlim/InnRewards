@@ -13,7 +13,6 @@ import com.innbucks.loyaltyservice.util.MsisdnValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -99,8 +98,8 @@ public class WalletService {
 
     /**
      * The customer's single global MAIN wallet, created on first use. Race-safe:
-     * a concurrent first-use that loses the unique-index race re-reads the
-     * winner's row instead of creating a duplicate.
+     * concurrent first uses are serialised by the per-phone create lock, so the
+     * second finds the first's wallet instead of inserting a duplicate.
      */
     public Wallet mainWallet(String phoneNumber) {
         String phone = normalizePhone(phoneNumber);
@@ -118,17 +117,19 @@ public class WalletService {
     }
 
     private Wallet createMainWallet(String phoneNumber) {
-        Wallet w = new Wallet();
-        w.setPhoneNumber(phoneNumber);
-        w.setLabel("Main");
-        w.setType(Wallet.Type.MAIN);
-        try {
+        // A concurrent first use may be creating it right now. It used to be
+        // inserted blind, with a catch that re-read the winner's row on the unique
+        // violation — but the violation aborts the Postgres transaction, so the
+        // re-read failed too and the whole operation with it. Wait for any other
+        // creator of this phone instead, then look again.
+        wallets.lockPhoneForCreate(phoneNumber);
+        return wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN).orElseGet(() -> {
+            Wallet w = new Wallet();
+            w.setPhoneNumber(phoneNumber);
+            w.setLabel("Main");
+            w.setType(Wallet.Type.MAIN);
             return wallets.saveAndFlush(w);
-        } catch (DataIntegrityViolationException race) {
-            // Another thread created the customer's MAIN wallet first (uk_wallet_main).
-            return wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN)
-                    .orElseThrow(() -> race);
-        }
+        });
     }
 
     /**
@@ -139,7 +140,7 @@ public class WalletService {
      * where the activity originated; the global wallet itself is tenant-less.
      */
     public BigDecimal apply(UUID walletId, BigDecimal delta, UUID transactionId, String reason, UUID ledgerTenantId) {
-        Wallet w = wallets.lockById(walletId)
+        Wallet w = wallets.lockForUpdate(walletId)
                 .orElseThrow(() -> LoyaltyException.notFound("wallet"));
         Instant now = Instant.now();
 
@@ -183,7 +184,7 @@ public class WalletService {
      * idle wallets that {@link #apply} hasn't touched.
      */
     public void expireDueLots(UUID walletId) {
-        Wallet w = wallets.lockById(walletId).orElse(null);
+        Wallet w = wallets.lockForUpdate(walletId).orElse(null);
         if (w == null) return;
         releaseExpiredLots(w, Instant.now());
     }
@@ -200,7 +201,7 @@ public class WalletService {
      * the wallet's row lock in its own transaction. Returns the rebuilt balance.
      */
     public BigDecimal rebuildBalanceFromLedger(UUID walletId) {
-        Wallet w = wallets.lockById(walletId)
+        Wallet w = wallets.lockForUpdate(walletId)
                 .orElseThrow(() -> LoyaltyException.notFound("wallet"));
         BigDecimal ledgerSum = ledger.sumDeltaByWalletId(walletId);
         BigDecimal previous = w.getBalance();

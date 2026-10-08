@@ -1,9 +1,7 @@
 package com.innbucks.loyaltyservice.repository;
 
 import com.innbucks.loyaltyservice.entity.Wallet;
-import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -12,7 +10,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface WalletRepository extends JpaRepository<Wallet, UUID> {
+public interface WalletRepository extends JpaRepository<Wallet, UUID>, WalletRepositoryCustom {
 
     /** The customer's single wallet of a given type (one MAIN per phone). */
     Optional<Wallet> findFirstByPhoneNumberAndType(String phoneNumber, Wallet.Type type);
@@ -22,9 +20,28 @@ public interface WalletRepository extends JpaRepository<Wallet, UUID> {
 
     boolean existsByPhoneNumber(String phoneNumber);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT w FROM Wallet w WHERE w.id = :id")
-    Optional<Wallet> lockById(@Param("id") UUID id);
+    /**
+     * Serialises the transactions that CREATE a customer's records for one
+     * phone: their {@code loyalty_users} projection and their global MAIN wallet.
+     * A transaction-scoped Postgres advisory lock, released at commit or rollback.
+     *
+     * <p>Two checkouts for a phone loyalty has never seen both used to find
+     * nothing and both insert; the loser hit {@code uk_user_tenant_phone} (or
+     * {@code uk_wallet_phone_type_pocket}) and the whole checkout failed, because
+     * a unique violation aborts the Postgres transaction. Catching it cannot help
+     * for the same reason: nothing more, not even a re-read, runs in an aborted
+     * transaction. So the creator takes this lock, looks again, and creates only
+     * if the row is still missing. The second creator waits here until the first
+     * commits, then finds its rows.
+     *
+     * <p>Only taken on a MISS, so a returning customer never pays for it. Keyed by
+     * the phone alone (not tenant + phone) because the wallet is global: two
+     * tenants' first purchases for one phone race on the same wallet. A hash
+     * collision between two phones only makes one wait for the other briefly.
+     */
+    @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(hashtextextended('loyalty-phone-create:' || :phone, 0))",
+            nativeQuery = true)
+    Integer lockPhoneForCreate(@Param("phone") String phone);
 
     // ---- Reconciliation ----
 

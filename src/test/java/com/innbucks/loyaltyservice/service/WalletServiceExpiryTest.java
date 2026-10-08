@@ -46,7 +46,7 @@ class WalletServiceExpiryTest {
             service = new WalletService(wallets, ledger, lots, metrics, expiryDays);
             wallet.setId(UUID.randomUUID());
             wallet.setBalance(BigDecimal.ZERO);
-            when(wallets.lockById(wallet.getId())).thenReturn(Optional.of(wallet));
+            when(wallets.lockForUpdate(wallet.getId())).thenReturn(Optional.of(wallet));
             // No lots due for expiry and none to consume unless a test says so.
             when(lots.findDueForExpiry(any(), any())).thenReturn(List.of());
             when(lots.findLiveForConsumption(any(), any())).thenReturn(List.of());

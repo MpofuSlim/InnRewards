@@ -138,8 +138,23 @@ public class UserService {
                 && !isPhoneRegistered(u.getPhoneNumber());
     }
 
+    /**
+     * Creates the (tenant, phone) projection and, if the phone has none yet, its
+     * global MAIN wallet — or returns the projection a concurrent transaction
+     * created a moment ago.
+     *
+     * <p>Two first purchases for one phone used to both miss, both insert, and
+     * the loser failed on {@code uk_user_tenant_phone}: a failed checkout for a
+     * sale that happened. The per-phone create lock serialises them; the second
+     * creator waits for the first to commit, then finds its row here.
+     */
     private LoyaltyUser createWithWallet(UUID tenantId, String phoneNumber, UUID merchantId,
                                          LoyaltyUser.Status status) {
+        wallets.lockPhoneForCreate(phoneNumber);
+        Optional<LoyaltyUser> createdMeanwhile = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
+        if (createdMeanwhile.isPresent()) {
+            return createdMeanwhile.get();
+        }
         LoyaltyUser u = new LoyaltyUser();
         u.setTenantId(tenantId);
         u.setMerchantId(merchantId);
@@ -149,8 +164,9 @@ public class UserService {
 
         // Ensure the customer's single GLOBAL MAIN wallet exists. Keyed by phone,
         // so a second LoyaltyUser for the same phone (different tenant) reuses the
-        // one wallet rather than creating a per-tenant silo. Idempotent; the
-        // uk_wallet_main partial unique index is the integrity backstop.
+        // one wallet rather than creating a per-tenant silo. The create lock taken
+        // above covers this too (it is keyed by the phone, not the tenant);
+        // uk_wallet_phone_type_pocket is the integrity backstop.
         if (wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN).isEmpty()) {
             Wallet main = new Wallet();
             main.setPhoneNumber(phoneNumber);

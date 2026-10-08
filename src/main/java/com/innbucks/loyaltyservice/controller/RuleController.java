@@ -49,11 +49,12 @@ public class RuleController {
             description = "Creates an earn-rate rule. **Two tiers of rules are supported — global and " +
                           "merchant-specific — and merchant-specific rules always win when both exist for " +
                           "the same transaction type.** " +
-                          "TENANT_ADMIN (or PLATFORM_ADMIN / SUPER_ADMIN) tokens carry no merchantId, so " +
-                          "the rule is created as a **global baseline** that applies to every merchant in " +
-                          "the tenant that has no override. MERCHANT_ADMIN tokens carry the merchantId " +
-                          "they manage, creating a **merchant-specific override** that supersedes the " +
-                          "global rule for that outlet only. `pointsPerUnit` × `multiplier` is applied to " +
+                          "With no `merchantId` the rule is the **tenant standard** (global baseline) that " +
+                          "applies to every merchant in the tenant that has no override. The tenant's " +
+                          "MERCHANT_ADMIN writes it — the tenant is the brand and its merchant admin runs every " +
+                          "merchant under it — as may SUPER_ADMIN; a SHOP_ADMIN may not (`GLOBAL_RULE_ROLE`). With a " +
+                          "`merchantId` (a SHOP_ADMIN's comes from its token) it is a **merchant-specific " +
+                          "override** that supersedes the standard for that merchant only. `pointsPerUnit` × `multiplier` is applied to " +
                           "the transaction amount; `maxPointsPerTxn` caps the result if set.\n\n" +
                           "**Earning floor** — `minTransactionAmount` is the amount a transaction must reach " +
                           "before it earns anything: spend below it and the transaction still completes but " +
@@ -138,6 +139,30 @@ public class RuleController {
                                             {
                                               "code": "FEE_BOTH_REQUIRED",
                                               "message": "feeIssued: type=FIXED_PLUS_PERCENTAGE requires both fixed > 0 and percentage > 0",
+                                              "data": null
+                                            }
+                                            """)
+                            }
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "The tenant standard (no merchantId) is written by the tenant's merchant admin or a tenant-level role; a SHOP_ADMIN is refused (GLOBAL_RULE_ROLE). A merchant rule needs a merchant the caller administers (NOT_MERCHANT_OWNER).",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Tenant standard, not the tenant's merchant admin", value = """
+                                            {
+                                              "code": "GLOBAL_RULE_ROLE",
+                                              "message": "Only the merchant admin who runs this tenant may create or change its tenant-wide (global) rule or campaign. Specify a merchantId to configure your own merchant instead.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another business's merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
                                               "data": null
                                             }
                                             """)
@@ -284,8 +309,8 @@ public class RuleController {
             description = "Stops the rule from being applied to future transactions. Past transactions that " +
                           "earned points under this rule are unaffected. Use this rather than deletion so " +
                           "audit history (rule_id stamped on every transaction) remains valid. " +
-                          "MERCHANT_ADMIN can only deactivate their own merchant-specific rules. " +
-                          "TENANT_ADMIN (or higher) can deactivate both global and any merchant-specific rules.")
+                          "The tenant's MERCHANT_ADMIN (or SUPER_ADMIN) can deactivate the tenant standard " +
+                          "and the rules of merchants it administers; a SHOP_ADMIN only its own merchant's rules.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -335,6 +360,30 @@ public class RuleController {
                                       "data": null
                                     }
                                     """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Deactivating the tenant standard needs the tenant's merchant admin or a tenant-level role (GLOBAL_RULE_ROLE); a merchant rule needs a merchant the caller administers (NOT_MERCHANT_OWNER).",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Tenant standard, not the tenant's merchant admin", value = """
+                                            {
+                                              "code": "GLOBAL_RULE_ROLE",
+                                              "message": "Only the merchant admin who runs this tenant may create or change its tenant-wide (global) rule or campaign. Specify a merchantId to configure your own merchant instead.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another business's merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             )
     })
@@ -408,6 +457,30 @@ public class RuleController {
                                       "data": null
                                     }
                                     """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "A tenant-wide campaign (no merchantId) is created by the tenant's merchant admin or a tenant-level role (GLOBAL_RULE_ROLE); a merchant campaign needs a merchant the caller administers (NOT_MERCHANT_OWNER).",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Tenant standard, not the tenant's merchant admin", value = """
+                                            {
+                                              "code": "GLOBAL_RULE_ROLE",
+                                              "message": "Only the merchant admin who runs this tenant may create or change its tenant-wide (global) rule or campaign. Specify a merchantId to configure your own merchant instead.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another business's merchant", value = """
+                                            {
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             )
     })

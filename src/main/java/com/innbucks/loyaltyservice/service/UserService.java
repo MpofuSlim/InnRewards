@@ -399,8 +399,21 @@ public class UserService {
      * is not a plain customer, so a cashier burns only at its own merchant.
      */
     public void requireCallerMayRedeemFor(LoyaltyUser target) {
+        requireCallerMayRedeemForPhone(target.getPhoneNumber());
+    }
+
+    /**
+     * {@link #requireCallerMayRedeemFor} for an account named by its PHONE,
+     * before that account is looked up — the phone-keyed burn. Same rule, same
+     * refusal. It exists so a CUSTOMER naming somebody else's number is refused
+     * {@code NOT_WALLET_OWNER} whether or not that number has an account here:
+     * looking it up first would answer 404 for an unknown phone and 403 for a
+     * known one, telling any customer which phones are enrolled in which
+     * program. Expects the stored E.164 form ({@link #normalizePhone}).
+     */
+    public void requireCallerMayRedeemForPhone(String e164Phone) {
         String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
-        if (callerPhone != null && callerPhone.equals(target.getPhoneNumber())) {
+        if (callerPhone != null && callerPhone.equals(e164Phone)) {
             return; // the wallet's own holder
         }
         if (com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole(REDEEM_ON_BEHALF_ROLES)) {
@@ -410,7 +423,7 @@ public class UserService {
                 "you can only act on your own loyalty account");
     }
 
-    /** Roles that may burn a customer's points on their behalf — see {@link #requireCallerMayRedeemFor}. */
+    /** Roles that may burn a customer's points on their behalf — see {@link #requireCallerMayRedeemForPhone}. */
     private static final String[] REDEEM_ON_BEHALF_ROLES = {
             "ROLE_SUPER_ADMIN", "ROLE_MERCHANT_ADMIN", "ROLE_SHOP_ADMIN", "ROLE_SHOP_USER"};
 

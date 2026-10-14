@@ -488,8 +488,10 @@ public class Dtos {
                     description = "Merchant performing the redemption. Required for MERCHANT_ADMIN; ignored " +
                                   "when JWT carries merchantId.")
             UUID merchantId,
-            @Schema(example = "11111111-2222-3333-4444-555555555555")
-            @NotNull UUID userId,
+            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
+                    description = "Loyalty user ID whose points are burned. Mutually exclusive with " +
+                                  "assigneePhone; exactly one must be set (400 RECIPIENT_REQUIRED otherwise).")
+            UUID userId,
             @Schema(example = "500.0000", nullable = true,
                     description = "Points to redeem. Provide EITHER this or `amount` (the currency value " +
                                   "to cover). When `amount` is given the server computes the points from the " +
@@ -516,7 +518,16 @@ public class Dtos {
                                   "recorded in. Defaults to the merchant's currency when omitted. Must be in " +
                                   "the cell's supported set, and a non-USD currency needs an in-force exchange " +
                                   "rate (NO_FX_RATE otherwise).")
-            String currency
+            String currency,
+            @Schema(example = "+263771234567", nullable = true,
+                    description = "Phone of the customer whose points are burned — what a till has when " +
+                                  "the customer is standing at it. Mutually exclusive with userId; exactly " +
+                                  "one must be set (a blank phone counts as absent). Resolved within the " +
+                                  "X-Tenant-Id tenant, in any common spelling (0771234567, 771234567, " +
+                                  "+263771234567). An unknown phone is 404 — a burn NEVER creates an " +
+                                  "account — and an unparseable one is 400 BAD_PHONE. A CUSTOMER may only " +
+                                  "name their own phone (403 NOT_WALLET_OWNER otherwise).")
+            String assigneePhone
     ) {
         /**
          * Back-compat constructor for callers built against the pre-rate,
@@ -525,7 +536,7 @@ public class Dtos {
          */
         public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
                                  String reason, String reference) {
-            this(merchantId, userId, points, reason, reference, null, null);
+            this(merchantId, userId, points, reason, reference, null, null, null);
         }
 
         /**
@@ -535,7 +546,18 @@ public class Dtos {
          */
         public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
                                  String reason, String reference, BigDecimal amount) {
-            this(merchantId, userId, points, reason, reference, amount, null);
+            this(merchantId, userId, points, reason, reference, amount, null, null);
+        }
+
+        /**
+         * Back-compat constructor for callers built against the pre-phone shape
+         * (account addressed by {@code userId} only). Every in-process caller —
+         * shop checkout, the ticketing burn, the public test surface — already
+         * holds the account, so it keeps addressing it by id.
+         */
+        public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
+                                 String reason, String reference, BigDecimal amount, String currency) {
+            this(merchantId, userId, points, reason, reference, amount, currency, null);
         }
     }
 

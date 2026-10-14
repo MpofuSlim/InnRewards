@@ -589,11 +589,27 @@ public class TransactionController {
                           "at a merchant they work for: SHOP_ADMIN / SHOP_USER at the merchant in their token " +
                           "(a body `merchantId` is ignored for them), MERCHANT_ADMIN at its organization's " +
                           "merchants, SUPER_ADMIN anywhere. A shop-staff burn is stamped with the caller's " +
-                          "`shopId`, so it appears in `GET /loyalty/transactions/my-shop`.")
+                          "`shopId`, so it appears in `GET /loyalty/transactions/my-shop`.\n\n" +
+                          "**Whose points: exactly one of `userId` / `assigneePhone`.** A till holds the " +
+                          "customer's phone, not their loyalty id, so it sends `assigneePhone` — any common " +
+                          "spelling (`0771234567`, `+263771234567`). Both or neither is 400 " +
+                          "RECIPIENT_REQUIRED (a blank phone counts as absent). The phone is resolved to the " +
+                          "customer's EXISTING account in the X-Tenant-Id tenant: an unknown phone is 404 and " +
+                          "a burn never creates an account; an unparseable one is 400 BAD_PHONE. Every rule " +
+                          "above then applies to the resolved account exactly as to a `userId`. A CUSTOMER " +
+                          "naming any phone but their own is 403 NOT_WALLET_OWNER, whether or not that number " +
+                          "has an account.\n\n" +
+                          "**`reference` is an idempotency key, bound to its customer.** A repeat with the " +
+                          "same (merchant, reference) for the SAME customer — by `userId` or by phone — " +
+                          "replays the original `transactionId` with the current balance and debits nothing. " +
+                          "The same reference for a DIFFERENT customer is 409 DUPLICATE_REFERENCE: nothing " +
+                          "moves and no balance is returned.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Points redeemed",
+                    description = "Points redeemed — or, for a repeated (merchant, reference) naming the SAME "
+                            + "customer, the original redemption replayed: its `transactionId`, the current "
+                            + "balance, and no second debit.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -612,18 +628,44 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation error, BAD_AMOUNT (points not greater than zero), WALLET_LOCKED, "
-                            + "or INSUFFICIENT_FUNDS when the wallet cannot cover the debit.",
+                    description = "Bean validation on the body (status-format \"400 BAD_REQUEST\" with the "
+                            + "offending field in `data`), or a domain code with `data` null: "
+                            + "RECIPIENT_REQUIRED (both or neither of `userId` / `assigneePhone`), BAD_PHONE "
+                            + "(`assigneePhone` is not a phone number), BAD_AMOUNT (neither points nor amount "
+                            + "greater than zero), RATE_MISMATCH, WALLET_LOCKED, or INSUFFICIENT_FUNDS when the "
+                            + "wallet cannot cover the debit. Branch on `code`.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Insufficient funds", value = """
+                            examples = {
+                                    @ExampleObject(name = "Insufficient funds", value = """
                                     {
                                       "code": "INSUFFICIENT_FUNDS",
                                       "message": "You don't have enough loyalty points for this.",
                                       "data": null
                                     }
-                                    """)
+                                    """),
+                                    @ExampleObject(name = "Both or neither of userId / assigneePhone", value = """
+                                    {
+                                      "code": "RECIPIENT_REQUIRED",
+                                      "message": "supply exactly one of userId or assigneePhone",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "assigneePhone is not a phone number", value = """
+                                    {
+                                      "code": "BAD_PHONE",
+                                      "message": "Invalid phone number: 0771-23",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Validation failed",
+                                      "data": { "points": "must be greater than 0" }
+                                    }
+                                    """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -631,8 +673,9 @@ public class TransactionController {
                     description = "The account can't spend right now: USER_PENDING (the phone hasn't been "
                             + "proved yet — the account keeps EARNING, it just can't spend), USER_BLOCKED "
                             + "(fraud hold; cleared only by POST /loyalty/users/{userId}/unblock) or "
-                            + "USER_INACTIVE. Also NOT_WALLET_OWNER when a CUSTOMER names an account that "
-                            + "isn't theirs, NOT_MERCHANT_OWNER when a staff caller (cashier, shop admin, "
+                            + "USER_INACTIVE. Also NOT_WALLET_OWNER when a CUSTOMER names an account — or "
+                            + "a phone, enrolled or not — that isn't theirs, NOT_MERCHANT_OWNER when a staff "
+                            + "caller (cashier, shop admin, "
                             + "merchant admin) burns at a merchant it does not work for, and CROSS_TENANT "
                             + "when the user or merchant belongs to another tenant. The merchant check runs "
                             + "BEFORE the spend gate, so a refused staff caller never learns the holder's "
@@ -675,33 +718,51 @@ public class TransactionController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "DUPLICATE_REFERENCE — the reference is already tied to a NON-redemption "
-                            + "transaction (e.g. an earn), so it can't be reused for a redemption. A genuine "
-                            + "duplicate redeem does NOT reach here: a sequential retry AND a concurrent "
-                            + "double-tap both return 200 with the original result and no second debit (the "
-                            + "double-tap is retried server-side into that replay). On this 409, do NOT reuse "
-                            + "the reference and do NOT treat it as a redemption — refetch the wallet to "
-                            + "confirm nothing moved under it.",
+                    description = "DUPLICATE_REFERENCE — the reference can't be used for THIS redemption: it "
+                            + "is already tied to a NON-redemption transaction (e.g. an earn), or to ANOTHER "
+                            + "customer's redemption at this merchant. Nothing is debited and no balance is "
+                            + "returned. A genuine duplicate redeem for the same customer does NOT reach here: "
+                            + "a sequential retry AND a concurrent double-tap both return 200 with the original "
+                            + "result and no second debit (the double-tap is retried server-side into that "
+                            + "replay). On this 409, do NOT reuse the reference and do NOT treat it as a "
+                            + "redemption — use a fresh reference for this customer's burn.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Reference used by a non-redemption transaction", value = """
+                            examples = {
+                                    @ExampleObject(name = "Reference used by a non-redemption transaction", value = """
                                     {
                                       "code": "DUPLICATE_REFERENCE",
                                       "message": "This reference is already used by a non-redemption transaction.",
                                       "data": null
                                     }
-                                    """)
+                                    """),
+                                    @ExampleObject(name = "Reference used by another customer's redemption", value = """
+                                    {
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "transaction with this merchant reference already exists",
+                                      "data": null
+                                    }
+                                    """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
-                    description = "The `userId` or the merchant does not exist.",
+                    description = "The `userId`, the `assigneePhone` or the merchant does not exist. A phone "
+                            + "is looked up in the X-Tenant-Id tenant only (a number enrolled elsewhere is "
+                            + "the same 404), and is never enrolled by a burn — earn to it first.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Unknown user", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "user not found",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "No account for this phone", value = """
                                     {
                                       "code": "404 NOT_FOUND",
                                       "message": "user not found",

@@ -324,8 +324,10 @@ A till has the phone, not the loyalty id, so it sends the phone instead
 - **An unknown phone is `404`, and nothing is created.** A burn spends what an
   account already holds; it never enrols a number. A customer who has never
   earned at this program has no account here — that is the 404.
-- A `CUSTOMER` token may only name **their own** phone (or id): anything else is
-  `403 NOT_WALLET_OWNER`, whether or not that number has an account.
+- A `CUSTOMER` token may only name **their own** phone: any other phone is
+  `403 NOT_WALLET_OWNER`, whether or not that number has an account. By id, the
+  id is looked up first — an unknown id is `404`, one in another tenant
+  `403 CROSS_TENANT`, and someone else's `403 NOT_WALLET_OWNER`.
 
 `merchantId` is ignored when the JWT already carries one (shop staff tokens do);
 it is required for `MERCHANT_ADMIN` and for a `CUSTOMER`.
@@ -365,21 +367,28 @@ The same `reference` sent for a **different** customer is
 `409 DUPLICATE_REFERENCE`: nothing is debited and no balance comes back. Give
 each customer's burn its own reference. (A replay does not compare the amount:
 resending a used reference with a different `points` / `amount` replays the
-ORIGINAL burn and debits nothing — don't reuse a reference for a second burn.)
+ORIGINAL burn and debits nothing — don't reuse a reference for a second burn.
+Nor does it check whether the original was since **reversed** by an admin: the
+resend still answers `200 "Points redeemed successfully"` with the reversed
+burn's `transactionId` and nothing debited, so never re-send an old receipt's
+reference to take a new discount.)
 
 | HTTP | `code` | Meaning |
 |---|---|---|
 | 400 | `RECIPIENT_REQUIRED` | both or neither of `userId` / `assigneePhone` |
 | 400 | `BAD_PHONE` | `assigneePhone` isn't a phone number |
-| 400 | `BAD_AMOUNT` | neither `points` nor `amount` greater than zero |
+| 400 | `BAD_AMOUNT` | neither `points` nor `amount` sent (a zero or negative value is the bean-validation 400) |
 | 400 | `RATE_MISMATCH` | `points` and `amount` both sent and they disagree |
 | 400 | `INSUFFICIENT_FUNDS` | not enough points |
 | 400 | `WALLET_LOCKED` | the wallet is temporarily locked |
 | 400 | `MERCHANT_REQUIRED` | no `merchantId` in the body and none on the token |
+| 400 | `UNSUPPORTED_CURRENCY` | `currency` (or the merchant's) isn't supported on this cell |
+| 400 | `NO_FX_RATE` | a non-USD currency with no exchange rate in force |
 | 400 | `400 BAD_REQUEST` | bean validation — the field is in `data` |
 | 403 | `USER_PENDING` / `USER_INACTIVE` / `USER_BLOCKED` | the account can't spend; show the `message` |
 | 403 | `NOT_WALLET_OWNER` | a customer named someone else's id or phone |
 | 403 | `NOT_MERCHANT_OWNER` | staff burning at a merchant they don't work for |
+| 403 | `CROSS_TENANT` | the `userId` or `merchantId` belongs to another tenant than `X-Tenant-Id` |
 | 404 | `404 NOT_FOUND` | no such account (`"user not found"` — id or phone) or merchant (`"merchant not found"`) |
 | 409 | `DUPLICATE_REFERENCE` | the reference belongs to an earn, or to another customer's redemption — use a fresh one |
 

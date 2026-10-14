@@ -504,8 +504,10 @@ public class Dtos {
             @Schema(example = "a3b9c1d2-1234-5678-9abc-def012345678", nullable = true,
                     description = "Idempotency key — a stable, caller-supplied reference for this logical " +
                                   "redemption (e.g. the booking id). A repeat redeem with the same " +
-                                  "(merchant, reference) replays the original instead of debiting the wallet " +
-                                  "again, so a retry can't double-spend. Omit for one-off redemptions.")
+                                  "(merchant, reference) for the SAME customer replays the original instead of " +
+                                  "debiting the wallet again, so a retry can't double-spend; the same reference " +
+                                  "for a DIFFERENT customer is 409 DUPLICATE_REFERENCE. Omit for one-off " +
+                                  "redemptions.")
             String reference,
             @Schema(example = "5.0000", nullable = true,
                     description = "Currency value to redeem (e.g. $5.00 off), expressed in `currency`. When " +
@@ -550,10 +552,10 @@ public class Dtos {
         }
 
         /**
-         * Back-compat constructor for callers built against the pre-phone shape
-         * (account addressed by {@code userId} only). Every in-process caller —
-         * shop checkout, the ticketing burn, the public test surface — already
-         * holds the account, so it keeps addressing it by id.
+         * Back-compat constructor for callers built against the pre-phone
+         * canonical shape (account addressed by {@code userId} only, with
+         * {@code amount} and {@code currency}). Omitting the phone means "the
+         * account is named by id", which is what those callers always meant.
          */
         public RedemptionRequest(UUID merchantId, UUID userId, BigDecimal points,
                                  String reason, String reference, BigDecimal amount, String currency) {

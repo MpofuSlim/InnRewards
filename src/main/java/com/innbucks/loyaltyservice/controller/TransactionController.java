@@ -609,7 +609,10 @@ public class TransactionController {
                     responseCode = "200",
                     description = "Points redeemed — or, for a repeated (merchant, reference) naming the SAME "
                             + "customer, the original redemption replayed: its `transactionId`, the current "
-                            + "balance, and no second debit.",
+                            + "balance, and no second debit. A replay compares neither the amount nor whether "
+                            + "the original was since reversed: a resend asking for a different amount, or "
+                            + "of a burn an admin has reversed, still answers this 200 with nothing debited — "
+                            + "never reuse a reference for a second burn.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -632,8 +635,11 @@ public class TransactionController {
                             + "offending field in `data`), or a domain code with `data` null: "
                             + "RECIPIENT_REQUIRED (both or neither of `userId` / `assigneePhone`), BAD_PHONE "
                             + "(`assigneePhone` is not a phone number), BAD_AMOUNT (neither points nor amount "
-                            + "greater than zero), RATE_MISMATCH, WALLET_LOCKED, or INSUFFICIENT_FUNDS when the "
-                            + "wallet cannot cover the debit. Branch on `code`.",
+                            + "sent — a zero or negative value is the bean-validation 400), MERCHANT_REQUIRED "
+                            + "(no `merchantId` in the body and none on the token), UNSUPPORTED_CURRENCY, "
+                            + "NO_FX_RATE (a non-USD currency with no in-force exchange rate), RATE_MISMATCH, "
+                            + "WALLET_LOCKED, or INSUFFICIENT_FUNDS when the wallet cannot cover the debit. "
+                            + "Branch on `code`.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),

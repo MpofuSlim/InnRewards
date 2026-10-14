@@ -896,8 +896,8 @@ whole design:
 A phone-scoped session authenticates the caller but does not tell them **who
 they are in loyalty's own tables**, and the spend endpoints are addressed by
 account UUID: `POST /loyalty/transfer` takes a `@NotNull fromUserId`,
-`POST /loyalty/redeem` a `@NotNull userId` (since 2026-10 it also takes the
-phone instead — see "Till flows"), and every tenant-scoped call needs
+`POST /loyalty/redeem` a `userId` (or, since 2026-10, the phone as
+`assigneePhone` — see "Till flows"), and every tenant-scoped call needs
 an `X-Tenant-Id`. An app holding a phone and a token has none of those, so the
 authenticated surface was documented but **not actually callable** — which is
 why the customer app was still on `/loyalty/public/**`. This endpoint closes
@@ -2421,6 +2421,18 @@ SUPER_ADMIN and would 403 a TENANT_ADMIN in their own tenant. Pinned by
   phone's balance. That is disclosure, not theft, and the POS displays it.
 - A MERCHANT_ADMIN on guest checkout is still bounded by tenant only, not by
   organization.
+- **A points burn needs no proof that the customer is present** (since the V58
+  cashier-burn decision below). A voucher redeem does — the customer reads out
+  the code — but `POST /loyalty/redeem` takes only an account: by `userId`
+  (which guest checkout's `loyaltyUserId` hands any till for any typed phone,
+  creating the projection if needed) and, since 2026-10, by phone directly. And
+  the wallet is ONE pool per phone across the whole super-app, so a cashier in
+  any program can burn a customer's points earned in every program: earn (or
+  guest-checkout) a cent to the phone to create the local projection, then burn.
+  The only controls are attribution (`posted_by`, the till's `shop_id` on the
+  row) and the customer's after-commit burn SMS. A presence factor (an OTP, a
+  customer-scanned confirmation) or a per-cashier burn ceiling like the
+  adjustment ceilings is an owner decision, not built.
 
 ## Till flows: cashier burn, shop-staff membership, QR shop + status (V58)
 
@@ -2446,27 +2458,41 @@ together.
   JWT path only (S2S burns keep their own attribution), so burns appear in
   `/transactions/my-shop`. Pinned by `CashierRedemptionTest` and `TillCashierFlowsIT`.
 - **The burn takes the PHONE a till has (`assigneePhone`, owner decision 2026-10).**
-  A till has no way to turn a phone into a loyalty `userId` (no lookup, and the
-  earn response carries none), so a `@NotNull userId` made the cashier burn
-  uncallable. `RedemptionRequest` now takes EXACTLY ONE of `userId` /
-  `assigneePhone` — the earn's names, and its `400 RECIPIENT_REQUIRED` "supply
-  exactly one of userId or assigneePhone" (a blank phone counts as absent). The
-  phone resolves through `UserService.requireByPhone` (tenant-scoped, any
-  spelling; unparseable is `400 BAD_PHONE`) and **never creates** — an unknown
-  phone is `404`, because a burn spends what an account holds and minting a
-  PENDING row would enrol whatever number a till mistyped. **Do not route it
-  through `findOrCreatePending`.** It resolves where the `userId` path resolves,
-  so every gate after it — `requireCallerMayRedeemFor`, the merchant pin, the
-  spend gate and the `EligibilityDeferral` replay (which re-runs the request and
-  so re-resolves the phone), the notification, the shop stamp — runs unchanged
-  on the resolved account. One addition: a CUSTOMER naming a phone that is not
+  A till has no plain phone → `userId` lookup (the earn response carries none),
+  so a `@NotNull userId` made the cashier burn impractical. **This is usability,
+  not new reach**: a cashier could already get any typed phone's id from guest
+  checkout's `loyaltyUserId` (which creates the projection if needed) and burn by
+  it, so never read `userId` as an access-control boundary on this endpoint (see
+  "Still open" in the cashier section above). `RedemptionRequest` now takes
+  EXACTLY ONE of `userId` / `assigneePhone` — the earn's names, and its
+  `400 RECIPIENT_REQUIRED` "supply exactly one of userId or assigneePhone" (a
+  blank phone counts as absent). The phone resolves through
+  `UserService.requireByPhone` (tenant-scoped, any spelling; unparseable is
+  `400 BAD_PHONE`) and **never creates** — an unknown phone is `404`, because a
+  burn spends what an account holds and minting a PENDING row would enrol
+  whatever number a till mistyped. **Do not route it through
+  `findOrCreatePending`.** It resolves where the `userId` path resolves, so every
+  gate after it — `requireCallerMayRedeemFor`, the merchant pin, the spend gate
+  and the `EligibilityDeferral` replay (which re-runs the request and so
+  re-resolves the phone), the notification, the shop stamp — runs unchanged on
+  the resolved account. One addition: a CUSTOMER naming a phone that is not
   their own is refused `NOT_WALLET_OWNER` BEFORE the lookup
   (`requireCallerMayRedeemForPhone`, which `requireCallerMayRedeemFor` delegates
   to), so 404-vs-403 never tells a customer whether someone else's number is
-  enrolled in a program. Staff are admitted by role either way and learn only
-  what a burn at their own merchant answers. In-process callers keep addressing
-  the account by id (the 7-arg constructor). Pinned by `PhoneKeyedRedemptionTest`,
-  `RedemptionServiceTest` and `PhoneKeyedBurnIT`.
+  enrolled in a program. Staff are admitted by role either way. **Accepted,
+  unmonitored:** for staff the burn is a per-phone probe of their own tenant —
+  `404` (no account here), `USER_PENDING` / `USER_BLOCKED` / `USER_INACTIVE`,
+  or `INSUFFICIENT_FUNDS` for an over-large `points` — that leaves no ledger
+  row, log line or metric (a refused burn rolls back). Shop and merchant admins
+  already read more (the id and the balance) from
+  `GET /reports/user/phone/{phone}`; what is new is that a SHOP_USER can probe
+  too, and that nothing records it. A till needs the 404, so it stays;
+  observing it (a refusal counter by reason) is a separate decision.
+  In-process callers (shop checkout, the ticketing burn, the public test
+  surface) keep addressing the account by id through the existing constructors;
+  the 7-arg one only keeps the pre-phone canonical shape compiling. Pinned by
+  `PhoneKeyedRedemptionTest`, `RedemptionServiceTest`, `PhoneKeyedBurnIT` and
+  `EligibilityDeferralIT`.
 - **A replayed redemption belongs to the customer it debited.** A repeat with the
   same `(merchant, reference)` replays the original — but it used to answer with
   the REQUEST's account's balance without ever comparing it with the stored
@@ -2475,15 +2501,23 @@ together.
   debit; with the phone-keyed burn that became a phone → balance oracle at every
   till. A different account is now `409 DUPLICATE_REFERENCE` ("transaction with
   this merchant reference already exists", the earn's message), refused before
-  any wallet is read; the same account replays as before, by id or by phone. A
-  double-tap race lost to ANOTHER customer's redemption retries once into that
-  same 409, never the winner's replay. **The check must stay ahead of the balance
-  read.** Deliberately NOT compared: points/amount. A same-customer resend asking
-  for a different amount replays the original, because the stored row holds the
-  debit COMPUTED from the request (amount → USD at the FX rate then in force →
-  whole points), not the request itself — comparing it would refuse an honest
-  retry after a rate move. Refusing a genuinely different resend needs a stored
-  request fingerprint, which is a separate change. Pinned by `RedemptionServiceTest`,
+  any wallet is read; the same account replays as before, by id or by phone. It
+  lives in `redeemPoints`, so it binds EVERY caller — the public staging
+  `/customers/{phone}/points/redeem` included (a reference reused for another
+  phone there is the same 409). A double-tap race lost to ANOTHER customer's
+  redemption retries once into that same 409, never the winner's replay. **The
+  check must stay ahead of the balance read.** Deliberately NOT compared:
+  points/amount. A same-customer resend asking for a different amount replays
+  the original, because the stored row holds the debit COMPUTED from the request
+  (amount → USD at the FX rate then in force → whole points), not the request
+  itself — comparing it would refuse an honest retry after a rate move. Refusing
+  a genuinely different resend needs a stored request fingerprint, which is a
+  separate change. **Also not checked, pre-existing:** the original's `status`.
+  A burn since REVERSED (its points credited back) still replays as a 200
+  "Points redeemed successfully" carrying the reversed `transactionId` and
+  nothing debited — so a till re-sending that receipt's reference gives the
+  discount for free. Whether to refuse it (409, or a dedicated code) is an
+  owner decision. Pinned by `RedemptionServiceTest`,
   `RedemptionServiceIdempotentRetryTest`, `PhoneKeyedRedemptionTest` and
   `PhoneKeyedBurnIT`.
 - **Shop staff are tenant members by MERCHANT.** `tenant_members` has no writer

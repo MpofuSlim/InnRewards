@@ -103,7 +103,8 @@ customer has transacted with:
 }
 ```
 
-`userId` is the **loyalty user id** the spend endpoints want (§4, §5) and
+`userId` is the **loyalty user id** the spend endpoints want (§4; §5 also
+accepts the customer's own phone as `assigneePhone` instead) and
 `tenantId` is what goes in `X-Tenant-Id`. `PENDING` rows are returned on
 purpose — that status is why a spend would be refused, so show it rather than
 hide the account. An empty `accounts` list is a normal `200` (never
@@ -290,6 +291,9 @@ Returns the sender's new balance.
 
 ### `POST /loyalty/redeem`
 
+Name whose points to burn with **exactly one** of `userId` (the loyalty user id,
+from `GET /loyalty/users/me`) or `assigneePhone` (the customer's phone):
+
 ```json
 {
   "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -300,8 +304,31 @@ Returns the sender's new balance.
 }
 ```
 
+A till has the phone, not the loyalty id, so it sends the phone instead
+(`merchantId` can be left out — the cashier's token carries it):
+
+```json
+{
+  "assigneePhone": "0771234567",
+  "points": 500.0000,
+  "reason": "Counter redemption",
+  "reference": "POS-20261014-0042"
+}
+```
+
+- **Both or neither is `400 RECIPIENT_REQUIRED`.** A blank `assigneePhone`
+  (`""`, spaces) counts as not sent.
+- **`assigneePhone` takes any common spelling** — `0771234567`, `771234567`,
+  `+263771234567` — and resolves to the customer's account **in the tenant on
+  the `X-Tenant-Id` header**. A number that isn't a phone is `400 BAD_PHONE`.
+- **An unknown phone is `404`, and nothing is created.** A burn spends what an
+  account already holds; it never enrols a number. A customer who has never
+  earned at this program has no account here — that is the 404.
+- A `CUSTOMER` token may only name **their own** phone (or id): anything else is
+  `403 NOT_WALLET_OWNER`, whether or not that number has an account.
+
 `merchantId` is ignored when the JWT already carries one (shop staff tokens do);
-it is required for `MERCHANT_ADMIN`.
+it is required for `MERCHANT_ADMIN` and for a `CUSTOMER`.
 
 You can send `amount` (+ optional `currency`, default the merchant's) instead of
 `points`: the server works out the points from the platform redemption rate.
@@ -309,14 +336,55 @@ Prefer it — it lets the platform, not the app, decide what a point is worth.
 Sending both is allowed only if they agree at the current rate
 (`RATE_MISMATCH` otherwise).
 
-A caller can only redeem from their own account (admins may act on behalf).
+A caller can only redeem from their own account; staff — the till's cashier
+included — act on a customer's behalf, at their own merchant only.
 The same `USER_PENDING` / `USER_INACTIVE` / `USER_BLOCKED` refusals as §4 apply.
 
-**`reference` is an idempotency key.** A repeat redeem with the same
-`(merchant, reference)` replays the original response instead of debiting the
-wallet again. Use the order/booking id. Generate it when the user taps
-*Redeem*, not when the request starts — a key regenerated per retry defeats the
-whole mechanism.
+Response:
+
+```json
+{
+  "code": "200 OK",
+  "message": "Points redeemed successfully",
+  "data": {
+    "status": "OK",
+    "transactionId": "44444444-5555-6666-7777-888888888888",
+    "newBalance": 4500.0000
+  }
+}
+```
+
+**`reference` is an idempotency key, and it belongs to one customer.** A repeat
+redeem with the same `(merchant, reference)` **for the same customer** — by id
+or by phone, either works — replays the original response (same
+`transactionId`, current balance) instead of debiting the wallet again. Use the
+order/booking/receipt id. Generate it when the user taps *Redeem*, not when the
+request starts — a key regenerated per retry defeats the whole mechanism.
+
+The same `reference` sent for a **different** customer is
+`409 DUPLICATE_REFERENCE`: nothing is debited and no balance comes back. Give
+each customer's burn its own reference. (A replay does not compare the amount:
+resending a used reference with a different `points` / `amount` replays the
+ORIGINAL burn and debits nothing — don't reuse a reference for a second burn.)
+
+| HTTP | `code` | Meaning |
+|---|---|---|
+| 400 | `RECIPIENT_REQUIRED` | both or neither of `userId` / `assigneePhone` |
+| 400 | `BAD_PHONE` | `assigneePhone` isn't a phone number |
+| 400 | `BAD_AMOUNT` | neither `points` nor `amount` greater than zero |
+| 400 | `RATE_MISMATCH` | `points` and `amount` both sent and they disagree |
+| 400 | `INSUFFICIENT_FUNDS` | not enough points |
+| 400 | `WALLET_LOCKED` | the wallet is temporarily locked |
+| 400 | `MERCHANT_REQUIRED` | no `merchantId` in the body and none on the token |
+| 400 | `400 BAD_REQUEST` | bean validation — the field is in `data` |
+| 403 | `USER_PENDING` / `USER_INACTIVE` / `USER_BLOCKED` | the account can't spend; show the `message` |
+| 403 | `NOT_WALLET_OWNER` | a customer named someone else's id or phone |
+| 403 | `NOT_MERCHANT_OWNER` | staff burning at a merchant they don't work for |
+| 404 | `404 NOT_FOUND` | no such account (`"user not found"` — id or phone) or merchant (`"merchant not found"`) |
+| 409 | `DUPLICATE_REFERENCE` | the reference belongs to an earn, or to another customer's redemption — use a fresh one |
+
+Top-level only: there are no per-field errors on this endpoint other than bean
+validation's `data`.
 
 ---
 
@@ -602,6 +670,12 @@ around these rules:
   cashier's own, every `code` is `null`. Show that the customer has a voucher
   (value, expiry, sender) and **ask the customer for the code** from their
   WhatsApp/SMS/app, then redeem it (§8). Don't build "tap a voucher to redeem".
+- **Burn points by the customer's phone.** `POST /loyalty/redeem` with
+  `assigneePhone` (as typed) and no `userId` — §5. An unknown phone is `404`:
+  the customer has no points here yet, nothing was created, nothing moved.
+  Each burn gets its own `reference` (the receipt number); resending it for the
+  same customer replays, for a different customer it is
+  `409 DUPLICATE_REFERENCE`.
 - **No voucher transfer, no QR consume.** Both answer `403 FORBIDDEN`
   (`"You don't have permission to do that."`). Hide the actions.
 - **The cashier's shop is on their login token.** Decode the JWT payload and
@@ -684,7 +758,9 @@ stub. There is no airtime conversion.
 - [ ] Get loyalty user ids and tenant ids from `GET /loyalty/users/me`
 - [ ] Vouchers expire, points do not
 - [ ] Disable *Send* on an already-transferred voucher — one hop only
-- [ ] Idempotency `reference` generated on user intent, not per retry
+- [ ] Idempotency `reference` generated on user intent, not per retry — and one
+      per customer: a redeem `reference` reused for another customer is a 409
+- [ ] Redeem names exactly one of `userId` / `assigneePhone`; a till sends the phone
 - [ ] Send `deviceFingerprint` on voucher redemption
 - [ ] Till app: no codes from the by-phone list, no transfer, no QR consume,
       guest checkout on the cashier's own shop only (§10)

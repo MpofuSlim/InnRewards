@@ -896,7 +896,8 @@ whole design:
 A phone-scoped session authenticates the caller but does not tell them **who
 they are in loyalty's own tables**, and the spend endpoints are addressed by
 account UUID: `POST /loyalty/transfer` takes a `@NotNull fromUserId`,
-`POST /loyalty/redeem` a `@NotNull userId`, and every tenant-scoped call needs
+`POST /loyalty/redeem` a `@NotNull userId` (since 2026-10 it also takes the
+phone instead — see "Till flows"), and every tenant-scoped call needs
 an `X-Tenant-Id`. An app holding a phone and a token has none of those, so the
 authenticated surface was documented but **not actually callable** — which is
 why the customer app was still on `/loyalty/public/**`. This endpoint closes
@@ -2444,6 +2445,47 @@ together.
   on its own wallet. The REDEMPTION row carries the caller's token `shopId` on the
   JWT path only (S2S burns keep their own attribution), so burns appear in
   `/transactions/my-shop`. Pinned by `CashierRedemptionTest` and `TillCashierFlowsIT`.
+- **The burn takes the PHONE a till has (`assigneePhone`, owner decision 2026-10).**
+  A till has no way to turn a phone into a loyalty `userId` (no lookup, and the
+  earn response carries none), so a `@NotNull userId` made the cashier burn
+  uncallable. `RedemptionRequest` now takes EXACTLY ONE of `userId` /
+  `assigneePhone` — the earn's names, and its `400 RECIPIENT_REQUIRED` "supply
+  exactly one of userId or assigneePhone" (a blank phone counts as absent). The
+  phone resolves through `UserService.requireByPhone` (tenant-scoped, any
+  spelling; unparseable is `400 BAD_PHONE`) and **never creates** — an unknown
+  phone is `404`, because a burn spends what an account holds and minting a
+  PENDING row would enrol whatever number a till mistyped. **Do not route it
+  through `findOrCreatePending`.** It resolves where the `userId` path resolves,
+  so every gate after it — `requireCallerMayRedeemFor`, the merchant pin, the
+  spend gate and the `EligibilityDeferral` replay (which re-runs the request and
+  so re-resolves the phone), the notification, the shop stamp — runs unchanged
+  on the resolved account. One addition: a CUSTOMER naming a phone that is not
+  their own is refused `NOT_WALLET_OWNER` BEFORE the lookup
+  (`requireCallerMayRedeemForPhone`, which `requireCallerMayRedeemFor` delegates
+  to), so 404-vs-403 never tells a customer whether someone else's number is
+  enrolled in a program. Staff are admitted by role either way and learn only
+  what a burn at their own merchant answers. In-process callers keep addressing
+  the account by id (the 7-arg constructor). Pinned by `PhoneKeyedRedemptionTest`,
+  `RedemptionServiceTest` and `PhoneKeyedBurnIT`.
+- **A replayed redemption belongs to the customer it debited.** A repeat with the
+  same `(merchant, reference)` replays the original — but it used to answer with
+  the REQUEST's account's balance without ever comparing it with the stored
+  REDEMPTION's `userId`, so a staff caller could resend a known reference with
+  any spendable account at its merchant and read that customer's balance with no
+  debit; with the phone-keyed burn that became a phone → balance oracle at every
+  till. A different account is now `409 DUPLICATE_REFERENCE` ("transaction with
+  this merchant reference already exists", the earn's message), refused before
+  any wallet is read; the same account replays as before, by id or by phone. A
+  double-tap race lost to ANOTHER customer's redemption retries once into that
+  same 409, never the winner's replay. **The check must stay ahead of the balance
+  read.** Deliberately NOT compared: points/amount. A same-customer resend asking
+  for a different amount replays the original, because the stored row holds the
+  debit COMPUTED from the request (amount → USD at the FX rate then in force →
+  whole points), not the request itself — comparing it would refuse an honest
+  retry after a rate move. Refusing a genuinely different resend needs a stored
+  request fingerprint, which is a separate change. Pinned by `RedemptionServiceTest`,
+  `RedemptionServiceIdempotentRetryTest`, `PhoneKeyedRedemptionTest` and
+  `PhoneKeyedBurnIT`.
 - **Shop staff are tenant members by MERCHANT.** `tenant_members` has no writer
   that can add a cashier, so every tenant-scoped till call was a 403.
   `TenantContext` now admits a SHOP_USER / SHOP_ADMIN whose `merchantId` claim

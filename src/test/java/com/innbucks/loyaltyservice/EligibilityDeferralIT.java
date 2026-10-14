@@ -225,6 +225,22 @@ class EligibilityDeferralIT extends ControllerSecurityTestBase {
                         """.formatted(merchantId, userId, points)));
     }
 
+    /** A cashier of this merchant burning 100 points by the phone it typed. */
+    private org.springframework.test.web.servlet.ResultActions cashierBurnsByPhone(String typedPhone,
+                                                                                String reference)
+            throws Exception {
+        String till = TestJwtFactory.builder("cashier-" + UUID.randomUUID() + "@test.local")
+                .role("SHOP_USER").merchantId(merchantId).shopId(UUID.randomUUID())
+                .phoneNumber("+263779990021").sign(jwtSecret);
+        return mockMvc.perform(post("/loyalty/redeem")
+                .header("Authorization", bearer(till))
+                .header("X-Tenant-Id", tenantId.toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"assigneePhone":"%s","points":100,"reason":"till burn","reference":"%s"}
+                        """.formatted(typedPhone, reference)));
+    }
+
     private Dtos.VoucherResponse issueVoucherToPhone() {
         return voucherService.issue(tenantId, new Dtos.IssueVoucherRequest(
                 merchantId, null, new BigDecimal("5"), "USD", null,
@@ -266,6 +282,40 @@ class EligibilityDeferralIT extends ControllerSecurityTestBase {
         assertThat(reg.getSource()).isEqualTo(PhoneRegistration.Source.INNBUCKS_VALIDATE);
         assertThat(reg.getSourceRef()).isEqualTo("on-demand-spend");
         assertThat(loyaltyUsers.findById(userId).orElseThrow().getStatus()).isEqualTo(LoyaltyUser.Status.ACTIVE);
+    }
+
+    /**
+     * The phone-keyed burn through the deferral: the phone is resolved INSIDE the
+     * replayed call, so the replay looks it up again and lands on the account the
+     * first attempt found — now registered. A resend in another spelling is then
+     * the same customer's replay: no second debit, no second directory call.
+     */
+    @Test
+    void pointsRedeemByPhone_cashier_isAskedOutsideTheTransaction_andTheReplayReResolvesThePhone()
+            throws Exception {
+        String reference = "POS-" + UUID.randomUUID();
+        String typed = "0" + phone.substring(4); // the national spelling a cashier types
+
+        String first = cashierBurnsByPhone(typed, reference)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.newBalance").value(900))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(directoryCalls).containsExactly("tx=false");
+        PhoneRegistration reg = registration();
+        assertThat(reg).isNotNull();
+        assertThat(reg.getSource()).isEqualTo(PhoneRegistration.Source.INNBUCKS_VALIDATE);
+        assertThat(loyaltyUsers.findById(userId).orElseThrow().getStatus()).isEqualTo(LoyaltyUser.Status.ACTIVE);
+        assertThat(loyaltyUsers.findAll()).filteredOn(u -> phone.equals(u.getPhoneNumber())).hasSize(1);
+
+        String txId = com.jayway.jsonpath.JsonPath.read(first, "$.data.transactionId");
+        cashierBurnsByPhone(phone, reference)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.transactionId").value(txId))
+                .andExpect(jsonPath("$.data.newBalance").value(900));
+
+        assertThat(directoryCalls).as("the resend is ACTIVE: no second ask").hasSize(1);
+        assertThat(walletService.mainWallet(phone).getBalance()).isEqualByComparingTo("900");
     }
 
     @Test

@@ -134,4 +134,180 @@ class RedemptionServiceTest {
         verify(transactions, never()).save(any());
         verify(transactions, never()).saveAndFlush(any());
     }
+
+    // ---- the idempotent replay is bound to the account it debited ----
+
+    private LoyaltyUser stubSpendableUser(UUID id, String phone) {
+        LoyaltyUser u = new LoyaltyUser();
+        u.setId(id);
+        u.setTenantId(TENANT);
+        u.setPhoneNumber(phone);
+        when(users.require(TENANT, id)).thenReturn(u);
+        com.innbucks.loyaltyservice.entity.Merchant m = new com.innbucks.loyaltyservice.entity.Merchant();
+        m.setId(MERCHANT);
+        m.setCurrency("USD");
+        when(merchants.requireMerchant(TENANT, MERCHANT)).thenReturn(m);
+        return u;
+    }
+
+    private void stubPriorRedemption(UUID owner) {
+        com.innbucks.loyaltyservice.entity.LoyaltyTransaction prior =
+                new com.innbucks.loyaltyservice.entity.LoyaltyTransaction();
+        prior.setId(UUID.fromString("44444444-5555-6666-7777-888888888888"));
+        prior.setType(com.innbucks.loyaltyservice.entity.TransactionType.REDEMPTION);
+        prior.setMerchantId(MERCHANT);
+        prior.setUserId(owner);
+        prior.setReference("ref-1");
+        when(transactions.findFirstByMerchantIdAndReference(MERCHANT, "ref-1"))
+                .thenReturn(java.util.Optional.of(prior));
+    }
+
+    @Test
+    void replay_forTheSameCustomer_returnsTheOriginal_withNoSecondDebit() {
+        stubSpendableUser(USER, "+263771230001");
+        stubPriorRedemption(USER);
+        com.innbucks.loyaltyservice.entity.Wallet w = new com.innbucks.loyaltyservice.entity.Wallet();
+        w.setBalance(new BigDecimal("900"));
+        when(walletService.mainWallet("+263771230001")).thenReturn(w);
+
+        RedemptionService.RedemptionResult r = service.redeemPoints(TENANT, MERCHANT, req());
+
+        org.assertj.core.api.Assertions.assertThat(r.transactionId())
+                .isEqualTo(UUID.fromString("44444444-5555-6666-7777-888888888888"));
+        org.assertj.core.api.Assertions.assertThat(r.balance()).isEqualByComparingTo("900");
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+        verify(transactions, never()).save(any());
+        verify(transactions, never()).saveAndFlush(any());
+    }
+
+    /**
+     * The oracle this closes: a staff caller resending a known REDEMPTION
+     * reference with ANOTHER spendable account used to get a 200 carrying that
+     * account's balance and no debit. Now a 409, and no wallet is even read —
+     * neither the requested account's nor the original's.
+     */
+    @Test
+    void replay_forADifferentCustomer_is409_withNoDebit_andNoBalanceRead() {
+        stubSpendableUser(USER, "+263771230001");
+        stubPriorRedemption(UUID.randomUUID()); // the reference belongs to someone else
+
+        assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req(), true))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    org.assertj.core.api.Assertions.assertThat(ex.getCode()).isEqualTo("DUPLICATE_REFERENCE");
+                    org.assertj.core.api.Assertions.assertThat(ex.getStatus())
+                            .isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                    org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                            .isEqualTo("transaction with this merchant reference already exists");
+                });
+
+        verify(walletService, never()).mainWallet(any());
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+        verify(transactions, never()).save(any());
+        verify(transactions, never()).saveAndFlush(any());
+        verifyNoInteractions(memberNotifier);
+    }
+
+    // ---- exactly one of userId / assigneePhone ----
+
+    private static Dtos.RedemptionRequest byBoth(UUID userId, String phone) {
+        return new Dtos.RedemptionRequest(MERCHANT, userId, new BigDecimal("100"), "reason", "ref-1",
+                null, null, phone);
+    }
+
+    @Test
+    void bothUserIdAndPhone_isRecipientRequired_andNothingIsLookedUp() {
+        assertRecipientRequired(byBoth(USER, "+263771230001"));
+    }
+
+    @Test
+    void neitherUserIdNorPhone_isRecipientRequired() {
+        assertRecipientRequired(byBoth(null, null));
+    }
+
+    @Test
+    void aBlankPhoneAlone_countsAsAbsent_andIsRecipientRequired() {
+        assertRecipientRequired(byBoth(null, "   "));
+    }
+
+    @Test
+    void aBlankPhoneBesideAUserId_countsAsAbsent_andTheUserIdPathRuns() {
+        stubSpendableUser(USER, "+263771230001");
+        stubPriorRedemption(USER);
+        com.innbucks.loyaltyservice.entity.Wallet w = new com.innbucks.loyaltyservice.entity.Wallet();
+        w.setBalance(new BigDecimal("900"));
+        when(walletService.mainWallet("+263771230001")).thenReturn(w);
+
+        service.redeemPoints(TENANT, MERCHANT, byBoth(USER, ""));
+
+        verify(users).require(TENANT, USER);
+        verify(users, never()).requireByPhone(any(), any());
+        verify(users, never()).normalizePhone(any());
+    }
+
+    private void assertRecipientRequired(Dtos.RedemptionRequest req) {
+        assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, req, true))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    org.assertj.core.api.Assertions.assertThat(ex.getCode()).isEqualTo("RECIPIENT_REQUIRED");
+                    org.assertj.core.api.Assertions.assertThat(ex.getStatus())
+                            .isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST);
+                    org.assertj.core.api.Assertions.assertThat(ex.getMessage())
+                            .isEqualTo("supply exactly one of userId or assigneePhone");
+                });
+        verifyNoInteractions(users, merchants, walletService, transactions, merchantAuthz);
+    }
+
+    // ---- the phone path ----
+
+    @Test
+    void thePhonePath_resolvesThroughRequireByPhone_andNeverCreatesAnAccount() {
+        LoyaltyUser holder = stubSpendableUser(USER, "+263771230001");
+        when(users.normalizePhone("0771230001")).thenReturn("+263771230001");
+        when(users.requireByPhone(TENANT, "+263771230001")).thenReturn(holder);
+        stubPriorRedemption(USER);
+        com.innbucks.loyaltyservice.entity.Wallet w = new com.innbucks.loyaltyservice.entity.Wallet();
+        w.setBalance(new BigDecimal("900"));
+        when(walletService.mainWallet("+263771230001")).thenReturn(w);
+
+        service.redeemPoints(TENANT, MERCHANT, byBoth(null, "0771230001"), true);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(users);
+        order.verify(users).normalizePhone("0771230001");
+        order.verify(users).requireCallerMayRedeemForPhone("+263771230001");
+        order.verify(users).requireByPhone(TENANT, "+263771230001");
+        // Every existing gate then runs on the RESOLVED account.
+        order.verify(users).requireCallerMayRedeemFor(holder);
+        order.verify(users).requireSpendable(holder);
+        verify(users, never()).findOrCreatePending(any(), any(), any());
+        verify(users, never()).findOrEnrol(any(), any(), any());
+        verify(users, never()).require(any(), any());
+    }
+
+    @Test
+    void thePhonePath_unknownPhone_is404_andNothingElseRuns() {
+        when(users.normalizePhone("+263771239999")).thenReturn("+263771239999");
+        when(users.requireByPhone(TENANT, "+263771239999")).thenThrow(LoyaltyException.notFound("user"));
+
+        assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, byBoth(null, "+263771239999"), true))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    org.assertj.core.api.Assertions.assertThat(ex.getCode()).isEqualTo("404 NOT_FOUND");
+                    org.assertj.core.api.Assertions.assertThat(ex.getMessage()).isEqualTo("user not found");
+                });
+        verify(users, never()).findOrCreatePending(any(), any(), any());
+        verifyNoInteractions(merchants, walletService, transactions, merchantAuthz);
+    }
+
+    @Test
+    void theS2sPhonePath_skipsTheCallerCheck_likeTheUserIdPath() {
+        LoyaltyUser holder = stubSpendableUser(USER, "+263771230001");
+        when(users.normalizePhone("+263771230001")).thenReturn("+263771230001");
+        when(users.requireByPhone(TENANT, "+263771230001")).thenReturn(holder);
+        doThrow(LoyaltyException.forbidden("USER_PENDING", "stub")).when(users).requireSpendable(holder);
+
+        assertThatThrownBy(() -> service.redeemPoints(TENANT, MERCHANT, byBoth(null, "+263771230001")))
+                .isInstanceOf(LoyaltyException.class);
+
+        verify(users, never()).requireCallerMayRedeemForPhone(any());
+        verify(users, never()).requireCallerMayRedeemFor(any());
+        verifyNoInteractions(merchantAuthz);
+    }
 }

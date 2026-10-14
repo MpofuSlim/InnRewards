@@ -400,8 +400,10 @@ public class PublicTestController {
 
                     `merchantId` may be omitted when the tenant has exactly one merchant (the usual case \
                     on a test cell) or when `LOYALTY_PUBLIC_TEST_MERCHANT_ID` is pinned; otherwise supply \
-                    it. `reference` is an idempotency key — a repeat with the same (merchant, reference) \
-                    replays the original instead of debiting twice.
+                    it. `reference` is an idempotency key, bound to its customer: a repeat with the same \
+                    (merchant, reference) for the SAME phone replays the original instead of debiting twice; \
+                    the same reference for a DIFFERENT phone is 409 `DUPLICATE_REFERENCE` (nothing moves, no \
+                    balance is returned), as is a reference already used by a non-redemption transaction.
 
                     **Authenticated equivalent:** `POST /loyalty/redeem`.""")
     @ApiResponses({
@@ -425,7 +427,28 @@ public class PublicTestController {
                                 + "pin LOYALTY_PUBLIC_TEST_MERCHANT_ID). The TENANT is resolved for "
                                 + "you and no longer returns AMBIGUOUS_TENANT."),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404", description = "Public test endpoints are disabled, or no such customer")
+                    responseCode = "404", description = "Public test endpoints are disabled, or no such customer"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "DUPLICATE_REFERENCE — the reference is already tied to ANOTHER phone's "
+                                + "redemption at this merchant, or to a non-redemption transaction. Nothing is "
+                                + "debited and no balance is returned; use a fresh reference.",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Reference used by another customer's redemption", value = """
+                                    {
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "transaction with this merchant reference already exists",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Reference used by a non-redemption transaction", value = """
+                                    {
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "This reference is already used by a non-redemption transaction.",
+                                      "data": null
+                                    }
+                                    """)}))
     })
     public ResponseEntity<ApiResult<Map<String, Object>>> redeemPoints(
             @Parameter(description = "Customer phone in E.164 form", example = "+263771234567")
@@ -753,7 +776,8 @@ public class PublicTestController {
             @io.swagger.v3.oas.annotations.media.Schema(example = "Counter redemption", nullable = true)
             @jakarta.validation.constraints.Size(max = 1000) String reason,
             @io.swagger.v3.oas.annotations.media.Schema(example = "ORDER-4471", nullable = true,
-                    description = "Idempotency key — a repeat with the same value replays the original.")
+                    description = "Idempotency key — a repeat with the same value for the same phone replays "
+                            + "the original; the same value for a different phone is 409 DUPLICATE_REFERENCE.")
             String reference) {}
 
     public record PublicVoucherTransferRequest(

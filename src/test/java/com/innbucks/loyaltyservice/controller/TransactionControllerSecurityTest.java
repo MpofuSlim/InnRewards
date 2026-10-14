@@ -305,6 +305,40 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
+    void shop_user_can_post_redeem_by_phone_with_no_userId() throws Exception {
+        // The till holds the customer's phone, never their loyalty id: a body
+        // with assigneePhone alone must clear bean validation (userId is no
+        // longer @NotNull) and reach the service with the phone intact.
+        UUID tenant = newTenant("txn-shopuser-redeem-phone");
+        joinTenant(tenant, "till-user@test.local");
+        UUID merchant = UUID.randomUUID();
+        UUID shop = UUID.randomUUID();
+
+        when(redemptionService.redeemPointsIdempotent(any(UUID.class), any(UUID.class),
+                any(com.innbucks.loyaltyservice.dto.Dtos.RedemptionRequest.class),
+                org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(new com.innbucks.loyaltyservice.service.RedemptionService.RedemptionResult(
+                        UUID.randomUUID(), new java.math.BigDecimal("4500.0000")));
+
+        String token = TestJwtFactory.shopUser("till-user@test.local", merchant, shop, jwtSecret);
+        mockMvc.perform(post("/loyalty/redeem")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"assigneePhone":"0771234567","points":500.0,"reference":"POS-1"}
+                                """))
+                .andExpect(status().isOk());
+
+        var captured = org.mockito.ArgumentCaptor.forClass(com.innbucks.loyaltyservice.dto.Dtos.RedemptionRequest.class);
+        org.mockito.Mockito.verify(redemptionService).redeemPointsIdempotent(
+                org.mockito.ArgumentMatchers.eq(tenant), org.mockito.ArgumentMatchers.eq(merchant),
+                captured.capture(), org.mockito.ArgumentMatchers.eq(true));
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().userId()).isNull();
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().assigneePhone()).isEqualTo("0771234567");
+    }
+
+    @Test
     void shop_user_cannot_reverse_transaction() throws Exception {
         // SHOP_USER is deliberately NOT allowed to reverse — refund / void is a
         // supervisor (SHOP_ADMIN+) call. Keeps junior staff from undoing money.

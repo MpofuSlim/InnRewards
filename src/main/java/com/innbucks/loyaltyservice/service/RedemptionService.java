@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.util.AfterCommit;
 import com.innbucks.loyaltyservice.config.LoyaltyMetrics;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
+import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
@@ -87,11 +88,13 @@ public class RedemptionService {
      * any second insert. A second, unexpected race is allowed to propagate as the
      * original 409.
      *
-     * <p>Only {@link RedemptionRaceException} is retried. The cross-type pre-check
-     * conflict (a plain {@link LoyaltyException}, same 409 code, thrown BEFORE any
-     * insert when the reference belongs to a non-redemption transaction) is a
-     * genuine error and propagates on the first attempt — retrying it would loop
-     * and could mask a real collision as success.
+     * <p>Only {@link RedemptionRaceException} is retried. The pre-check conflicts
+     * (plain {@link LoyaltyException}s, same 409 code, thrown BEFORE any insert
+     * when the reference belongs to a non-redemption transaction, or to ANOTHER
+     * customer's redemption) are genuine errors and propagate on the first
+     * attempt — retrying them would loop and could mask a real collision as
+     * success. A race lost to another customer's redemption retries once and
+     * then meets that second conflict: a 409, never the winner's replay.
      *
      * <p>In-process callers (shop-checkout, ticketing) deliberately do NOT use
      * this wrapper: they join {@code redeemPoints}' transaction, so a race there
@@ -139,7 +142,18 @@ public class RedemptionService {
             throw LoyaltyException.badRequest("BAD_AMOUNT",
                     "Provide points, or a currency amount, greater than zero.");
         }
-        var u = users.require(tenantId, req.userId());
+        // The account is named by EXACTLY ONE of userId / assigneePhone — the
+        // earn's rule, code and message (a blank phone counts as absent, as
+        // there). A till has the customer's phone, never their loyalty id.
+        boolean hasUserId = req.userId() != null;
+        boolean hasPhone = req.assigneePhone() != null && !req.assigneePhone().isBlank();
+        if (hasUserId == hasPhone) {
+            throw LoyaltyException.badRequest("RECIPIENT_REQUIRED",
+                    "supply exactly one of userId or assigneePhone");
+        }
+        var u = hasUserId
+                ? users.require(tenantId, req.userId())
+                : resolveByPhone(tenantId, req.assigneePhone(), enforceCallerOwnership);
         // A JWT caller (CUSTOMER) may only redeem their OWN balance; staff —
         // the till's cashier (SHOP_USER) included, owner decision 2026-10 — may
         // act on behalf. Without this a logged-in customer could burn — or, via
@@ -177,6 +191,19 @@ public class RedemptionService {
             if (existing.isPresent()) {
                 LoyaltyTransaction prior = existing.get();
                 if (prior.getType() == TransactionType.REDEMPTION) {
+                    // A replay belongs to the account the ORIGINAL debited. The
+                    // reference names one redemption, and only that redemption's
+                    // customer may be answered with it. Checked BEFORE any wallet
+                    // is read: replaying for whoever this request names would hand
+                    // back THEIR balance with no debit — a staff caller resending
+                    // a known reference with another spendable account (or, on the
+                    // phone-keyed burn, another phone) would read any customer's
+                    // balance at its merchant. Same code and message as the earn's
+                    // reused reference; nothing moves and nothing is revealed.
+                    if (!u.getId().equals(prior.getUserId())) {
+                        throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
+                                "transaction with this merchant reference already exists");
+                    }
                     // Same logical redemption already happened — replay it, no second debit.
                     return new RedemptionResult(prior.getId(),
                             walletService.mainWallet(u.getPhoneNumber()).getBalance());
@@ -295,5 +322,27 @@ public class RedemptionService {
         String phone = u.getPhoneNumber();
         AfterCommit.run(() -> memberNotifier.notifyPointsRedeemed(phone, pointsToDebit, balance));
         return new RedemptionResult(t.getId(), balance);
+    }
+
+    /**
+     * The phone-keyed burn's account: the EXISTING projection for this phone in
+     * this tenant, through {@link UserService#requireByPhone} — never
+     * {@code findOrCreatePending}. A burn spends what an account holds, so a
+     * phone with no account is a 404 and nothing is created: minting a PENDING
+     * row here would enrol whatever number a till mistyped. Every gate after
+     * this point runs on the resolved account exactly as on the userId path.
+     *
+     * <p>On the JWT path a CUSTOMER naming another phone is refused BEFORE the
+     * lookup, with the refusal {@code requireCallerMayRedeemFor} would give the
+     * resolved account — so the 404 for an unknown phone can never tell a
+     * customer whether someone else's number is enrolled. Staff are admitted by
+     * role either way, and learn only what a burn at their own merchant answers.
+     */
+    private LoyaltyUser resolveByPhone(UUID tenantId, String rawPhone, boolean enforceCallerOwnership) {
+        String phone = users.normalizePhone(rawPhone); // 400 BAD_PHONE, as on the earn
+        if (enforceCallerOwnership) {
+            users.requireCallerMayRedeemForPhone(phone);
+        }
+        return users.requireByPhone(tenantId, phone);
     }
 }

@@ -91,6 +91,7 @@ class RedemptionServiceIdempotentRetryTest {
         LoyaltyTransaction winner = new LoyaltyTransaction();
         winner.setId(UUID.randomUUID());
         winner.setType(TransactionType.REDEMPTION);
+        winner.setUserId(USER); // the double-tap: the SAME customer's redemption
         // Attempt 1 pre-check misses; attempt 2 (the retry) finds the winner.
         when(transactions.findFirstByMerchantIdAndReference(MERCHANT, REF))
                 .thenReturn(Optional.empty())
@@ -114,6 +115,32 @@ class RedemptionServiceIdempotentRetryTest {
         verify(transactions, times(2)).findFirstByMerchantIdAndReference(MERCHANT, REF);
         verify(transactions, times(1)).saveAndFlush(any());
         // No debit on either attempt: attempt 1 died at flush; attempt 2 replayed.
+        verify(walletService, never()).apply(any(), any(), any(), anyString(), any());
+    }
+
+    @Test
+    void raceLostToAnotherCustomersRedemption_retriesOnce_into409_neverTheirReplay() {
+        stubUserAndMerchant();
+
+        LoyaltyTransaction winner = new LoyaltyTransaction();
+        winner.setId(UUID.randomUUID());
+        winner.setType(TransactionType.REDEMPTION);
+        winner.setUserId(UUID.randomUUID()); // someone else won the reference
+        when(transactions.findFirstByMerchantIdAndReference(MERCHANT, REF))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winner));
+        when(transactions.saveAndFlush(any()))
+                .thenThrow(new DataIntegrityViolationException("uq_txn_merchant_reference"));
+
+        assertThatThrownBy(() -> service.redeemPointsIdempotent(TENANT, MERCHANT, req(), false))
+                .isInstanceOfSatisfying(LoyaltyException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo("DUPLICATE_REFERENCE");
+                    assertThat(ex.getMessage()).isEqualTo("transaction with this merchant reference already exists");
+                    assertThat(ex).isNotInstanceOf(RedemptionRaceException.class);
+                });
+        // Retried once into the pre-check, which refused before reading any wallet.
+        verify(transactions, times(2)).findFirstByMerchantIdAndReference(MERCHANT, REF);
+        verify(walletService, never()).mainWallet(any());
         verify(walletService, never()).apply(any(), any(), any(), anyString(), any());
     }
 

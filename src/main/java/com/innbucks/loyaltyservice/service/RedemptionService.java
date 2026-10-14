@@ -87,11 +87,13 @@ public class RedemptionService {
      * any second insert. A second, unexpected race is allowed to propagate as the
      * original 409.
      *
-     * <p>Only {@link RedemptionRaceException} is retried. The cross-type pre-check
-     * conflict (a plain {@link LoyaltyException}, same 409 code, thrown BEFORE any
-     * insert when the reference belongs to a non-redemption transaction) is a
-     * genuine error and propagates on the first attempt — retrying it would loop
-     * and could mask a real collision as success.
+     * <p>Only {@link RedemptionRaceException} is retried. The pre-check conflicts
+     * (plain {@link LoyaltyException}s, same 409 code, thrown BEFORE any insert
+     * when the reference belongs to a non-redemption transaction, or to ANOTHER
+     * customer's redemption) are genuine errors and propagate on the first
+     * attempt — retrying them would loop and could mask a real collision as
+     * success. A race lost to another customer's redemption retries once and
+     * then meets that second conflict: a 409, never the winner's replay.
      *
      * <p>In-process callers (shop-checkout, ticketing) deliberately do NOT use
      * this wrapper: they join {@code redeemPoints}' transaction, so a race there
@@ -177,6 +179,19 @@ public class RedemptionService {
             if (existing.isPresent()) {
                 LoyaltyTransaction prior = existing.get();
                 if (prior.getType() == TransactionType.REDEMPTION) {
+                    // A replay belongs to the account the ORIGINAL debited. The
+                    // reference names one redemption, and only that redemption's
+                    // customer may be answered with it. Checked BEFORE any wallet
+                    // is read: replaying for whoever this request names would hand
+                    // back THEIR balance with no debit — a staff caller resending
+                    // a known reference with another spendable account (or, on the
+                    // phone-keyed burn, another phone) would read any customer's
+                    // balance at its merchant. Same code and message as the earn's
+                    // reused reference; nothing moves and nothing is revealed.
+                    if (!u.getId().equals(prior.getUserId())) {
+                        throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
+                                "transaction with this merchant reference already exists");
+                    }
                     // Same logical redemption already happened — replay it, no second debit.
                     return new RedemptionResult(prior.getId(),
                             walletService.mainWallet(u.getPhoneNumber()).getBalance());

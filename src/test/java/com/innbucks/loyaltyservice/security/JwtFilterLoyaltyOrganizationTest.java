@@ -14,7 +14,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * caller is that organization's OWNER or ADMIN and it holds the loyalty product.
  * {@link JwtFilter} grants {@code ROLE_MERCHANT_ADMIN} and sets
  * {@link CallerDetails#organizationId()} from exactly this; the role in the
- * token's roles claim is not honoured on its own.
+ * token's roles claim is not honoured on its own. (A token that also carries
+ * shop-staff scope wears it only where the organization owns the pinned
+ * merchant — {@link JwtFilterTwoHatTest}.)
  *
  * <p>Every part is required, and each case below is a real account shape:
  * STAFF (a cashier added to the business), a marketplace-only business, a

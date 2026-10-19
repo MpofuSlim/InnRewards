@@ -39,6 +39,13 @@ import java.util.UUID;
  * It is the ownership key for merchants ({@code merchants.organization_id}) and
  * one way into a tenant. Null for everyone else — including a STAFF member, and
  * a business whose organization has no loyalty product.
+ *
+ * <p><b>It is set beside a shop-staff {@code merchantId}/{@code shopId} only when
+ * that organization owns the pinned merchant</b> (the employer promoted its own
+ * shop staff; {@link ShopPinOrganizationCheck}). A cashier that some OTHER
+ * business made its OWNER/ADMIN is shop staff here and nothing more — otherwise
+ * {@link MerchantAuthz}, which honours the pin first, would spend that business's
+ * merchant-admin grant on the cashier's employer.
  */
 public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UUID userId,
                             UUID organizationId) {

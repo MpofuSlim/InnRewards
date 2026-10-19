@@ -54,7 +54,7 @@ class JwtFilterOtpSessionScopeTest {
         RevokedTokenDenylist denylist = mock(RevokedTokenDenylist.class);
         when(denylist.isRevoked(anyString())).thenReturn(false);
         TokenVersionStore tokenVersionStore = mock(TokenVersionStore.class);
-        filter = new JwtFilter(jwtUtil, denylist, tokenVersionStore);
+        filter = new JwtFilter(jwtUtil, denylist, tokenVersionStore, mock(ShopPinOrganizationCheck.class));
     }
 
     @AfterEach

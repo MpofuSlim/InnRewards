@@ -394,7 +394,8 @@ re-keying sellers).
 - **Who is a merchant admin here is decided from the ORGANIZATION claims,
   never the role alone.** `JwtFilter` grants `ROLE_MERCHANT_ADMIN` iff the token
   carries `orgId` + `orgRole` ∈ {OWNER, ADMIN} + `products` ∋ `loyalty`
-  (`loyaltyOrganizationOf`), and puts that org on
+  (`loyaltyOrganizationOf`) — and, on a token with shop scope, only where that
+  organization owns the pinned merchant (next bullet) — and puts that org on
   `CallerDetails.organizationId`. **A bare `MERCHANT_ADMIN` in the roles claim
   grants nothing** — otherwise a marketplace-only business, or a pre-V39 token,
   would administer loyalty. The upside is the point: an ADMIN colleague added
@@ -402,6 +403,36 @@ re-keying sellers).
   STAFF is not (a cashier does not run the business). Product match is exact
   and lowercase, as user-service mints it. Pinned by
   `JwtFilterLoyaltyOrganizationTest`.
+- **One hat per token: a shop-staff token wears the organization's hat only
+  where that organization owns its pinned merchant.** user-service mints the
+  `merchantId`/`shopId` claims for ANY holder of a shop role, next to whatever
+  organization the session acts for, and `MerchantAuthz` honours the pin FIRST,
+  for any role. So a cashier whom any loyalty business made OWNER/ADMIN was a
+  merchant admin pinned to their EMPLOYER — measured: they could switch the
+  employer's merchant off and plant their business's merchant in its program —
+  and were refused on the business that granted it. `JwtFilter` now withholds
+  the org-derived `ROLE_MERCHANT_ADMIN` and `CallerDetails.organizationId` from a
+  token with ANY shop scope (a shop role, a `merchantId` or a `shopId`) unless
+  `ShopPinOrganizationCheck` finds `merchants.organization_id` of the pin equals
+  the token's org: the employer promoted its own shop staff (owner decision,
+  2026-10-19, "keep promotions"), which keeps exactly what it had. Everything
+  else — another business, no pin, an unknown merchant, a failed lookup — is
+  shop staff here and nothing more; the till keeps working. A pinned merchant
+  with NO organization (a pre-V51 row not yet stamped) is owned by nobody, so a
+  promotion there needs the row stamped first. The check never throws (the
+  filter's catch-all would 401 the till over a DB blip), is uncached like
+  `organizationOwnsMerchantIn` (an operator can still stamp
+  `merchants.organization_id`), and counts
+  `loyalty.auth.two_hat{outcome=org_owns_pin|withheld|lookup_failed}` from 0 —
+  `withheld` is ordinary traffic from two-hat accounts; a sustained
+  `lookup_failed` means promoted staff are without merchant admin for now.
+  **Such an account runs its other business from a separate ACCOUNT** (a
+  different email, holding no shop role): every session of a shop-staff account
+  carries the shop claims, whichever organization it picks, so signing in again
+  does not help, and onboarding a merchant for the other business from it is
+  `403 ORGANIZATION_SCOPE_MISSING`. Pinned by
+  `JwtFilterTwoHatTest`, `ShopPinOrganizationCheckTest` and
+  `TwoHatShopStaffSecurityTest`.
 - **`MerchantAuthz` / `ReportingService` compare the merchant's
   `organizationId` with the caller's.** SUPER_ADMIN is exempt, SHOP_ADMIN is
   still pinned by its token `merchantId` (a row-stamped claim user-service

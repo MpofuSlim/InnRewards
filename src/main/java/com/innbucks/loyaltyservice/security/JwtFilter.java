@@ -39,6 +39,10 @@ public class JwtFilter extends OncePerRequestFilter {
      *  change is rejected immediately instead of living out its TTL. */
     private final TokenVersionStore tokenVersionStore;
 
+    /** Whether a token carrying a shop-staff pin may also wear its loyalty
+     *  organization's merchant-admin hat — see {@link #wearsOrganizationHat}. */
+    private final ShopPinOrganizationCheck shopPinOrganizationCheck;
+
     /** This cell's country (INNBUCKS_COUNTRY). Compared against the JWT's
      *  {@code homeCountry} claim to spot wrong-cell requests. Non-final so
      *  Lombok's @RequiredArgsConstructor stays untouched — Spring sets it
@@ -59,6 +63,7 @@ public class JwtFilter extends OncePerRequestFilter {
     static final String MERCHANT_ADMIN = "MERCHANT_ADMIN";
     static final String LOYALTY_PRODUCT = "loyalty";
     private static final java.util.Set<String> RUNS_ORGANIZATION = java.util.Set.of("OWNER", "ADMIN");
+    private static final java.util.Set<String> SHOP_ROLES = java.util.Set.of("SHOP_ADMIN", "SHOP_USER");
 
     /**
      * The second accepted marker: a session THIS service minted, after a proof
@@ -194,7 +199,9 @@ public class JwtFilter extends OncePerRequestFilter {
             // A business acts in loyalty through its ORGANIZATION (user-service
             // V39): the session's orgId, when the caller is that organization's
             // OWNER or ADMIN and it holds the loyalty product. That — and only
-            // that — is what makes a caller a MERCHANT_ADMIN here. The role in
+            // that — is what makes a caller a MERCHANT_ADMIN here (and, on a
+            // token with shop scope, only where that organization owns the
+            // pinned merchant: see wearsOrganizationHat below). The role in
             // the token's roles claim is deliberately NOT honoured: it is granted
             // by BOTH the loyalty and the marketplace bundles, so trusting it let
             // a marketplace-only business administer loyalty, and it could not
@@ -206,6 +213,15 @@ public class JwtFilter extends OncePerRequestFilter {
                     jwtUtil.extractOrganizationId(token),
                     jwtUtil.extractOrganizationRole(token),
                     jwtUtil.extractProducts(token));
+
+            UUID merchantId = jwtUtil.extractMerchantId(token);
+            UUID shopId = jwtUtil.extractShopId(token);
+            // One hat per token: a shop-staff pin and another organization's
+            // merchant-admin grant never meet. See wearsOrganizationHat.
+            if (loyaltyOrganizationId != null
+                    && !wearsOrganizationHat(roles, merchantId, shopId, loyaltyOrganizationId)) {
+                loyaltyOrganizationId = null;
+            }
 
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String role : roles) {
@@ -230,8 +246,6 @@ public class JwtFilter extends OncePerRequestFilter {
                 authorities.add(new SimpleGrantedAuthority("VERIFIED"));
             }
 
-            UUID merchantId = jwtUtil.extractMerchantId(token);
-            UUID shopId = jwtUtil.extractShopId(token);
             String phoneNumber = jwtUtil.extractPhoneNumber(token);
             UUID userId = jwtUtil.extractUserId(token);
 
@@ -433,5 +447,27 @@ public class JwtFilter extends OncePerRequestFilter {
         if (orgId == null || orgRole == null || products == null) return null;
         if (!RUNS_ORGANIZATION.contains(orgRole)) return null;
         return products.contains(LOYALTY_PRODUCT) ? orgId : null;
+    }
+
+    /**
+     * Whether a token that has a loyalty organization may wear its merchant-admin
+     * hat. A token with no shop scope always may. One with shop scope — a shop
+     * role, a {@code merchantId} or a {@code shopId} claim — may only when that
+     * organization owns the pinned merchant: the employer promoted its own shop
+     * staff. Otherwise it is shop staff here and nothing more.
+     *
+     * <p>Why: user-service mints the shop claims for any holder of a shop role,
+     * next to whatever organization the session acts for, and
+     * {@link MerchantAuthz} honours the pin before the organization, for any
+     * role. So a cashier whom any loyalty business added as OWNER/ADMIN was a
+     * merchant admin pinned to their EMPLOYER — and refused on the business
+     * that actually granted it. Any part of the shop scope counts, not just
+     * the pin, so a token shaped differently can't slip between the two.
+     */
+    private boolean wearsOrganizationHat(List<String> roles, UUID merchantId, UUID shopId,
+                                         UUID loyaltyOrganizationId) {
+        boolean shopScoped = merchantId != null || shopId != null
+                || roles.stream().anyMatch(r -> r != null && SHOP_ROLES.contains(r));
+        return !shopScoped || shopPinOrganizationCheck.organizationOwnsPin(loyaltyOrganizationId, merchantId);
     }
 }

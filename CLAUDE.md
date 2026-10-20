@@ -2554,6 +2554,32 @@ together.
   mints points, so a till's QR is issued by its SHOP_ADMIN); SELF_EARN /
   STAFF_RECIPIENT consume guards are untouched.
 
+## Split checkout at the till: cash and points in one call
+
+**A customer can pay part of a bill in cash (or card) and part with points.**
+`POST /loyalty/shops/{shopId}/guest-checkout` takes `cashAmount` and/or
+`pointsValue` (money paid with points, e.g. `5.00` = $5 off), plus optional
+`currency`, `transactionType` (`PURCHASE` | `CARD_PAYMENT`, for the cash part)
+and `reference`. `ShopCheckoutService.tillCheckout` runs it; the S2S
+`checkout` used by payment-service is untouched.
+
+- **The points part is burned FIRST**, so points earned on this sale's cash can
+  never pay for the same sale. Don't reorder the legs.
+- **The burn is `redeemPoints(..., enforceCallerOwnership = true)`**, exactly
+  the `POST /loyalty/redeem` checks: an existing account (404, a burn never
+  creates one), the caller's merchant, the spend gate (`USER_PENDING`), the
+  balance (`INSUFFICIENT_FUNDS`). A cash-only checkout still needs no account.
+- **Both legs share one transaction.** A refused earn (`SELF_EARN`,
+  `STAFF_RECIPIENT`) rolls the burn back. `TillSplitCheckoutIT` pins it against
+  real Postgres.
+- **`reference` is the idempotency key for both legs** (the burn stores
+  `reference + ":redeem"`). A resend for the same customer returns the original
+  checkout with `replayed: true`, moves nothing and sends no second message;
+  another customer gets `409 DUPLICATE_REFERENCE`. With no reference the server
+  generates one (`SHOP-<uuid>`), so a resend is a second sale.
+- **Both rows carry the path's shop**, including a merchant or super admin's
+  burn, which has no shop on its token.
+
 ## A voucher is worth its face value, ONCE — MULTI_USE is retired
 
 **Owner decision (2026-09-18).** Asked whether a $5 voucher with 3 uses hands

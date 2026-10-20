@@ -615,26 +615,56 @@ public class ShopController {
     }
 
     @PostMapping("/{shopId}/guest-checkout")
-    @Operation(summary = "Guest checkout — earn points for an unregistered customer",
+    @Operation(summary = "Till checkout — pay in cash, points, or both",
             description = "Merchant-authenticated (requires a shop-operator bearer token + X-Tenant-Id). " +
-                          "The shop earns loyalty points on a cash amount for a " +
-                          "walk-in customer identified by phone number only — no account required. The " +
-                          "customer RECEIVES points immediately (a PENDING wallet is auto-created and keyed " +
-                          "to the phone) but cannot REDEEM until they register, at which point the accrued " +
-                          "balance becomes spendable. Cash-only: no points are burned. The merchant is " +
-                          "derived from the shop, so it is NOT in the request body. The caller must own " +
-                          "the shop: SHOP_ADMIN/SHOP_USER must carry the shop's merchant in their JWT, " +
-                          "and when their JWT names a shop it must be THIS shop; " +
-                          "MERCHANT_ADMIN/SUPER_ADMIN are scoped by tenant membership. Requires X-Tenant-Id. " +
-                          "The phone is staff-typed, so the earn-integrity guards apply: a staff member " +
-                          "cannot earn to their own phone (SELF_EARN) or a colleague's (STAFF_RECIPIENT).")
+                          "The customer is identified by phone number and splits the bill the way they ask: " +
+                          "`cashAmount` is paid in cash (or by card, `transactionType: CARD_PAYMENT`) and " +
+                          "earns points; `pointsValue` is paid with points. Either may be omitted. Both legs " +
+                          "commit together: if either is refused, nothing is written.\n\n" +
+                          "**Cash only:** no account needed — a PENDING wallet is created for the phone and " +
+                          "receives the points; they become spendable once the phone registers.\n\n" +
+                          "**Points part:** burned FIRST, at the platform redemption rate, so points earned on " +
+                          "this sale's cash can never pay for it. It runs the checks of `POST /loyalty/redeem`: " +
+                          "the customer must already have an account here (404 otherwise — nothing is " +
+                          "created), be registered (403 USER_PENDING) and hold enough points (400 " +
+                          "INSUFFICIENT_FUNDS).\n\n" +
+                          "**Retries:** send the till's receipt `reference`. Resending the same reference and " +
+                          "phone returns the original checkout with `replayed: true` and moves nothing; the " +
+                          "same reference for another phone is 409 DUPLICATE_REFERENCE. Without a reference " +
+                          "the server generates one, and a resend is a second sale.\n\n" +
+                          "The merchant is derived from the shop, so it is NOT in the request body. The caller " +
+                          "must own the shop: SHOP_ADMIN/SHOP_USER must carry the shop's merchant in their " +
+                          "JWT, and when their JWT names a shop it must be THIS shop; MERCHANT_ADMIN/" +
+                          "SUPER_ADMIN are scoped by tenant membership. The phone is staff-typed, so a staff " +
+                          "member cannot earn to their own phone (SELF_EARN) or a colleague's (STAFF_RECIPIENT).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
-                    description = "Points earned for the guest",
+                    description = "Checkout recorded (or replayed)",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Earned", value = """
+                            examples = {
+                                    @ExampleObject(name = "Cash and points", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Guest checkout completed successfully",
+                                      "data": {
+                                        "shopId": "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "loyaltyUserId": "99999999-8888-7777-6666-555555555555",
+                                        "cashAmount": 12.00,
+                                        "pointsEarned": 24,
+                                        "walletBalanceAfter": 1024,
+                                        "purchaseTransactionId": "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+                                        "pointsRedeemed": 500,
+                                        "pointsValue": 5.00,
+                                        "currency": "USD",
+                                        "redemptionTransactionId": "8b2c3d4e-5f60-7182-93a4-b5c6d7e8f9a0",
+                                        "replayed": false
+                                      }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Cash only", value = """
                                     {
                                       "code": "201 CREATED",
                                       "message": "Guest checkout completed successfully",
@@ -643,29 +673,59 @@ public class ShopController {
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "loyaltyUserId": "99999999-8888-7777-6666-555555555555",
                                         "cashAmount": 10.00,
-                                        "pointsEarned": 10.0000,
-                                        "walletBalanceAfter": 10.0000,
-                                        "purchaseTransactionId": "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+                                        "pointsEarned": 20,
+                                        "walletBalanceAfter": 20,
+                                        "purchaseTransactionId": "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+                                        "pointsRedeemed": 0,
+                                        "pointsValue": 0,
+                                        "currency": "USD",
+                                        "redemptionTransactionId": null,
+                                        "replayed": false
                                       }
                                     }
-                                    """))),
+                                    """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure (blank phoneNumber / non-positive cashAmount)",
+                    description = "Invalid request, nothing to pay, an unknown type, or not enough points",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Validation error", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "cashAmount: must be greater than 0",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Validation error", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "pointsValue": "must be greater than 0" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Nothing to pay", value = """
+                                            {
+                                              "code": "AMOUNT_REQUIRED",
+                                              "message": "at least one of cashAmount or pointsValue must be positive",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not enough points", value = """
+                                            {
+                                              "code": "INSUFFICIENT_FUNDS",
+                                              "message": "You don't have enough loyalty points for this.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unsupported type", value = """
+                                            {
+                                              "code": "BAD_TRANSACTION_TYPE",
+                                              "message": "transactionType must be PURCHASE or CARD_PAYMENT.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
                     description = "Missing or invalid bearer token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "Caller's role can't check out, the shop isn't under the caller's merchant "
-                            + "(SHOP_NOT_OWNED) or isn't the caller's own outlet (NOT_SHOP_MEMBER), or the phone "
+                            + "(SHOP_NOT_OWNED) or isn't the caller's own outlet (NOT_SHOP_MEMBER), the phone "
                             + "is the caller's own (SELF_EARN) or a staff member's of this merchant "
-                            + "(STAFF_RECIPIENT).",
+                            + "(STAFF_RECIPIENT), or — for a points part — the customer can't spend yet "
+                            + "(USER_PENDING) or is blocked (USER_BLOCKED).",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Not your shop", value = """
@@ -695,10 +755,36 @@ public class ShopController {
                                               "message": "Points can't be awarded to a staff account of this merchant.",
                                               "data": null
                                             }
+                                            """),
+                                    @ExampleObject(name = "Customer not registered", value = """
+                                            {
+                                              "code": "USER_PENDING",
+                                              "message": "Your rewards account is still being set up, so these points can't be spent yet. You'll keep earning in the meantime.",
+                                              "data": null
+                                            }
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "No shop with that id in this tenant")
+                    description = "No shop with that id in this tenant, or — for a points part — no customer "
+                            + "account for the phone here",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "No account for the phone", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "user not found",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The reference was already used for another customer or transaction",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Reference already used", value = """
+                                    {
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "transaction with this merchant reference already exists",
+                                      "data": null
+                                    }
+                                    """)))
     })
     @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.GuestShopCheckoutResponse>> guestCheckout(
@@ -706,12 +792,12 @@ public class ShopController {
             @Valid @RequestBody Dtos.GuestShopCheckoutRequest req) {
         // A04/A01: the caller is an authenticated shop operator (X-Tenant-Id
         // required). Load the shop scoped to the caller's tenant so a member of
-        // one tenant can never earn through another tenant's shop.
+        // one tenant can never check out through another tenant's shop.
         UUID tenantId = tenantContext.requireTenantId();
         Dtos.ShopResponse shop = shops.get(tenantId, shopId);
         // The merchant is taken from the SHOP itself (a shop belongs to exactly one
         // merchant). Ownership guard: a merchant-scoped caller (SHOP_ADMIN/SHOP_USER
-        // carry merchantId in the JWT) may only earn through its OWN shops.
+        // carry merchantId in the JWT) may only check out through its OWN shops.
         // MERCHANT_ADMIN/SUPER_ADMIN are tenant-scoped (currentMerchantId() is null)
         // and already bounded by the tenant-scoped shop load above.
         UUID callerMerchantId = CallerDetails.currentMerchantId();
@@ -719,7 +805,7 @@ public class ShopController {
             throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
         }
         // And to its own OUTLET: a caller whose token names a shop (SHOP_USER,
-        // SHOP_ADMIN) earns only through that shop, the same pin
+        // SHOP_ADMIN) checks out only through that shop, the same pin
         // MerchantAuthz.requireCallerAccessesShop applies to the shop report.
         // Otherwise a cashier at one branch rings sales up under a sibling
         // branch, where nobody reconciles them against that till.
@@ -727,37 +813,38 @@ public class ShopController {
         if (callerShopId != null && !callerShopId.equals(shopId)) {
             throw LoyaltyException.forbidden("NOT_SHOP_MEMBER", "You can only access shops you are assigned to.");
         }
-        // Reference is server-owned (per-merchant idempotency on the loyalty PURCHASE
-        // row); the POS never supplies one. Mirrors /payments/shop-checkout's
+        // The till's receipt reference is the idempotency key for both legs. A
+        // POS that sends none gets a server-generated one (the old behaviour),
+        // so its resend is a new sale. Mirrors /payments/shop-checkout's
         // "SHOP-" + UUID convention.
-        String reference = "SHOP-" + UUID.randomUUID();
+        String reference = req.reference() == null || req.reference().isBlank()
+                ? "SHOP-" + UUID.randomUUID()
+                : req.reference().trim();
         // Load the STAFF_RECIPIENT snapshot before the checkout's transaction
         // opens, so the guard inside it never waits on user-service. Never refuses.
         shopCheckout.prewarmStaffRecipientGuard(tenantId, shop.merchantId());
-        // Cash-only: pointsAmount = ZERO skips the burn/redemption leg, so a PENDING
-        // (unregistered) customer earns without a spendable-balance check.
-        // TYPED_PHONE, not CHECKOUT_S2S: the cashier keyed this phone in, so the
-        // earn-integrity guards apply — SELF_EARN (their own phone) and
-        // STAFF_RECIPIENT (any colleague's). REFERENCE_REQUIRED is already met
-        // by the server-generated reference above.
-        // Cash-only, so this never reaches the spend gate today; wrapped anyway
-        // because checkout() can burn, and a scope costs nothing when no
-        // deferral is raised (EligibilityDeferralWiringTest holds every caller
-        // of a gate-reaching service to it).
-        ShopCheckoutService.Result r = eligibilityDeferral.run(() -> shopCheckout.checkout(
-                shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, reference,
-                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE));
+        // TYPED_PHONE inside tillCheckout: the cashier keyed this phone in, so
+        // the earn-integrity guards apply. The points part is a spend, so the
+        // V44 eligibility check runs outside the checkout's transaction.
+        ShopCheckoutService.TillResult t = eligibilityDeferral.run(() -> shopCheckout.tillCheckout(
+                tenantId, shopId, req.phoneNumber(), req.cashAmount(), req.pointsValue(), req.currency(),
+                req.transactionType(), reference));
+        ShopCheckoutService.Result r = t.result();
         Dtos.GuestShopCheckoutResponse data = new Dtos.GuestShopCheckoutResponse(
                 r.shopId(), r.merchantId(), r.loyaltyUserId(),
-                r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId());
+                r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId(),
+                r.pointsRedeemed(), t.pointsValue(), t.currency(), r.redemptionTransactionId(), t.replayed());
         // Best-effort congratulations to the walk-in customer (SMS primary, WhatsApp
-        // fallback). @Async + self-contained best-effort — never delays or fails the
-        // 201, but guard defensively so even a bean-proxy hiccup can't break checkout.
-        try {
-            guestCheckoutNotifier.notifyPointsEarned(
-                    shop.name(), req.phoneNumber(), r.pointsEarned(), r.walletBalanceAfter());
-        } catch (RuntimeException e) {
-            log.warn("Failed to dispatch guest-checkout notification: {}", e.getMessage());
+        // fallback) — not on a replay, which already sent it. @Async + self-contained
+        // best-effort — never delays or fails the 201, but guard defensively so even
+        // a bean-proxy hiccup can't break checkout.
+        if (!t.replayed()) {
+            try {
+                guestCheckoutNotifier.notifyPointsEarned(
+                        shop.name(), req.phoneNumber(), r.pointsEarned(), r.walletBalanceAfter());
+            } catch (RuntimeException e) {
+                log.warn("Failed to dispatch guest-checkout notification: {}", e.getMessage());
+            }
         }
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Guest checkout completed successfully", data));

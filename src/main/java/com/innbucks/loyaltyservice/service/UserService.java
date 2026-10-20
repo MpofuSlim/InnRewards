@@ -518,9 +518,12 @@ public class UserService {
      * / {@code +263771234567} all resolve to the one row.
      */
     public LoyaltyUser requireByPhone(UUID tenantId, String phoneNumber) {
-        String phone = normalizePhone(phoneNumber);
-        return users.findByTenantIdAndPhoneNumber(tenantId, phone)
-                .orElseThrow(() -> LoyaltyException.notFound("user"));
+        return findByPhone(tenantId, phoneNumber).orElseThrow(() -> LoyaltyException.notFound("user"));
+    }
+
+    /** {@link #requireByPhone} without the 404: empty when the phone has no account in the tenant. */
+    public Optional<LoyaltyUser> findByPhone(UUID tenantId, String phoneNumber) {
+        return users.findByTenantIdAndPhoneNumber(tenantId, normalizePhone(phoneNumber));
     }
 
     /**

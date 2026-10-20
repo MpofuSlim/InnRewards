@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * Business-level metrics for the loyalty domain. Spring Boot Actuator already
@@ -94,6 +95,47 @@ public class LoyaltyMetrics {
         // purge deletes anything: increase() cannot see a series' first sample.
         retentionPurged(TABLE_QR_TOKENS);
         retentionPurged(TABLE_REFRESH_TOKENS);
+        for (String outcome : List.of(TILL_LOOKUP_FOUND, TILL_LOOKUP_NONE)) {
+            tillBalanceLookup(outcome);
+        }
+        for (String outcome : List.of(POS_REVERSAL_ALLOWED, POS_REVERSAL_NOT_OWN, POS_REVERSAL_TOO_OLD)) {
+            posKeyReversal(outcome);
+        }
+    }
+
+    public static final String TILL_LOOKUP_FOUND = "found";
+    public static final String TILL_LOOKUP_NONE = "none";
+
+    private Counter tillBalanceLookup(String outcome) {
+        return Counter.builder("loyalty.till.balance_lookup")
+                .description("Till balance lookups, by whether the phone has an account at the brand")
+                .tag("outcome", outcome)
+                .register(registry);
+    }
+
+    /**
+     * A till's balance lookup ({@code POST /loyalty/shops/{shopId}/balance-lookup}).
+     * {@code none} is a phone with no account at the brand: a run of them from
+     * one till is someone working through numbers.
+     */
+    public void incTillBalanceLookup(String outcome) {
+        tillBalanceLookup(outcome).increment();
+    }
+
+    public static final String POS_REVERSAL_ALLOWED = "allowed";
+    public static final String POS_REVERSAL_NOT_OWN = "not_own";
+    public static final String POS_REVERSAL_TOO_OLD = "too_old";
+
+    private Counter posKeyReversal(String outcome) {
+        return Counter.builder("loyalty.till.pos_key_reversal")
+                .description("Reversals asked for by a POS API key, by outcome")
+                .tag("outcome", outcome)
+                .register(registry);
+    }
+
+    /** A reversal a POS API key asked for: allowed, or refused as not its own / too old. */
+    public void incPosKeyReversal(String outcome) {
+        posKeyReversal(outcome).increment();
     }
 
     private Counter retentionPurged(String table) {

@@ -376,6 +376,10 @@ loyalty:
     # window; also the propagation delay for staff-list changes and the
     # degraded window after a failed lookup.
     staff-cache-seconds: ${EARN_STAFF_CACHE_SECONDS:300}
+  pos:
+    # How long a POS API key may refund (reverse) a sale it posted itself.
+    # Older sales, and anything another key or person posted, need a supervisor.
+    reversal-window-days: ${LOYALTY_POS_REVERSAL_WINDOW_DAYS:30}
   adjustment:
     # Ceilings on manual point adjustments (POST /loyalty/transactions/adjust).
     # Adjustment is the ONLY path that mints points from nothing — earning is

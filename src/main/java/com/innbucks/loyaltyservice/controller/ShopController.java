@@ -47,11 +47,14 @@ public class ShopController {
     private final ShopCheckoutService shopCheckout;
     private final com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier;
     private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
+    private final com.innbucks.loyaltyservice.service.TillBalanceService tillBalance;
 
     public ShopController(ShopService shops, TenantContext tenantContext, ShopCheckoutService shopCheckout,
                           com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier,
-                          com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+                          com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral,
+                          com.innbucks.loyaltyservice.service.TillBalanceService tillBalance) {
         this.eligibilityDeferral = eligibilityDeferral;
+        this.tillBalance = tillBalance;
         this.shops = shops;
         this.tenantContext = tenantContext;
         this.shopCheckout = shopCheckout;
@@ -614,6 +617,150 @@ public class ShopController {
         return ResponseEntity.ok(ApiResult.ok("Shops retrieved successfully", data));
     }
 
+    /**
+     * The shop a till call acts at, loaded in the caller's tenant and pinned to
+     * the caller: shared by the checkout and the balance lookup so the two can
+     * never disagree about which tills may use which shop.
+     */
+    private Dtos.ShopResponse requireTillShop(UUID tenantId, UUID shopId) {
+        // A04/A01: the shop is loaded scoped to the caller's tenant, so a member
+        // of one tenant can never act through another tenant's shop.
+        Dtos.ShopResponse shop = shops.get(tenantId, shopId);
+        // The merchant is taken from the SHOP itself (a shop belongs to exactly one
+        // merchant). Ownership guard: a merchant-scoped caller (SHOP_ADMIN/SHOP_USER
+        // carry merchantId in the JWT) may only act through its OWN shops.
+        // MERCHANT_ADMIN/SUPER_ADMIN are tenant-scoped (currentMerchantId() is null)
+        // and already bounded by the tenant-scoped shop load above.
+        UUID callerMerchantId = CallerDetails.currentMerchantId();
+        if (callerMerchantId != null && !callerMerchantId.equals(shop.merchantId())) {
+            throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
+        }
+        // And to its own OUTLET: a caller whose token names a shop (SHOP_USER,
+        // SHOP_ADMIN) acts only through that shop, the same pin
+        // MerchantAuthz.requireCallerAccessesShop applies to the shop report.
+        // Otherwise a cashier at one branch rings sales up under a sibling
+        // branch, where nobody reconciles them against that till.
+        UUID callerShopId = CallerDetails.currentShopId();
+        if (callerShopId != null && !callerShopId.equals(shopId)) {
+            throw LoyaltyException.forbidden("NOT_SHOP_MEMBER", "You can only access shops you are assigned to.");
+        }
+        return shop;
+    }
+
+    @PostMapping("/{shopId}/balance-lookup")
+    @Operation(summary = "Till balance lookup: what the customer can pay with points here",
+            description = "Call it after the cashier enters the phone and before the checkout. Returns the " +
+                          "customer's spendable points, what they take off a bill at this shop (`pointsValue`, " +
+                          "in the merchant's currency) and whether they can be spent here (`canSpendHere`). " +
+                          "Send `pointsValue` as the checkout's `pointsValue` to use them all.\n\n" +
+                          "Read-only: it never creates an account or registers a phone. A phone with no account " +
+                          "is `points: 0`, `accountStatus: NONE`, never a 404. The phone is in the body so it " +
+                          "stays out of URL logs. Same shop rules as the checkout; requires X-Tenant-Id.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Balance retrieved",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Can spend", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Balance retrieved",
+                                              "data": {
+                                                "phoneMasked": "****4567",
+                                                "points": 970,
+                                                "pointsValue": 9.70,
+                                                "currency": "USD",
+                                                "pointsPerUnit": 100.0000,
+                                                "accountStatus": "ACTIVE",
+                                                "canSpendHere": true
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "No account at this brand", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Balance retrieved",
+                                              "data": {
+                                                "phoneMasked": "****4567",
+                                                "points": 0,
+                                                "pointsValue": 0.00,
+                                                "currency": "USD",
+                                                "pointsPerUnit": 100.0000,
+                                                "accountStatus": "NONE",
+                                                "canSpendHere": false
+                                              }
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Bad phone, or the merchant's currency cannot be priced",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Missing phone", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "phoneNumber": "must not be blank" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not a phone number", value = """
+                                            {
+                                              "code": "BAD_PHONE",
+                                              "message": "Invalid phone number: 12345",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Not this till's shop",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Another outlet", value = """
+                                            {
+                                              "code": "NOT_SHOP_MEMBER",
+                                              "message": "You can only access shops you are assigned to.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another merchant's shop", value = """
+                                            {
+                                              "code": "SHOP_NOT_OWNED",
+                                              "message": "shop does not belong to your merchant",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Unknown shop",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Unknown shop", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "shop not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.TillBalanceResponse>> balanceLookup(
+            @PathVariable UUID shopId,
+            @Valid @RequestBody Dtos.TillBalanceRequest req) {
+        UUID tenantId = tenantContext.requireTenantId();
+        Dtos.ShopResponse shop = requireTillShop(tenantId, shopId);
+        Dtos.TillBalanceResponse data = tillBalance.lookup(tenantId, shop.merchantId(), req.phoneNumber());
+        return ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(ApiResult.ok("Balance retrieved", data));
+    }
+
     @PostMapping("/{shopId}/guest-checkout")
     @Operation(summary = "Till checkout — pay in cash, points, or both",
             description = "Merchant-authenticated (requires a shop-operator bearer token + X-Tenant-Id). " +
@@ -794,25 +941,7 @@ public class ShopController {
         // required). Load the shop scoped to the caller's tenant so a member of
         // one tenant can never check out through another tenant's shop.
         UUID tenantId = tenantContext.requireTenantId();
-        Dtos.ShopResponse shop = shops.get(tenantId, shopId);
-        // The merchant is taken from the SHOP itself (a shop belongs to exactly one
-        // merchant). Ownership guard: a merchant-scoped caller (SHOP_ADMIN/SHOP_USER
-        // carry merchantId in the JWT) may only check out through its OWN shops.
-        // MERCHANT_ADMIN/SUPER_ADMIN are tenant-scoped (currentMerchantId() is null)
-        // and already bounded by the tenant-scoped shop load above.
-        UUID callerMerchantId = CallerDetails.currentMerchantId();
-        if (callerMerchantId != null && !callerMerchantId.equals(shop.merchantId())) {
-            throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
-        }
-        // And to its own OUTLET: a caller whose token names a shop (SHOP_USER,
-        // SHOP_ADMIN) checks out only through that shop, the same pin
-        // MerchantAuthz.requireCallerAccessesShop applies to the shop report.
-        // Otherwise a cashier at one branch rings sales up under a sibling
-        // branch, where nobody reconciles them against that till.
-        UUID callerShopId = CallerDetails.currentShopId();
-        if (callerShopId != null && !callerShopId.equals(shopId)) {
-            throw LoyaltyException.forbidden("NOT_SHOP_MEMBER", "You can only access shops you are assigned to.");
-        }
+        Dtos.ShopResponse shop = requireTillShop(tenantId, shopId);
         // The till's receipt reference is the idempotency key for both legs. A
         // POS that sends none gets a server-generated one (the old behaviour),
         // so its resend is a new sale. Mirrors /payments/shop-checkout's

@@ -66,6 +66,16 @@ public final class TestJwtFactory {
         return builder(email).role("SHOP_USER").merchantId(merchantId).shopId(shopId).sign(secret);
     }
 
+    /**
+     * A POS API key's till token, shaped as user-service mints it (ticketing
+     * V51): subject {@code pos-key:<key id>}, the key id as {@code userUuid},
+     * SHOP_USER only, and the key's merchant and shop. No phone.
+     */
+    public static String posKey(UUID keyId, UUID merchantId, UUID shopId, String secret) {
+        return builder("pos-key:" + keyId).role("SHOP_USER").merchantId(merchantId).shopId(shopId)
+                .userId(keyId).sign(secret);
+    }
+
     /** CUSTOMER with the given tier. */
     public static String customer(String email, int tier, String secret) {
         return builder(email).role("CUSTOMER").tier(tier).verified(true).sign(secret);

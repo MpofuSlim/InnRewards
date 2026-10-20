@@ -11,6 +11,12 @@ loyalty-relevant subset of that monorepo's `CLAUDE.md`.
 > the latest `master` before committing, push with `git push -u origin <branch>`,
 > and open a **draft** PR. One feature per branch.
 
+## The owner is Tawanda
+
+The person you work with in these sessions is **Tawanda** (the repo owner). Sign
+every message, email or note you draft for Tawanda to send as **Tawanda**,
+never with a placeholder like `[Your name]`.
+
 ## Frontend integration docs on merge (standing)
 
 > [!IMPORTANT]

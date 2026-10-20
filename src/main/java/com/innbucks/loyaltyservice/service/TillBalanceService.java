@@ -104,7 +104,7 @@ public class TillBalanceService {
 
     /** The largest cent amount whose burn needs no more than {@code points}. */
     private BigDecimal spendableValue(UUID tenantId, BigDecimal points, BigDecimal pointsPerUnit, String currency) {
-        BigDecimal zero = BigDecimal.ZERO.setScale(2);
+        BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY);
         if (points.signum() <= 0) {
             return zero;
         }

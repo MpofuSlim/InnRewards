@@ -260,23 +260,47 @@ public class Dtos {
             String error
     ) {}
 
-    // Guest (unregistered-customer) shop checkout. The shop/merchant is the
-    // authenticated caller; the customer is identified by phoneNumber alone — no
-    // account required. Cash-only EARN: a guest can RECEIVE points but cannot
-    // REDEEM until they register (loyalty auto-creates a PENDING wallet keyed to
-    // the phone, promoted to spendable on registration). The merchant is derived
-    // from the shop, so it is NOT part of the request — the controller enforces
-    // ownership from the caller's JWT merchant scope instead.
+    // The till's shop checkout. The shop/merchant is the authenticated caller;
+    // the customer is identified by phoneNumber alone. The bill is split the way
+    // the customer asks: cashAmount (cash or card) earns points, pointsValue is
+    // paid with points. Either may be absent; a cash-only checkout needs no
+    // account (a PENDING wallet is created and receives the points), while a
+    // points leg needs a registered customer with the balance. The merchant is
+    // derived from the shop, so it is NOT part of the request — the controller
+    // enforces ownership from the caller's JWT merchant scope instead.
     public record GuestShopCheckoutRequest(
             @Schema(example = "+263771234567",
-                    description = "Guest customer's phone number (E.164). Points accrue against this phone; " +
+                    description = "Customer's phone number (E.164). Points accrue against this phone; " +
                                   "no registration required to earn.")
             @NotBlank String phoneNumber,
-            @Schema(example = "10.00",
-                    description = "Cash the customer paid. Points are earned on this per the merchant's " +
-                                  "loyalty rules. No points are redeemed — a guest can't spend.")
-            @NotNull @Positive BigDecimal cashAmount
-    ) {}
+            @Schema(example = "7.00", nullable = true,
+                    description = "Part of the bill paid in cash or by card. Points are earned on this per " +
+                                  "the merchant's loyalty rules. Omit or 0 when the whole bill is paid with points.")
+            @PositiveOrZero BigDecimal cashAmount,
+            @Schema(example = "5.00", nullable = true,
+                    description = "Part of the bill paid with points, as money in `currency` (e.g. 5.00 = $5 " +
+                                  "off). The server converts it to points at the platform redemption rate and " +
+                                  "burns them BEFORE the cash earn, so this sale's own points can't pay for it. " +
+                                  "Needs an existing, registered customer with enough points. Omit for cash only.")
+            @Positive BigDecimal pointsValue,
+            @Schema(example = "USD", nullable = true,
+                    description = "ISO 4217 currency of both amounts. Defaults to the merchant's currency.")
+            @Size(max = 3) String currency,
+            @Schema(example = "PURCHASE", nullable = true, allowableValues = {"PURCHASE", "CARD_PAYMENT"},
+                    description = "How the cash part was paid: PURCHASE (cash, the default) or CARD_PAYMENT. " +
+                                  "The earn uses the rule for this type.")
+            TransactionType transactionType,
+            @Schema(example = "POS-0042-20261020-0117", nullable = true,
+                    description = "The till's receipt reference, unique per sale. A retry with the same " +
+                                  "reference and phone returns the original checkout (replayed: true) and moves " +
+                                  "nothing. Omitted = the server generates one, and a retry is a new sale.")
+            @Size(max = 64) String reference
+    ) {
+        /** Back-compat constructor for the cash-only shape. */
+        public GuestShopCheckoutRequest(String phoneNumber, BigDecimal cashAmount) {
+            this(phoneNumber, cashAmount, null, null, null, null);
+        }
+    }
 
     public record GuestShopCheckoutResponse(
             @Schema(example = "11111111-aaaa-bbbb-cccc-222222222222")
@@ -284,17 +308,39 @@ public class Dtos {
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789")
             UUID merchantId,
             @Schema(example = "99999999-8888-7777-6666-555555555555",
-                    description = "Loyalty user the points accrued to. PENDING (receive-only) until the phone registers.")
+                    description = "Loyalty user the checkout belongs to. PENDING (receive-only) until the phone registers.")
             UUID loyaltyUserId,
-            @Schema(example = "10.00", description = "Cash amount the points were earned on.")
+            @Schema(example = "7.00", description = "Cash (or card) amount the points were earned on; 0 when none.")
             BigDecimal cashAmount,
-            @Schema(example = "10.0000", description = "Points awarded for this checkout.")
+            @Schema(example = "0", description = "Points awarded on the cash part (0 below the earning minimum).")
             BigDecimal pointsEarned,
-            @Schema(example = "10.0000", description = "Customer's wallet balance after the earn.")
+            @Schema(example = "1500.0000", description = "Customer's wallet balance after the checkout.")
             BigDecimal walletBalanceAfter,
-            @Schema(example = "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9", description = "Ledger transaction id for the earn.")
-            UUID purchaseTransactionId
-    ) {}
+            @Schema(example = "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9", nullable = true,
+                    description = "Ledger transaction id of the earn; null when there was no cash part.")
+            UUID purchaseTransactionId,
+            @Schema(example = "500", description = "Points burned for the points part; 0 when none.")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "5.00", description = "Bill value the points paid, in `currency`; 0 when none.")
+            BigDecimal pointsValue,
+            @Schema(example = "USD", description = "Currency of cashAmount and pointsValue.")
+            String currency,
+            @Schema(example = "8b2c3d4e-5f60-7182-93a4-b5c6d7e8f9a0", nullable = true,
+                    description = "Ledger transaction id of the burn; null when there was no points part.")
+            UUID redemptionTransactionId,
+            @Schema(example = "false",
+                    description = "True when this reference was already checked out: the original result is " +
+                                  "returned and nothing moved.")
+            boolean replayed
+    ) {
+        /** Back-compat constructor for the cash-only shape. */
+        public GuestShopCheckoutResponse(UUID shopId, UUID merchantId, UUID loyaltyUserId, BigDecimal cashAmount,
+                                         BigDecimal pointsEarned, BigDecimal walletBalanceAfter,
+                                         UUID purchaseTransactionId) {
+            this(shopId, merchantId, loyaltyUserId, cashAmount, pointsEarned, walletBalanceAfter,
+                    purchaseTransactionId, BigDecimal.ZERO, BigDecimal.ZERO, null, null, false);
+        }
+    }
 
     // Loyalty enrolment is by phone number only — name/email/nationalId belong
     // to user-service. Loyalty validates the phone exists there before

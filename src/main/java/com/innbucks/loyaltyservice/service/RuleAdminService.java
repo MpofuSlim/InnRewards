@@ -172,20 +172,8 @@ public class RuleAdminService {
         r.setMinTransactionAmount(req.minTransactionAmount());
         if (req.feeIssued() != null && req.feeIssued().type() != null) {
             MerchantService.validate(req.feeIssued(), "feeIssued");
-            // A voucher-issue fee that is explicitly zero gives the platform
-            // away, whether it is written on the TENANT standard (a global rule,
-            // where it makes every merchant free) or on one merchant's rule
-            // (where it silently undoes the guard on merchant creation). Issuing
-            // is the event we bill for, so zero is only ever legitimate as a
-            // deliberate, recorded decision — merchants.fee_waived — not as a
-            // number typed into a rule. Redemption is untouched: it may be zero
-            // freely.
-            if (isZero(req.feeIssued())) {
-                throw LoyaltyException.badRequest("RULE_ZERO_ISSUE_FEE",
-                        "A voucher-issue fee of zero would run this for free. Set a non-zero feeIssued, "
-                                + "omit it to inherit the tenant standard, or onboard the merchant with "
-                                + "waiveFees=true and a reason if it is deliberately unbilled.");
-            }
+            // A zero issue fee is allowed (owner decision, 2026-10-20); the console
+            // warns before saving one, and GET /merchants/fee-audit lists them.
             r.setFeeIssuedType(req.feeIssued().type());
             r.setFeeIssuedFixed(MerchantService.nz(req.feeIssued().fixed()));
             r.setFeeIssuedPercentage(MerchantService.nz(req.feeIssued().percentage()));
@@ -206,17 +194,6 @@ public class RuleAdminService {
         }
         r.setVoucherValidityDays(req.voucherValidityDays());
         return r;
-    }
-
-    /**
-     * True when this fee schedule would bill nothing. {@code validate} already
-     * rejects a PERCENTAGE of 0 and a FIXED_PLUS_PERCENTAGE missing a leg, so in
-     * practice this catches FIXED 0 — but it is written against the values
-     * rather than the type so a future fee mode cannot slip past.
-     */
-    private static boolean isZero(Dtos.FeeModel f) {
-        return MerchantService.nz(f.fixed()).signum() == 0
-                && MerchantService.nz(f.percentage()).signum() == 0;
     }
 
     @Transactional(readOnly = true)

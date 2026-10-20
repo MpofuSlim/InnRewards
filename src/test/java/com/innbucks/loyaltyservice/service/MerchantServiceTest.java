@@ -239,13 +239,17 @@ class MerchantServiceTest {
     }
 
     @Test
-    void create_rejectsPercentageWithZeroPercentage() {
-        MerchantService svc = newService(mock(MerchantRepository.class));
-        Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE,
+    void create_acceptsAZeroPercentFee_onBothSides() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        Dtos.FeeModel zeroPct = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE,
                 java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
 
-        assertThatThrownBy(() -> svc.create(UUID.randomUUID(), req(bad, null)))
-                .hasMessageContaining("percentage > 0");
+        Dtos.MerchantResponse resp = newService(repo).create(UUID.randomUUID(), req(zeroPct, zeroPct));
+
+        assertThat(resp.feeIssued().type()).isEqualTo(Merchant.FeeType.PERCENTAGE);
+        assertThat(resp.feeIssued().percentage()).isEqualByComparingTo("0");
+        assertThat(resp.feeRedeemed().percentage()).isEqualByComparingTo("0");
     }
 
     @Test
@@ -373,33 +377,32 @@ class MerchantServiceTest {
         assertThat(resp.name()).isEqualTo("Cafe A");
     }
 
-    // --- No free merchants: the issue fee must be priced or explicitly waived ---
+    // --- Zero fees are allowed (owner decision, 2026-10-20); the console warns ---
 
     @Test
-    void create_withNoIssueFeeAnywhere_isRefused() {
+    void create_withNoIssueFeeAnywhere_isAllowed() {
         MerchantRepository repo = mock(MerchantRepository.class);
         LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        // No record fee, no override, no global rule -> the platform would run
-        // this merchant for free forever.
-        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
-                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null)))
-                .hasMessageContaining("billed nothing for issuing");
+        Dtos.MerchantResponse resp = new MerchantService(repo, rules, PROPS, CURRENCIES)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, null, null));
+
+        assertThat(resp.name()).isEqualTo("Cafe A");
     }
 
     @Test
-    void create_withZeroIssueFee_isRefused() {
+    void create_withZeroIssueFee_isAllowed() {
         MerchantRepository repo = mock(MerchantRepository.class);
         LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
         Dtos.FeeModel freeIssue = new Dtos.FeeModel(Merchant.FeeType.FIXED,
                 java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
 
-        // An explicit FIXED 0 is still zero — spelling it out is not a waiver.
-        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
-                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, freeIssue, null)))
-                .hasMessageContaining("billed nothing for issuing");
+        Dtos.MerchantResponse resp = new MerchantService(repo, rules, PROPS, CURRENCIES)
+                .create(UUID.randomUUID(), new Dtos.MerchantRequest("Cafe A", null, null, null, freeIssue, null));
+
+        assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0");
     }
 
     @Test

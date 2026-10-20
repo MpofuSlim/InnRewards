@@ -1504,11 +1504,11 @@ merchant-specific first):
   `EffectiveFees.resolve`, and each side resolves independently:
   **merchant rule → merchant record (only when explicitly configured, i.e.
   anything other than the onboarding default FIXED 0/0) → global rule → no
-  fee**. A **zero ISSUE fee is refused on any rule** (`RULE_ZERO_ISSUE_FEE`) —
-  on a global rule it would make every merchant free at once, and on a merchant
-  rule it would silently undo the guard that refused that merchant at creation.
-  The only sanctioned way to be unbilled is `merchants.fee_waived` (V30), which
-  records who decided it and why. The REDEEM side may be zero freely.
+  fee**. **A zero fee is allowed on either side, FIXED 0 or PERCENTAGE 0
+  (owner decision, 2026-10-20)**, on a merchant rule, a global rule or the
+  merchant record. The console warns the merchant before saving one; the
+  backend refuses nothing. This reverses the earlier `RULE_ZERO_ISSUE_FEE` /
+  `MERCHANT_ZERO_ISSUE_FEE` / `FEE_PERCENT_ZERO` refusals; don't put them back.
 
 > [!IMPORTANT]
 > **The tenant is the BRAND, and its merchant admin runs every merchant under it
@@ -1546,21 +1546,12 @@ All V29 columns are nullable — null means "not configured at this level,
 inherit" — so existing rows keep their pre-V29 behaviour. `Dtos.RuleRequest`
 keeps a back-compat 8-arg constructor for callers built against the old shape.
 
-**No free merchants (V30).** `POST /loyalty/merchants` REFUSES creation when the
-effective **voucher-issue** fee resolves to zero — nothing on the merchant, none
-on its rule, and no tenant standard — with `MERCHANT_ZERO_ISSUE_FEE`. Issuing is
-the event we bill for, so a zero there means the platform runs that merchant for
-free forever and nothing else ever surfaces it. The **redeem** side may be zero
-freely: billing only issuance is a normal commercial arrangement, so it is
-reported by the audit and never refused. An operator can still onboard an
-unbilled merchant with `waiveFees: true` + a mandatory `waiveFeesReason`, which
-persists to `merchants.fee_waived` / `fee_waived_reason` — that is what makes
-"free on purpose" distinguishable from "free by accident".
-`GET /loyalty/merchants/fee-audit` lists every merchant issuing for free with
-that distinction, resolving all merchants from ONE rule query via
-`EffectiveFees.applicable` rather than an N+1. Pre-V30 rows default to
-`fee_waived = false`, so every merchant already onboarded free shows up as
-unwaived — deliberately, since that backlog is the point.
+**Zero-fee merchants are allowed (2026-10-20; V30's refusal is gone).**
+`POST /loyalty/merchants` no longer refuses a merchant whose effective issue
+fee is zero. `waiveFees: true` + `waiveFeesReason` (`merchants.fee_waived`)
+stays as an optional record that a merchant is free on purpose, and
+`GET /loyalty/merchants/fee-audit` still lists every merchant issuing for free,
+waived or not, so an accidental zero stays visible.
 
 **Onboarding shortcut:** `POST /loyalty/merchants` takes an optional
 `loyaltyOverride` block (earn rate, floor, both fee schedules) and creates the

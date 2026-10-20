@@ -79,7 +79,6 @@ public class MerchantService {
         merchants.save(m);
         com.innbucks.loyaltyservice.entity.LoyaltyRule overrideRule =
                 createOverrideRule(tenantId, m.getId(), req.loyaltyOverride());
-        requirePricedForIssuing(tenantId, m, overrideRule);
         return toResponse(m, overrideRule == null ? null : overrideRule.getId());
     }
 
@@ -161,10 +160,8 @@ public class MerchantService {
                     throw LoyaltyException.badRequest("FEE_PERCENT_HAS_FIXED",
                             fieldName + ": type=PERCENTAGE requires fixed to be null or 0");
                 }
-                if (pct.signum() == 0) {
-                    throw LoyaltyException.badRequest("FEE_PERCENT_ZERO",
-                            fieldName + ": type=PERCENTAGE requires percentage > 0");
-                }
+                // A 0% fee is allowed (owner decision, 2026-10-20): the console
+                // warns the merchant before saving one.
             }
             case FIXED_PLUS_PERCENTAGE -> {
                 if (fixed.signum() == 0 || pct.signum() == 0) {
@@ -261,42 +258,6 @@ public class MerchantService {
         }
         m.setFeeWaived(true);
         m.setFeeWaivedReason(reason);
-    }
-
-    /**
-     * Refuse to onboard a merchant we would never bill for issuing.
-     *
-     * <p>Issuing is the event we charge for, so a zero issue fee means the
-     * platform runs that merchant for free — forever, silently, because nothing
-     * else in the system ever surfaces it. Redemption is deliberately NOT
-     * guarded: billing only the issue side is a normal commercial arrangement.
-     *
-     * <p>Runs AFTER the merchant and any override rule are persisted so it sees
-     * exactly what the invoice will see — the merchant's own rule, its record
-     * fees, and the tenant standard, resolved by the same {@link EffectiveFees}
-     * the invoicing path uses. An explicit waiver skips the check.
-     */
-    private void requirePricedForIssuing(UUID tenantId, Merchant m,
-                                         com.innbucks.loyaltyservice.entity.LoyaltyRule justCreated) {
-        if (m.isFeeWaived()) {
-            return;
-        }
-        // The rule we just created goes FIRST, ahead of anything the repository
-        // returns: it is this merchant's own rule, and passing it in explicitly
-        // means the check does not depend on the persistence context having
-        // flushed it yet.
-        List<com.innbucks.loyaltyservice.entity.LoyaltyRule> applicable = new java.util.ArrayList<>();
-        if (justCreated != null) {
-            applicable.add(justCreated);
-        }
-        applicable.addAll(rules.findApplicable(tenantId, m.getId(), TransactionType.PURCHASE));
-        EffectiveFees fees = EffectiveFees.resolve(m, applicable, Instant.now());
-        if (fees.issuesForFree()) {
-            throw LoyaltyException.badRequest("MERCHANT_ZERO_ISSUE_FEE",
-                    "This merchant would be billed nothing for issuing vouchers. Set a voucher-issue fee "
-                            + "(loyaltyOverride.feeIssued), publish a tenant standard on a global rule, or pass "
-                            + "waiveFees=true with waiveFeesReason to onboard it free on purpose.");
-        }
     }
 
     /**

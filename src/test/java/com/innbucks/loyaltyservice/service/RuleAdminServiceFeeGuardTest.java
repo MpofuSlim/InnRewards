@@ -10,16 +10,12 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Pins the zero-issue-fee guard on {@link RuleAdminService#build}, which both
- * POST /loyalty/rules and merchant onboarding go through.
- *
- * <p>Issuing is the event the platform bills for, so a zero issue fee is only
- * ever legitimate as a recorded decision on the merchant (fee_waived), never as
- * a number typed into a rule — on the tenant standard it would make every
- * merchant free at once.
+ * Pins how {@link RuleAdminService#build} (POST /loyalty/rules and merchant
+ * onboarding) treats zero fees: allowed on both sides, on a global rule and a
+ * merchant rule alike (owner decision, 2026-10-20). The console warns before
+ * saving one; omitting a side still means "inherit".
  */
 class RuleAdminServiceFeeGuardTest {
 
@@ -33,20 +29,23 @@ class RuleAdminServiceFeeGuardTest {
     }
 
     @Test
-    void tenantStandardWithAZeroIssueFee_isRefused() {
-        // A global rule (merchantId null) priced at zero makes EVERY merchant
-        // under the tenant free — the widest possible version of the bug.
-        assertThatThrownBy(() -> RuleAdminService.build(UUID.randomUUID(), null, rule(fixed("0"), null), null, null))
-                .hasMessageContaining("would run this for free");
+    void tenantStandardWithAZeroIssueFee_isAllowed() {
+        LoyaltyRule r = RuleAdminService.build(UUID.randomUUID(), null, rule(fixed("0"), null), null, null);
+
+        assertThat(r.getFeeIssuedType()).isEqualTo(Merchant.FeeType.FIXED);
+        assertThat(r.getFeeIssuedFixed()).isEqualByComparingTo("0");
     }
 
     @Test
-    void merchantRuleWithAZeroIssueFee_isAlsoRefused() {
-        // Otherwise a rule written after onboarding silently undoes the guard
-        // that refused the merchant at creation time.
-        assertThatThrownBy(() -> RuleAdminService.build(UUID.randomUUID(), UUID.randomUUID(),
-                rule(fixed("0"), null), null, null))
-                .hasMessageContaining("would run this for free");
+    void merchantRuleWithAZeroPercentIssueAndRedeemFee_isAllowed() {
+        Dtos.FeeModel zeroPct = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE, BigDecimal.ZERO, BigDecimal.ZERO);
+
+        LoyaltyRule r = RuleAdminService.build(UUID.randomUUID(), UUID.randomUUID(),
+                rule(zeroPct, zeroPct), null, null);
+
+        assertThat(r.getFeeIssuedType()).isEqualTo(Merchant.FeeType.PERCENTAGE);
+        assertThat(r.getFeeIssuedPercentage()).isEqualByComparingTo("0");
+        assertThat(r.getFeeRedeemedPercentage()).isEqualByComparingTo("0");
     }
 
     @Test

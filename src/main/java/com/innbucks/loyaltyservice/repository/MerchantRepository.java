@@ -33,6 +33,13 @@ public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
     // A primary-key probe; deliberately never cached.
     boolean existsByIdAndTenantId(UUID id, UUID tenantId);
 
+    // The organization a merchant belongs to, without loading the row. JwtFilter
+    // asks it for a token that carries BOTH a shop-staff merchant pin and a
+    // loyalty organization (ShopPinOrganizationCheck). A primary-key probe.
+    @org.springframework.data.jpa.repository.Query(
+            "select m.organizationId from Merchant m where m.id = :id")
+    Optional<UUID> findOrganizationIdById(@org.springframework.data.repository.query.Param("id") UUID id);
+
     // The ticketing bridge maps an event organizer (user_uuid) to one merchant.
     // Unique when set (uk_merchant_organizer), so at most one row matches.
     Optional<Merchant> findByOrganizerUuid(UUID organizerUuid);

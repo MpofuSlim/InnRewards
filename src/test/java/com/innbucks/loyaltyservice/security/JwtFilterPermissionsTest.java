@@ -49,7 +49,7 @@ class JwtFilterPermissionsTest {
         ReflectionTestUtils.setField(jwtUtil, "secret", SECRET);
         RevokedTokenDenylist denylist = mock(RevokedTokenDenylist.class);
         when(denylist.isRevoked(anyString())).thenReturn(false);
-        filter = new JwtFilter(jwtUtil, denylist, mock(TokenVersionStore.class));
+        filter = new JwtFilter(jwtUtil, denylist, mock(TokenVersionStore.class), mock(ShopPinOrganizationCheck.class));
     }
 
     @AfterEach

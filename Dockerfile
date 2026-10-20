@@ -36,9 +36,12 @@ FROM eclipse-temurin:25-jre-alpine AS runtime
 # fixed version is not reachable, instead of silently keeping the vulnerable
 # one. Same convention as ticketing-system's Dockerfiles: raise the floor when
 # Trivy reports a new CVE.
+# libexpat >= 2.9.0-r0 — CVE-2026-77214 (HIGH), heap buffer over-read in
+# XML_ParseBuffer (information disclosure). Fixed in 2.9.0-r0; failed the
+# Release Trivy gate for the #194 merge. ticketing-system raised its floor in #715.
 RUN apk update \
  && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust \
- && apk add --no-cache --upgrade 'libexpat>=2.8.5-r0'
+ && apk add --no-cache --upgrade 'libexpat>=2.9.0-r0'
 RUN addgroup -S app && adduser -S -G app app \
     && mkdir -p /app/data \
     && chown -R app:app /app

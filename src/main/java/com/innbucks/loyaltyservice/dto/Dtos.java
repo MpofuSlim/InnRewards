@@ -342,6 +342,36 @@ public class Dtos {
         }
     }
 
+    // The till's balance lookup: what a customer can pay with points at this
+    // shop, before the checkout. The phone rides the body so it stays out of
+    // URL logs, as in the support lookup.
+    public record TillBalanceRequest(
+            @Schema(example = "+263771234567", description = "Customer's phone number, any spelling the earn accepts.")
+            @NotBlank String phoneNumber
+    ) {}
+
+    public record TillBalanceResponse(
+            @Schema(example = "****4567", description = "The phone, last four digits only.")
+            String phoneMasked,
+            @Schema(example = "970", description = "Points the customer can spend: their MAIN wallet, the one a " +
+                    "burn debits. One wallet per phone across every brand on the platform.")
+            BigDecimal points,
+            @Schema(example = "9.70", description = "The most those points can take off a bill here, in `currency`. " +
+                    "Send it as the checkout's `pointsValue` to use them all; it never needs more points than " +
+                    "the customer holds.")
+            BigDecimal pointsValue,
+            @Schema(example = "USD", description = "The shop's merchant currency.")
+            String currency,
+            @Schema(example = "100.0000", description = "The platform redemption rate: points per USD.")
+            BigDecimal pointsPerUnit,
+            @Schema(example = "ACTIVE", allowableValues = {"ACTIVE", "PENDING", "BLOCKED", "INACTIVE", "NONE"},
+                    description = "The customer's account at this brand. NONE = never earned here (a points " +
+                            "payment answers 404 until a sale here creates the account).")
+            String accountStatus,
+            @Schema(example = "true", description = "True only for ACTIVE. Otherwise take the bill in cash or card.")
+            boolean canSpendHere
+    ) {}
+
     // Loyalty enrolment is by phone number only — name/email/nationalId belong
     // to user-service. Loyalty validates the phone exists there before
     // creating its local LoyaltyUser projection.

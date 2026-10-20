@@ -2620,6 +2620,59 @@ and `reference`. `ShopCheckoutService.tillCheckout` runs it; the S2S
 - **Both rows carry the path's shop**, including a merchant or super admin's
   burn, which has no shop on its token.
 
+## The till's balance lookup, and POS keys refunding their own sales
+
+**`POST /loyalty/shops/{shopId}/balance-lookup` (`{ "phoneNumber" }`) tells a
+till what a customer can pay with points there, before the checkout.**
+`TillBalanceService`. Same roles and shop pin as guest checkout: both go
+through `ShopController.requireTillShop`, so they cannot drift.
+
+- **Read-only, deliberately.** It never creates a projection or a wallet and
+  never calls `spendabilityOf`, which heals and can register a phone through
+  the InnBucks directory. A PENDING row is reported through the side-effect-free
+  `isRegistrationPending` (a registered phone's stale row reads ACTIVE, since
+  the burn heals it). A phone with no account here is `points: 0`,
+  `accountStatus: NONE`, never a 404, so the endpoint is no directory of
+  customers.
+- **`points` is the MAIN wallet, not the total.** The burn debits MAIN only
+  (`RedemptionService` → `walletService.mainWallet`), so counting pockets
+  would promise points the checkout cannot spend.
+- **`pointsValue` ("use all") can never overshoot.** It is the largest cent
+  amount whose burn, through the same local → USD → whole-points conversion
+  (`fx.toBase`, `rates.pointsFor` HALF_UP), needs no more than the balance:
+  the first estimate is rounded down and stepped down a cent at a time until it
+  fits. A till that sends it back is never refused `INSUFFICIENT_FUNDS` for a
+  rounding cent. `TillBalanceServiceTest` pins an FX round trip that comes back
+  one cent heavy.
+- The phone is in the BODY (URL logs), the response is `no-store`, and
+  `loyalty.till.balance_lookup{outcome=found|none}` is registered at 0: many
+  `none` from one till is someone working through numbers. A per-caller
+  ceiling is the next step if that ever shows up.
+
+**A POS API key may reverse its own sales** (`POST /loyalty/transactions/{id}/reverse`).
+A key's till token is a SHOP_USER, and reversals are a supervisor's, so a POS
+backend could not refund through the API. `TillReversalGuard`, before
+`TransactionService.reverse`:
+- **A POS key is recognised by shape, not by a role:** subject
+  `pos-key:<id>` AND `userUuid` = that id AND SHOP_USER
+  (`CallerDetails.isPosApiKey`, ticketing V51's mint). A person's subject is an
+  email or a phone, and a token whose subject names a key but whose `userUuid`
+  does not match is treated as a person.
+- **A key reverses only a PURCHASE / CARD_PAYMENT / REDEMPTION that it posted**
+  (`posted_by` = the key id), within `loyalty.pos.reversal-window-days`
+  (default 30): else `403 REVERSAL_NOT_PERMITTED` / `REVERSAL_WINDOW_PASSED`.
+  It cannot reverse a reversal (undoing a refund is a supervisor's call). A
+  missing, other-tenant or other-merchant row is left to `reverse`, which
+  answers it as always (404 / CROSS_TENANT / WRONG_MERCHANT).
+- **A cashier signed in as a person is still refused**, now as
+  `403 REVERSAL_NOT_PERMITTED` from `requireMayReverse`, which runs before the
+  tenant is resolved. SHOP_USER is in the endpoint's `@PreAuthorize` only so a
+  key's token reaches the guard.
+- The guard reads `posted_by`, `created_at` and the type before `reverse` takes
+  its row lock: none of them changes after the row is written, so no race.
+  `loyalty.till.pos_key_reversal{outcome}` counts allowed / not_own / too_old.
+- Pinned by `TillBalanceAndPosReversalIT` (real JWTs and Postgres).
+
 ## A voucher is worth its face value, ONCE — MULTI_USE is retired
 
 **Owner decision (2026-09-18).** Asked whether a $5 voucher with 3 uses hands

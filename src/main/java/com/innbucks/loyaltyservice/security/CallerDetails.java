@@ -112,6 +112,30 @@ public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UU
         return null;
     }
 
+    /**
+     * The subject user-service gives a POS API key's till token (ticketing V51):
+     * {@code "pos-key:" + key id}, with the key id also in the {@code userUuid}
+     * claim.
+     */
+    public static final String POS_KEY_SUBJECT_PREFIX = "pos-key:";
+
+    /**
+     * True when the caller is a POS API key's till token rather than a person.
+     *
+     * <p>Three things must agree: the subject is {@code pos-key:<id>}, the
+     * {@code userUuid} claim is that same id, and the caller is a SHOP_USER (the
+     * only role a key's token carries). A person's subject is an email address or
+     * a phone number, neither of which can take that shape, and only user-service
+     * holds the key that signs fleet tokens.
+     */
+    public static boolean isPosApiKey() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        UUID userId = currentUserId();
+        return auth != null && userId != null
+                && (POS_KEY_SUBJECT_PREFIX + userId).equals(auth.getName())
+                && hasAnyRole("ROLE_SHOP_USER");
+    }
+
     /** True iff the current authentication carries any of the given authorities
      *  (e.g. {@code "ROLE_SUPER_ADMIN"}). Null-safe: returns {@code false} when
      *  unauthenticated. Centralises role checks so callers never touch the

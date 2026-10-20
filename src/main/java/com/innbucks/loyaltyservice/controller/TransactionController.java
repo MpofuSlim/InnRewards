@@ -44,13 +44,16 @@ public class TransactionController {
 
     private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
     private final com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral;
+    private final com.innbucks.loyaltyservice.service.TillReversalGuard reversalGuard;
 
     public TransactionController(TransactionService transactions, TransferService transferService,
                                  RedemptionService redemptionService, TenantContext tenantContext,
                                  com.innbucks.loyaltyservice.service.UserService users,
                                  com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
-                                 com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral) {
+                                 com.innbucks.loyaltyservice.service.EligibilityDeferral eligibilityDeferral,
+                                 com.innbucks.loyaltyservice.service.TillReversalGuard reversalGuard) {
         this.eligibilityDeferral = eligibilityDeferral;
+        this.reversalGuard = reversalGuard;
         this.transactions = transactions;
         this.transferService = transferService;
         this.redemptionService = redemptionService;
@@ -153,7 +156,11 @@ public class TransactionController {
     @Operation(summary = "Reverse a transaction",
             description = "Issues a compensating ledger entry that negates the points originally awarded by " +
                           "transaction `{id}`. The original row is preserved (immutable ledger). Used for " +
-                          "refunds and chargebacks. Optional JSON body: `{ \"reason\": \"...\" }`.")
+                          "refunds and chargebacks. Optional JSON body: `{ \"reason\": \"...\" }`.\n\n" +
+                          "Supervisors (SHOP_ADMIN, MERCHANT_ADMIN, SUPER_ADMIN) reverse any transaction of their " +
+                          "merchant. A POS API key's till token reverses only the earns and points burns that same " +
+                          "key posted, within 30 days (`loyalty.pos.reversal-window-days`). A cashier signed in as " +
+                          "a person cannot reverse.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -184,6 +191,44 @@ public class TransactionController {
                                       }
                                     }
                                     """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Not allowed to reverse this transaction",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = {
+                                    @ExampleObject(name = "Cashier, not a supervisor", value = """
+                                            {
+                                              "code": "REVERSAL_NOT_PERMITTED",
+                                              "message": "Only a supervisor can reverse a transaction.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "API key, not its own sale", value = """
+                                            {
+                                              "code": "REVERSAL_NOT_PERMITTED",
+                                              "message": "This API key can only reverse sales it posted. Ask a supervisor to reverse this one.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "API key, sale too old", value = """
+                                            {
+                                              "code": "REVERSAL_WINDOW_PASSED",
+                                              "message": "This sale is more than 30 days old. Ask a supervisor to reverse it.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Another merchant's transaction", value = """
+                                            {
+                                              "code": "WRONG_MERCHANT",
+                                              "message": "This transaction belongs to a different merchant.",
+                                              "data": null
+                                            }
+                                            """)
+                            }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -218,11 +263,16 @@ public class TransactionController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    // SHOP_USER is admitted only so a POS API key's till token reaches the
+    // guard; the guard refuses every SHOP_USER that is a person.
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN','SHOP_USER')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> reverse(@PathVariable UUID id,
                                             @Valid @RequestBody(required = false) Dtos.PointsReverseRequestDTO body) {
+        reversalGuard.requireMayReverse();
         String reason = body == null ? null : body.reason();
-        Dtos.TransactionResponse data = transactions.reverse(tenantContext.requireTenantId(), id, reason);
+        UUID tenantId = tenantContext.requireTenantId();
+        reversalGuard.check(tenantId, id);
+        Dtos.TransactionResponse data = transactions.reverse(tenantId, id, reason);
         return ResponseEntity.ok(ApiResult.ok("Transaction reversed successfully", data));
     }
 

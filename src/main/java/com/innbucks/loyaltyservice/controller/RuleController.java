@@ -64,12 +64,10 @@ public class RuleController {
                           "set on a merchant rule they override the standard for that merchant only. Each side " +
                           "resolves independently in this order: **merchant rule → the merchant record's own " +
                           "fee (only when it was set explicitly at onboarding) → global rule → no fee**.\n\n" +
-                          "**A zero ISSUE fee is refused** (`RULE_ZERO_ISSUE_FEE`), on a global rule and a " +
-                          "merchant rule alike: on the tenant standard it would make every merchant free at " +
-                          "once, and on a merchant rule it would silently undo the check that refused that " +
-                          "merchant at creation. Omit `feeIssued` to inherit rather than to zero it. The only " +
-                          "sanctioned way to run a merchant unbilled is `waiveFees` at onboarding, which " +
-                          "records who decided it and why. The **redeem** side may be zero freely.")
+                          "**A zero fee is allowed on either side** (FIXED 0 or PERCENTAGE 0). On a global rule " +
+                          "it makes every merchant under the tenant free to issue or redeem, so the console " +
+                          "must warn before saving one. Omit `feeIssued` to inherit rather than to zero it. " +
+                          "`GET /loyalty/merchants/fee-audit` lists every merchant issuing for free.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -125,13 +123,6 @@ public class RuleController {
                                             {
                                               "code": "MIN_TXN_NEGATIVE",
                                               "message": "minTransactionAmount must be >= 0",
-                                              "data": null
-                                            }
-                                            """),
-                                    @ExampleObject(name = "Zero issue fee", value = """
-                                            {
-                                              "code": "RULE_ZERO_ISSUE_FEE",
-                                              "message": "A voucher-issue fee of zero would run this for free. Set a non-zero feeIssued, omit it to inherit the tenant standard, or onboard the merchant with waiveFees=true and a reason if it is deliberately unbilled.",
                                               "data": null
                                             }
                                             """),

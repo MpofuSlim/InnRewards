@@ -127,10 +127,9 @@ public class Dtos {
                             + "inherits every global rule as-is.")
             MerchantRuleOverride loyaltyOverride,
             @Schema(example = "false", nullable = true,
-                    description = "Deliberately onboard this merchant with NO voucher-issue fee. Creation is "
-                            + "REFUSED with MERCHANT_ZERO_ISSUE_FEE when the effective ISSUE fee works out to zero "
-                            + "and this is not true, so an unbilled merchant is always someone's decision rather "
-                            + "than a forgotten field. The REDEEM fee may be zero freely — only issuing is guarded. "
+                    description = "Record that this merchant is deliberately unbilled, with a reason. Optional: "
+                            + "a 0% / zero issue or redeem fee is accepted without it; a waiver only marks the "
+                            + "merchant as free on purpose in GET /loyalty/merchants/fee-audit. "
                             + "Requires waiveFeesReason.")
             Boolean waiveFees,
             @Schema(example = "Pilot partner - free for the first quarter, revisit 2026-10", nullable = true,

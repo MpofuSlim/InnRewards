@@ -73,14 +73,10 @@ public class MerchantController {
                           "when omitted, so you can override just the floor, just a fee, or the whole set. " +
                           "The created rule's id comes back as `loyaltyRuleId`; change the terms later with " +
                           "`POST /loyalty/rules` (and deactivate the old rule).\n\n" +
-                          "**A merchant must be priced for ISSUING.** Creation is refused with " +
-                          "`MERCHANT_ZERO_ISSUE_FEE` when the effective voucher-issue fee resolves to zero — no " +
-                          "fee on the merchant, none on its rule, and no tenant standard — because such a " +
-                          "merchant is billed nothing forever and nothing else surfaces it. Fix it by pricing " +
-                          "the merchant (`loyaltyOverride.feeIssued`), publishing a tenant standard on a global " +
-                          "rule, or passing `waiveFees: true` with a `waiveFeesReason` to onboard it free on " +
-                          "purpose. The **redeem** side may be zero freely — billing only issuance is a normal " +
-                          "arrangement. Waived merchants are listed by `GET /loyalty/merchants/fee-audit`.\n\n" +
+                          "**Zero fees are allowed.** A merchant may be onboarded with a 0% / zero issue or " +
+                          "redeem fee, or with no fee at all; the console warns before saving one. " +
+                          "`waiveFees: true` with a `waiveFeesReason` records that it is free on purpose. " +
+                          "`GET /loyalty/merchants/fee-audit` lists every merchant issuing for free.\n\n" +
                           "**Who owns it.** A merchant belongs to an organization (a business), whose owners and " +
                           "admins manage it and receive its invoices. It is onboarded for the organization your " +
                           "session acts for — you must run it (OWNER or ADMIN) and it must hold the loyalty " +
@@ -154,13 +150,6 @@ public class MerchantController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "name": "must not be blank" }
-                                    }
-                                    """),
-                                    @ExampleObject(name = "Nobody priced this merchant", value = """
-                                    {
-                                      "code": "MERCHANT_ZERO_ISSUE_FEE",
-                                      "message": "This merchant would be billed nothing for issuing vouchers. Set a voucher-issue fee (loyaltyOverride.feeIssued), publish a tenant standard on a global rule, or pass waiveFees=true with waiveFeesReason to onboard it free on purpose.",
-                                      "data": null
                                     }
                                     """),
                                     @ExampleObject(name = "Waiver with no reason", value = """
@@ -237,8 +226,7 @@ public class MerchantController {
                                     """),
                             @ExampleObject(name = "Inherit the tenant standard",
                                     description = "No fees, no override — the merchant follows every global rule. "
-                                            + "Only valid when a global rule actually prices the issue side; "
-                                            + "otherwise this is refused with MERCHANT_ZERO_ISSUE_FEE.",
+                                            + "With no global fee either, it issues for free.",
                                     value = """
                                     {
                                       "name": "Innbucks Westgate",

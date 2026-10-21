@@ -1150,18 +1150,22 @@ public class VoucherService {
         // exactly as every voucher used to be: it hands the till its face value,
         // ignores a requested amount, and is never spent down — "10% off" is
         // not 10 of anything.
-        boolean wholeLegacyUse = v.getRemainingBalance() == null;
+        // The stored balance, read once: non-null means a money voucher spent
+        // down; null means a legacy row spent whole (`remaining` above may still
+        // be a face-value fallback for it, used only by the exhausted guard).
+        BigDecimal balanceBefore = v.getRemainingBalance();
+        boolean wholeLegacyUse = balanceBefore == null;
         BigDecimal applied;
         BigDecimal balanceAfter;
-        if (wholeLegacyUse) {
+        if (balanceBefore == null) {
             applied = v.getValue();
             balanceAfter = null;
             v.setUsesRemaining(v.getUsesRemaining() - 1);
         } else {
             BigDecimal requested = req.amount();
-            applied = (requested == null || requested.compareTo(remaining) >= 0 ? remaining : requested)
+            applied = (requested == null || requested.compareTo(balanceBefore) >= 0 ? balanceBefore : requested)
                     .setScale(4, java.math.RoundingMode.HALF_UP);
-            balanceAfter = remaining.subtract(applied).setScale(4, java.math.RoundingMode.HALF_UP);
+            balanceAfter = balanceBefore.subtract(applied).setScale(4, java.math.RoundingMode.HALF_UP);
             v.setRemainingBalance(balanceAfter);
             v.setUsesRemaining(balanceAfter.signum() > 0 ? Math.max(1, v.getUsesRemaining()) : 0);
         }
@@ -1175,9 +1179,9 @@ public class VoucherService {
         // The USD share of the voucher's issue-time liability this use consumed
         // — telescoped from the frozen base value, never re-converted at today's
         // rate. A legacy whole use consumes the whole base value, as it did.
-        BigDecimal baseAmount = wholeLegacyUse
+        BigDecimal baseAmount = (balanceBefore == null || balanceAfter == null)
                 ? v.getBaseValue()
-                : baseShare(v.getValue(), v.getBaseValue(), remaining, balanceAfter);
+                : baseShare(v.getValue(), v.getBaseValue(), balanceBefore, balanceAfter);
         // The FIRST successful use carries a FIXED redeem-side fee; every use
         // carries the percentage on its own amount (EffectiveFees).
         boolean firstUse = !redemptions.existsByVoucherIdAndResult(v.getId(), VoucherRedemption.Result.SUCCESS);
@@ -1258,7 +1262,7 @@ public class VoucherService {
      * @return null when the voucher has no base value or no face value to scale by
      */
     static BigDecimal baseShare(BigDecimal face, BigDecimal base, BigDecimal before, BigDecimal after) {
-        if (face == null || base == null || face.signum() <= 0) {
+        if (face == null || base == null || before == null || after == null || face.signum() <= 0) {
             return null;
         }
         return baseAt(face, base, before).subtract(baseAt(face, base, after));

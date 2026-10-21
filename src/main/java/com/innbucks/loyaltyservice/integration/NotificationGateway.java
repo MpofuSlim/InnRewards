@@ -217,10 +217,6 @@ public class NotificationGateway {
     public record VoucherUse(java.util.UUID voucherId, java.util.UUID merchantId, String holderPhone,
                              BigDecimal used, BigDecimal remaining, String currency,
                              java.time.Instant expiresAt) {
-
-        boolean fullyUsed() {
-            return remaining == null || remaining.signum() <= 0;
-        }
     }
 
     /**
@@ -273,7 +269,8 @@ public class NotificationGateway {
     /** The holder's usage notice — see {@link #notifyVoucherUsed}. Package-visible for its tests. */
     static String usedMessage(VoucherUse use, String merchant) {
         String currency = (use.currency() == null || use.currency().isBlank()) ? "" : use.currency() + " ";
-        if (use.fullyUsed()) {
+        BigDecimal left = use.remaining();
+        if (left == null || left.signum() <= 0) {
             StringBuilder sb = new StringBuilder("Your InnBucks voucher")
                     .append(merchant == null ? "" : " for " + merchant)
                     .append(" is now fully used");
@@ -288,7 +285,7 @@ public class NotificationGateway {
         if (use.used() != null) {
             sb.append(currency).append(money(use.used())).append(" used, ");
         }
-        sb.append(currency).append(money(use.remaining())).append(" left");
+        sb.append(currency).append(money(left)).append(" left");
         if (use.expiresAt() != null) {
             sb.append(", valid until ").append(EXPIRY_FMT.format(use.expiresAt()));
         }

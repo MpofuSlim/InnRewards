@@ -517,8 +517,15 @@ public class PublicTestController {
                     `merchantId` may be omitted when the voucher already names one.
 
                     Runs the production redemption path, so the real guards apply — wrong merchant, \
-                    already redeemed, expired, usage exceeded — and a multi-use voucher comes back \
-                    PARTIALLY_USED with a remaining count rather than REDEEMED.
+                    already fully redeemed, expired, revoked.
+
+                    Every voucher holds a BALANCE. Send `amount` to pay part of a bill with it: the \
+                    voucher comes back PARTIALLY_USED with `remainingBalance` above zero. Omit `amount` \
+                    (or send more than is left) to spend what is left: it comes back REDEEMED with \
+                    `remainingBalance` 0, and `value` says how much was actually applied. The holder \
+                    gets a WhatsApp (SMS fallback) after every use saying what was used and what is \
+                    left. `reference` makes a retry safe: the same value for the same voucher replays \
+                    the original use with `replayed: true`.
 
                     **Authenticated equivalent:** `POST /loyalty/vouchers/redeem`.""")
     @ApiResponses({
@@ -532,15 +539,34 @@ public class PublicTestController {
                                       "data": {
                                         "redemptionId": "5c2f1e90-1111-2222-3333-444455556666",
                                         "voucherId": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
-                                        "status": "REDEEMED",
-                                        "usesRemaining": 0,
-                                        "value": 10.0000,
-                                        "redeemedAt": "2026-08-25T14:02:00Z"
+                                        "status": "PARTIALLY_USED",
+                                        "usesRemaining": 1,
+                                        "value": 20.0000,
+                                        "redeemedAt": "2026-08-25T14:02:00Z",
+                                        "remainingBalance": 30.0000,
+                                        "currency": "USD",
+                                        "reference": "TILL3-RCPT-88412",
+                                        "replayed": false
                                       }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Already redeemed, expired, usage exceeded, or wrong merchant"),
+                    responseCode = "400", description = "Expired (EXPIRED), a validation error, or an amount "
+                            + "with fractions of a cent (AMOUNT_PRECISION)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "Wrong merchant (WRONG_MERCHANT) or the holder's "
+                            + "account state (USER_BLOCKED / USER_PENDING / USER_INACTIVE)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409", description = "Already fully redeemed (ALREADY_REDEEMED), revoked "
+                            + "(REVOKED), or the reference names another voucher's use (DUPLICATE_REFERENCE)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "DUPLICATE_REFERENCE",
+                                      "message": "This reference was already used for another voucher redemption.",
+                                      "data": null
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404", description = "Public test endpoints are disabled, or no such voucher code")
     })
@@ -562,10 +588,11 @@ public class PublicTestController {
                 : (v.getMerchantId() != null ? v.getMerchantId()
                                              : resolveMerchant(v.getTenantId(), null));
         LoyaltyUser holder = holderOf(v);
-        Dtos.RedemptionResponse data = asCustomer(holder, () -> eligibilityDeferral.run(() -> voucherService.redeem(
-                v.getTenantId(), merchantId,
-                new Dtos.RedeemVoucherRequest(merchantId, v.getCode(),
-                        holder == null ? null : holder.getId(), null, null, null))));
+        Dtos.RedemptionResponse data = asCustomer(holder, () -> eligibilityDeferral.run(() ->
+                voucherService.redeemIdempotent(v.getTenantId(), merchantId,
+                        new Dtos.RedeemVoucherRequest(merchantId, v.getCode(),
+                                holder == null ? null : holder.getId(), null, null, null,
+                                body.amount(), body.reference()))));
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 
@@ -796,5 +823,24 @@ public class PublicTestController {
             String code,
             @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
                     description = "Optional when the voucher already names a merchant.")
-            UUID merchantId) {}
+            UUID merchantId,
+            @io.swagger.v3.oas.annotations.media.Schema(example = "20.00", nullable = true,
+                    description = "How much of the bill to pay with the voucher, in its currency, at most two "
+                            + "decimal places. Omit it to spend the whole remaining balance; more than is left "
+                            + "applies what is left.")
+            @jakarta.validation.constraints.Positive(message = "amount must be greater than zero")
+            BigDecimal amount,
+            @io.swagger.v3.oas.annotations.media.Schema(example = "TILL3-RCPT-88412", nullable = true,
+                    maxLength = 100,
+                    description = "Optional idempotency key, unique per merchant. A retry with the same value "
+                            + "for the same voucher replays the original use (`replayed: true`); the same value "
+                            + "for another voucher is 409 DUPLICATE_REFERENCE.")
+            @jakarta.validation.constraints.Size(max = 100, message = "reference must be at most 100 characters")
+            String reference) {
+
+        /** Code and merchant only — spend the whole balance, no idempotency key. */
+        public PublicRedeemVoucherRequest(String code, UUID merchantId) {
+            this(code, merchantId, null, null);
+        }
+    }
 }

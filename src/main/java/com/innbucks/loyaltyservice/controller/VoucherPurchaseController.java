@@ -205,7 +205,8 @@ public class VoucherPurchaseController {
                                           "transferredAt": null,
                                           "expiresAt": "2027-09-17T19:52:10Z",
                                           "transferredFromUserId": null,
-                                          "transferredFromPhone": null
+                                          "transferredFromPhone": null,
+                                          "remainingBalance": 5.0000
                                         }
                                       }
                                     }
@@ -286,7 +287,8 @@ public class VoucherPurchaseController {
                                           "transferredAt": null,
                                           "expiresAt": "2027-09-17T19:55:00Z",
                                           "transferredFromUserId": null,
-                                          "transferredFromPhone": null
+                                          "transferredFromPhone": null,
+                                          "remainingBalance": 5.0000
                                         },
                                         "electronicPaymentUntil": null,
                                         "cardApprovalCode": null
@@ -445,7 +447,8 @@ public class VoucherPurchaseController {
                                           "transferredAt": null,
                                           "expiresAt": "2027-09-17T19:55:00Z",
                                           "transferredFromUserId": null,
-                                          "transferredFromPhone": null
+                                          "transferredFromPhone": null,
+                                          "remainingBalance": 5.0000
                                         },
                                         "electronicPaymentUntil": null,
                                         "cardApprovalCode": "A1B2C3"

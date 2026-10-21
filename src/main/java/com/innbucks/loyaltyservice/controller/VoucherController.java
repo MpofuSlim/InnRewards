@@ -119,7 +119,8 @@ public class VoucherController {
                                         "transferredAt": null,
                                         "expiresAt": "2026-10-17T10:30:00Z",
                                         "transferredFromUserId": null,
-                                        "transferredFromPhone": null
+                                        "transferredFromPhone": null,
+                                        "remainingBalance": 5.0000
                                       }
                                     }
                                     """)
@@ -151,7 +152,7 @@ public class VoucherController {
                                     @ExampleObject(name = "MULTI_USE is retired", value = """
                                             {
                                               "code": "MULTI_USE_RETIRED",
-                                              "message": "Multi-use vouchers are no longer issued — a voucher is worth its face value and is redeemed once. Issue it as SINGLE_USE, or issue several vouchers.",
+                                              "message": "Multi-use vouchers are no longer issued — a voucher holds its face value as a balance that can be spent across several uses. Issue it as SINGLE_USE, or issue several vouchers.",
                                               "data": null
                                             }
                                             """)}
@@ -246,7 +247,8 @@ public class VoucherController {
                                           "transferredAt": null,
                                           "expiresAt": "2026-06-03T10:30:00Z",
                                           "transferredFromUserId": null,
-                                          "transferredFromPhone": null
+                                          "transferredFromPhone": null,
+                                          "remainingBalance": 5.0000
                                         },
                                         {
                                           "id": "d2c8f0a1-0123-4567-1234-567890123456",
@@ -276,7 +278,8 @@ public class VoucherController {
                                           "transferredAt": null,
                                           "expiresAt": "2026-06-03T10:30:00Z",
                                           "transferredFromUserId": null,
-                                          "transferredFromPhone": null
+                                          "transferredFromPhone": null,
+                                          "remainingBalance": 5.0000
                                         }
                                       ]
                                     }
@@ -331,9 +334,22 @@ public class VoucherController {
     }
 
     @PostMapping("/redeem")
-    @Operation(summary = "Redeem a voucher at a merchant",
+    @Operation(summary = "Redeem a voucher at a merchant — all of it, or part of its balance",
             description = "Validates the code's signature, expiry, status, and merchant scope; checks the " +
-                          "device fingerprint / IP against velocity limits; and decrements `usesRemaining`. " +
+                          "device fingerprint / IP against velocity limits; and spends the voucher's balance.\n\n" +
+                          "**Every voucher holds a BALANCE.** Send `amount` to pay part of a bill with it: the " +
+                          "voucher comes back `PARTIALLY_USED` with the rest in `remainingBalance`, and can be " +
+                          "used again until that reaches zero. Omit `amount` to spend everything that is left " +
+                          "(a voucher spent in one go behaves exactly as it always did). An `amount` bigger than " +
+                          "the balance is never refused: what is left is applied, the voucher becomes `REDEEMED`, " +
+                          "and `value` says how much was actually taken off the bill — read it, never assume the " +
+                          "amount you sent. After every successful use the holder gets a WhatsApp (SMS fallback) " +
+                          "saying what was used and what is left; it never contains the code.\n\n" +
+                          "**Retries:** send a `reference` (e.g. the receipt number, unique per merchant). The " +
+                          "same reference for the same voucher returns the ORIGINAL result with `replayed: " +
+                          "true` and spends nothing — even after that use emptied the voucher. The same " +
+                          "reference for a different voucher is 409 `DUPLICATE_REFERENCE`. Without a reference " +
+                          "every call is a new use.\n\n" +
                           "Failed attempts are recorded in `fraud_attempts`. When the velocity threshold is " +
                           "exceeded FraudService may auto-block the ACCOUNT OF THE AUTHENTICATED CALLER — " +
                           "never the `userId` sent in the body, which is recorded as a claim only. A " +
@@ -348,28 +364,72 @@ public class VoucherController {
                           "same budget, so a burst of parallel requests cannot outrun it. A code the " +
                           "check digit shows was mistyped (400 `VOUCHER_CODE_MISTYPED`), or an expired, " +
                           "revoked or spent voucher, or one at the wrong shop — presented by its holder " +
-                          "or by staff — never counts. A successful redemption does not reset the count.")
+                          "or by staff — never counts, and neither does a replay or a " +
+                          "`DUPLICATE_REFERENCE`. A successful redemption does not reset the count.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Voucher redeemed",
+                    description = "Voucher used. `value` is what came off this bill; `remainingBalance` "
+                            + "what the voucher has left. `replayed: true` means this is the stored result of an "
+                            + "earlier call with the same `reference` — nothing was spent this time.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Redeemed", value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "Voucher redeemed successfully",
-                                      "data": {
-                                        "redemptionId": "e3d9a1b2-1234-5678-2345-678901234567",
-                                        "voucherId": "c1b7e9f0-9012-3456-0123-456789012345",
-                                        "status": "REDEEMED",
-                                        "usesRemaining": 0,
-                                        "value": 5.0000,
-                                        "redeemedAt": "2026-05-04T14:00:00Z"
-                                      }
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Partial use", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Voucher redeemed successfully",
+                                              "data": {
+                                                "redemptionId": "e3d9a1b2-1234-5678-2345-678901234567",
+                                                "voucherId": "c1b7e9f0-9012-3456-0123-456789012345",
+                                                "status": "PARTIALLY_USED",
+                                                "usesRemaining": 1,
+                                                "value": 20.0000,
+                                                "redeemedAt": "2026-05-04T14:00:00Z",
+                                                "remainingBalance": 30.0000,
+                                                "currency": "USD",
+                                                "reference": "TILL3-RCPT-88412",
+                                                "replayed": false
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Balance spent (bill bigger than the balance)", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Voucher redeemed successfully",
+                                              "data": {
+                                                "redemptionId": "f4e0b2c3-2345-6789-3456-789012345678",
+                                                "voucherId": "c1b7e9f0-9012-3456-0123-456789012345",
+                                                "status": "REDEEMED",
+                                                "usesRemaining": 0,
+                                                "value": 30.0000,
+                                                "redeemedAt": "2026-05-06T09:12:00Z",
+                                                "remainingBalance": 0.0000,
+                                                "currency": "USD",
+                                                "reference": "TILL3-RCPT-88530",
+                                                "replayed": false
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Replayed retry", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Voucher redeemed successfully",
+                                              "data": {
+                                                "redemptionId": "e3d9a1b2-1234-5678-2345-678901234567",
+                                                "voucherId": "c1b7e9f0-9012-3456-0123-456789012345",
+                                                "status": "PARTIALLY_USED",
+                                                "usesRemaining": 1,
+                                                "value": 20.0000,
+                                                "redeemedAt": "2026-05-04T14:00:00Z",
+                                                "remainingBalance": 30.0000,
+                                                "currency": "USD",
+                                                "reference": "TILL3-RCPT-88412",
+                                                "replayed": true
+                                              }
+                                            }
+                                            """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -379,7 +439,8 @@ public class VoucherController {
                             + "(worked out from the code alone, so it says nothing about which vouchers exist, "
                             + "and it never counts toward the lockout: ask the customer to read it again; "
                             + "a legacy 12-character code has no check digit, so its typos come back as a "
-                            + "counted 404); or EXPIRED — past the voucher's expiresAt. Bean "
+                            + "counted 404); AMOUNT_PRECISION — an `amount` with fractions of a cent; or "
+                            + "EXPIRED — past the voucher's expiresAt (whatever balance it had expires with it). Bean "
                             + "validation always answers `Validation failed` with the offending fields "
                             + "in `data`; the field name is never in `message`. On EXPIRED the voucher "
                             + "is also moved to the EXPIRED status, and that lands BEFORE this response "
@@ -397,6 +458,13 @@ public class VoucherController {
                                               "code": "400 BAD_REQUEST",
                                               "message": "Validation failed",
                                               "data": { "code": "must not be blank" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Amount with fractions of a cent", value = """
+                                            {
+                                              "code": "AMOUNT_PRECISION",
+                                              "message": "A redemption amount cannot carry fractions of a cent.",
+                                              "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Mistyped code", value = """
@@ -463,19 +531,29 @@ public class VoucherController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
                     description = "REVOKED (cancelled by an operator — checked FIRST, so a voucher revoked "
-                            + "after its last use reports REVOKED rather than ALREADY_REDEEMED) or "
-                            + "ALREADY_REDEEMED (the voucher's single use is spent — a voucher is worth "
-                            + "its face value once).",
+                            + "after its last use reports REVOKED rather than ALREADY_REDEEMED); "
+                            + "ALREADY_REDEEMED (its balance is spent — a voucher is worth its face value once "
+                            + "in total, across all its uses); or DUPLICATE_REFERENCE (the `reference` already "
+                            + "names a successful use of a DIFFERENT voucher at this merchant — a retry of the "
+                            + "same voucher's use is a 200 replay, never this).",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Already redeemed", value = """
-                                    {
-                                      "code": "ALREADY_REDEEMED",
-                                      "message": "This voucher has already been fully redeemed.",
-                                      "data": null
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Already redeemed", value = """
+                                            {
+                                              "code": "ALREADY_REDEEMED",
+                                              "message": "This voucher has already been fully redeemed.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Reference used for another voucher", value = """
+                                            {
+                                              "code": "DUPLICATE_REFERENCE",
+                                              "message": "This reference was already used for another voucher redemption.",
+                                              "data": null
+                                            }
+                                            """)}
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -520,7 +598,7 @@ public class VoucherController {
         Dtos.RedemptionResponse data = guessGuard.attempt(() -> {
             UUID tenantId = tenantContext.requireTenantId();
             UUID merchantId = CallerDetails.resolveMerchantId(req.merchantId());
-            return eligibilityDeferral.run(() -> voucherService.redeem(tenantId, merchantId, req));
+            return eligibilityDeferral.run(() -> voucherService.redeemIdempotent(tenantId, merchantId, req));
         });
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
@@ -596,7 +674,8 @@ public class VoucherController {
                                         "transferredAt": "2026-08-20T10:00:00Z",
                                         "expiresAt": "2027-08-20T09:00:00Z",
                                         "transferredFromUserId": "44444444-4444-4444-4444-444444444444",
-                                        "transferredFromPhone": "+263779999888"
+                                        "transferredFromPhone": "+263779999888",
+                                        "remainingBalance": 10.0000
                                       }
                                     }
                                     """)
@@ -905,7 +984,8 @@ public class VoucherController {
                                             "transferredAt": null,
                                             "expiresAt": "2026-06-03T10:30:00Z",
                                             "transferredFromUserId": null,
-                                            "transferredFromPhone": null
+                                            "transferredFromPhone": null,
+                                            "remainingBalance": 5.0000
                                           }
                                         ],
                                         "page": 0,
@@ -1051,7 +1131,8 @@ public class VoucherController {
                                             "transferredAt": null,
                                             "expiresAt": "2026-06-03T10:30:00Z",
                                             "transferredFromUserId": null,
-                                            "transferredFromPhone": null
+                                            "transferredFromPhone": null,
+                                            "remainingBalance": 5.0000
                                           },
                                           {
                                             "id": "f4eab2c3-2345-6789-3456-789012345678",
@@ -1081,7 +1162,8 @@ public class VoucherController {
                                             "transferredAt": null,
                                             "expiresAt": "2026-06-02T14:00:00Z",
                                             "transferredFromUserId": null,
-                                            "transferredFromPhone": null
+                                            "transferredFromPhone": null,
+                                            "remainingBalance": 5.0000
                                           }
                                         ],
                                         "page": 0,

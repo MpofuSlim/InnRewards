@@ -53,18 +53,22 @@ public class NotificationGateway {
      * name, never the message.
      */
     private String merchantName(Voucher voucher) {
-        if (voucher.getMerchantId() == null || merchants == null) {
+        return merchantName(voucher.getId(), voucher.getMerchantId());
+    }
+
+    private String merchantName(java.util.UUID voucherId, java.util.UUID merchantId) {
+        if (merchantId == null || merchants == null) {
             return null;
         }
         try {
-            return merchants.findById(voucher.getMerchantId())
+            return merchants.findById(merchantId)
                     .map(Merchant::getName)
                     .map(String::trim)
                     .filter(n -> !n.isEmpty())
                     .orElse(null);
         } catch (RuntimeException e) {
             log.warn("Voucher id={} merchant name lookup failed; message sent without it: {}",
-                    voucher.getId(), e.getMessage());
+                    voucherId, e.getMessage());
             return null;
         }
     }
@@ -203,6 +207,99 @@ public class NotificationGateway {
     }
 
     /**
+     * What one successful voucher use moved, snapshotted by
+     * {@code VoucherService} BEFORE it registers the after-commit send, so the
+     * message never reads the entity after its transaction (V61).
+     *
+     * @param used      money taken off the bill by this use, in {@code currency}
+     * @param remaining what the voucher has left; zero when it is fully used
+     */
+    public record VoucherUse(java.util.UUID voucherId, java.util.UUID merchantId, String holderPhone,
+                             BigDecimal used, BigDecimal remaining, String currency,
+                             java.time.Instant expiresAt) {
+    }
+
+    /**
+     * Tells a voucher's holder that it was just used, and what is left (V61,
+     * owner decision 2026-10-21: after EVERY successful use). WhatsApp first,
+     * SMS fallback, best-effort — a failed message never affects the redemption,
+     * which has already committed (the caller registers this through
+     * {@code AfterCommit}).
+     *
+     * <ul>
+     *   <li>Partial: "InnBucks voucher used at Pizza Inn. USD 20.00 used, USD
+     *       30.00 left, valid until 20 Oct 2027."</li>
+     *   <li>Full: "Your InnBucks voucher for Pizza Inn is now fully used (USD
+     *       20.00 this time)."</li>
+     * </ul>
+     *
+     * <p><b>Never the code.</b> The voucher's code is a bearer credential and
+     * the holder already has it; a usage notice that repeated it would put it
+     * on the screen of anyone glancing at a phone at the till. The text is also
+     * SMS-safe as written — no {@code : / $ ! ?}, which {@code SmsTextSanitizer}
+     * would rewrite — so both channels carry the same words. A failed merchant
+     * lookup drops the name, never the message.
+     */
+    @Async("notificationExecutor")
+    public void notifyVoucherUsed(VoucherUse use) {
+        if (use == null || use.holderPhone() == null || use.holderPhone().isBlank()) {
+            return;
+        }
+        String message = usedMessage(use, merchantName(use.voucherId(), use.merchantId()));
+        String ref = "VOUCHER-USE-" + use.voucherId();
+        try {
+            whatsApp.sendCustomNotification(use.holderPhone(), message);
+            log.info("Voucher id={} use notice sent via WhatsApp -> {}",
+                    use.voucherId(), MsisdnMasking.mask(use.holderPhone()));
+            return;
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} use notice WhatsApp failed for {}, falling back to SMS: {}",
+                    use.voucherId(), MsisdnMasking.mask(use.holderPhone()), e.getMessage());
+        }
+        try {
+            sms.sendSms(use.holderPhone(), message, ref);
+            log.info("Voucher id={} use notice sent via SMS -> {}",
+                    use.voucherId(), MsisdnMasking.mask(use.holderPhone()));
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} use notice failed on both channels for {} (redemption unaffected): {}",
+                    use.voucherId(), MsisdnMasking.mask(use.holderPhone()), e.getMessage());
+        }
+    }
+
+    /** The holder's usage notice — see {@link #notifyVoucherUsed}. Package-visible for its tests. */
+    static String usedMessage(VoucherUse use, String merchant) {
+        String currency = (use.currency() == null || use.currency().isBlank()) ? "" : use.currency() + " ";
+        BigDecimal left = use.remaining();
+        if (left == null || left.signum() <= 0) {
+            StringBuilder sb = new StringBuilder("Your InnBucks voucher")
+                    .append(merchant == null ? "" : " for " + merchant)
+                    .append(" is now fully used");
+            if (use.used() != null) {
+                sb.append(" (").append(currency).append(money(use.used())).append(" this time)");
+            }
+            return sb.append(".").toString();
+        }
+        StringBuilder sb = new StringBuilder("InnBucks voucher used")
+                .append(merchant == null ? "" : " at " + merchant)
+                .append(". ");
+        if (use.used() != null) {
+            sb.append(currency).append(money(use.used())).append(" used, ");
+        }
+        sb.append(currency).append(money(left)).append(" left");
+        if (use.expiresAt() != null) {
+            sb.append(", valid until ").append(EXPIRY_FMT.format(use.expiresAt()));
+        }
+        return sb.append(".").toString();
+    }
+
+    /** A money figure as people read it: at least two decimals, never trailing noise beyond them. */
+    private static String money(BigDecimal amount) {
+        BigDecimal stripped = amount.stripTrailingZeros();
+        return stripped.setScale(Math.max(2, stripped.scale()), java.math.RoundingMode.UNNECESSARY)
+                .toPlainString();
+    }
+
+    /**
      * The exact message a voucher's holder receives at issue — code included —
      * for the customer-support resend, so a resent voucher reads the same as the
      * original and there is one template, not two. The caller sends it only to
@@ -294,6 +391,13 @@ public class NotificationGateway {
      * carries no value. Amount-only since V45 — a voucher's value is always
      * money in its currency; the legacy PERCENT/FREE_ITEM/COMBO rows this
      * used to render are historical and no longer delivered.
+     *
+     * <p><b>A part-used voucher quotes what is LEFT</b> (V61): "USD 30 left of
+     * USD 50". This one description feeds the issue message, the support
+     * resend and the expiry warning, and a resend or a warning that claimed
+     * the full face value of a voucher already half spent would promise the
+     * holder money that is gone. A voucher untouched since issue reads as it
+     * always did ("USD 5 off").
      */
     private String describeValue(Voucher voucher) {
         BigDecimal v = voucher.getValue();
@@ -302,6 +406,11 @@ public class NotificationGateway {
         }
         String currency = (voucher.getCurrency() == null || voucher.getCurrency().isBlank())
                 ? "" : voucher.getCurrency() + " ";
+        BigDecimal left = voucher.getRemainingBalance();
+        if (left != null && left.compareTo(v) < 0) {
+            return currency + left.stripTrailingZeros().toPlainString() + " left of "
+                    + currency + v.stripTrailingZeros().toPlainString();
+        }
         return currency + v.stripTrailingZeros().toPlainString() + " off";
     }
 }

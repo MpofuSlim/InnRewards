@@ -573,7 +573,9 @@ tenant` sub-select) and assembles per merchant in memory. Pinned by
 - **Don't add a repository call inside a per-merchant loop in a report.** Add a
   grouped twin and look the merchant up in the map. Fee pricing stays in
   `EffectiveFees` (`applicable(...)` over one rule query; the
-  `feeFor*FaceValue` overloads take the `[merchantId, at, value]` projections).
+  `feeFor*FaceValue` overloads take the `[merchantId, at, value]` projections;
+  the redeem side prices each USE through `feeForRedemptionUse`, over
+  `VoucherRedemptionRepository.usesBetween` / `usesBetweenForMerchants` — V61).
 - **The invoice run gives every merchant its OWN transaction**
   (`TransactionTemplate`, `REQUIRES_NEW`; the run itself is `NOT_SUPPORTED`).
   One merchant failing rolls back alone, is logged and counted on
@@ -601,7 +603,8 @@ tenant` sub-select) and assembles per merchant in memory. Pinned by
 **Every SMS/WhatsApp/email hand-off a transactional service makes goes through
 `util/AfterCommit.run`** — voucher delivery and the sender copy (`finishIssue`),
 the three transfer messages, points earned / redeemed / transferred / adjusted,
-the tenant-attach ping. Inside a transaction it registers an `afterCommit`
+the holder's notice after each voucher use (`doRedeem`, V61), the tenant-attach
+ping. Inside a transaction it registers an `afterCommit`
 callback; outside one it runs now. So a spend that rolls back messages nobody,
 and the `@Async` submission never happens while the caller holds its wallet /
 voucher / order row locks. `@Async` alone never guaranteed either: the hand-off
@@ -729,7 +732,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V60**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V61**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1411,7 +1414,9 @@ exactly once (earn: local → USD → points; redeem: points → USD → local).
   adds ZWG to USD and returns a plausible number that is money in no currency —
   a regression that keeps working silently, which is why
   `VoucherMoneySumUnitTest` pins the column choice. Both voucher money sums
-  (`reportSummaryByStatus`, `sumRedeemedValueByMerchantId`) are USD. **Every
+  (`reportSummaryByStatus`, `sumRedeemedValueByMerchantId`) are USD; since V61
+  the redeemed one sums the USES' `voucher_redemptions.base_amount`, so a
+  part-spent voucher counts what was actually spent. **Every
   points aggregation is currency-neutral and correct as-is** — don't "fix"
   those. Report DTOs label their money figures as USD.
   Side effect worth knowing: PERCENT/FREE_ITEM/COMBO vouchers have a NULL
@@ -2176,12 +2181,11 @@ retry something that could never succeed. It is now a `400` naming the field.
 - The public surface was never exposed: `PublicTestController` passes `null` for
   all three.
 
-**Still open, and needing a platform-owner decision rather than a patch:**
-`redeemedAt` is stamped only at exhaustion, so a partially used voucher is never
-billed a redeem-side fee and never counted as redeemed. The false javadoc that
-claimed otherwise (`sumRedeemedValueByMerchantId`, `Dtos.VoucherSummary`) is
-corrected. The other half of that pair — the full face value returned on every
-use — was decided and is below.
+**Closed by V61** (see "Vouchers hold a BALANCE" below): a partially used
+voucher used to be billed no redeem-side fee and counted nowhere, because both
+keyed on `redeemedAt`, which is stamped only at exhaustion. Fees and the
+"value redeemed" figures now read each USE's `voucher_redemptions` row;
+`redeemedAt` and the "fully redeemed" COUNTS keep their meaning.
 
 ## Voucher codes: 16 digits, a check digit, raw everywhere a machine reads
 
@@ -2674,11 +2678,14 @@ backend could not refund through the API. `TillReversalGuard`, before
 
 **Owner decision (2026-09-18).** Asked whether a $5 voucher with 3 uses hands
 the till $5 three times or $5 once, the answer was once — and that the type
-should go rather than grow a drawdown balance.
+should go. (A month later, 2026-10-21, every voucher DID gain a drawdown
+balance — see the next section. That is not MULTI_USE coming back: a balance
+voucher still pays out its face value once in total, however many uses it
+takes, and `usageLimit` stays retired.)
 
 - **Why it could not stay as it was.** `vouchers.value` is a face AMOUNT and
-  `uses_remaining` a bare counter; there is no remaining-value column, and
-  `RedeemVoucherRequest` carries no amount. `doRedeem` decremented the counter
+  `uses_remaining` was a bare counter; there was no remaining-value column (V61
+  added one), and `RedeemVoucherRequest` carried no amount (V61 added one). `doRedeem` decremented the counter
   and returned `v.getValue()` unchanged, so a MULTI_USE voucher told the till
   its full face value on **every** use. The liability frozen at issue
   (`base_value`) is ONE face value, and the redeem-side fee is charged once, so
@@ -2726,6 +2733,156 @@ should go rather than grow a drawdown balance.
   backup, a lagging replica, or any row written before the migration would take
   out every read path touching it. The constant costs nothing; deleting it buys
   tidiness and risks an outage.
+
+## Vouchers hold a BALANCE — partial redemption (V61)
+
+**Owner decisions (2026-10-21), all binding.** Every voucher is a balance
+voucher: a $50 voucher can be spent $20 now and $30 later.
+- A use takes the bill's amount from the balance. The voucher is
+  `PARTIALLY_USED` until the balance reaches 0, then `REDEEMED` (with
+  `redeemedAt`, exactly as before). No `amount` on the request = the whole
+  balance, which is what every existing till sends.
+- **A bill bigger than the balance applies what is left — never refused.** The
+  response's `value` is what was applied; the till collects the rest by
+  another means.
+- **The redeem-side fee is charged per use**: the PERCENTAGE leg on each use's
+  amount, a FIXED leg on the FIRST use only. So however a voucher is spent, the
+  merchant is billed exactly today's one-shot fee on its face value
+  (`RedemptionUseFeeTest` pins that for every `FeeType`).
+- **After EVERY successful use the holder is messaged** (WhatsApp, SMS
+  fallback), with what was used and what is left — never the code.
+- Defaults the owner accepted: a use is FINAL (no undo endpoint); the balance
+  expires with the voucher; `reference` is an optional idempotency key.
+- MULTI_USE stays retired and `usageLimit` must be 1 (section above).
+
+**Schema (V61).**
+- `vouchers.remaining_balance` NUMERIC(19,4); CHECK
+  `chk_vouchers_remaining_balance`: ≥ 0 and ≤ `face_value`.
+- `voucher_redemptions` gained `amount` (what the use applied), `base_amount`
+  (its USD share), `balance_after`, `reference` VARCHAR(100) and
+  `first_use` NOT NULL.
+- `uq_voucher_redemption_merchant_reference`: UNIQUE `(merchant_id, reference)`
+  over SUCCESS rows with a reference.
+- `idx_voucher_redemption_merchant_success_at` for the fee and report reads.
+- **Backfill, once per cell (never edit V61).**
+  - A money voucher (`value_type` NULL or `AMOUNT`) gets its whole face value
+    as its balance, or 0 when spent (`REDEEMED`, or `uses_remaining <= 0` —
+    a voucher revoked after its last use).
+  - A legacy PERCENT / FREE_ITEM / COMBO row and a row with no face value keep
+    NULL. They are spent WHOLE as before, ignore a requested amount, and send
+    no notice: "10% off" is not 10 of anything.
+  - Each SUCCESS row gets `amount` = face value and `base_amount` = base value;
+    the earliest SUCCESS row of each voucher is its `first_use`
+    (`DISTINCT ON`).
+  - `balance_after` stays NULL on history: it was never recorded, so it is not
+    guessed. Refusals are untouched.
+  - Pinned against a real V60 → V61 migration by `VoucherBalanceMigrationIT`.
+
+**The use (`VoucherService.doRedeem`).**
+- **The amount is validated before the code lookup**: `@Positive` at the edge,
+  and in the service `400 INVALID_AMOUNT` / `400 AMOUNT_PRECISION` ("A
+  redemption amount cannot carry fractions of a cent.").
+- `applied = min(amount, balance)`; `balanceAfter = balance − applied` (scale
+  4). `uses_remaining` becomes a 1/0 "anything left" flag. The exhausted guard
+  reads the balance too (`remainingBalanceOf`), with the same
+  `409 ALREADY_REDEEMED` "This voucher has already been fully redeemed."
+- **`base_amount` telescopes.** B(x) = x × base / face at 4 places,
+  B(face) = base, B(0) = 0; a use's `base_amount` = B(before) − B(after). The
+  uses of one voucher therefore sum EXACTLY to its frozen `base_value`
+  whatever amounts they took. Never re-converted at today's rate (V38). Rounding
+  each use on its own would drift from the liability it adds up to.
+- `first_use` = no earlier SUCCESS row for the voucher, read under the row lock.
+
+**The reference, its position, and concurrency.**
+- `reference` (≤ 100, stripped, blank = none) is keyed per MERCHANT. A repeat
+  for the SAME voucher replays the original use: `replayed: true`, nothing
+  spent, written, counted or sent, and the status, amount and balance come from
+  the original row. So a retry after later uses still describes the use it
+  retries.
+- The same reference on ANOTHER voucher is `409 DUPLICATE_REFERENCE` "This
+  reference was already used for another voucher redemption."
+- **The check sits after the signature and the customer-holder check, and
+  before expiry / REVOKED / exhausted.**
+  - After the holder check, so a reference is never an oracle: a non-holder has
+    already been refused `NOT_VOUCHER_OWNER`.
+  - Before the terminal refusals, so a till retrying the use that spent a
+    voucher to zero gets that use back instead of `ALREADY_REDEEMED`.
+  - The redeeming merchant is authorized for a replay exactly as for a fresh
+    use (`requireMayRedeemAt`, one method).
+- **Same voucher**: two uses are serialised by `lockByCode`'s row lock, so a
+  duplicate sees the committed original.
+- **Different vouchers** racing one reference meet at the unique index. The
+  loser's `saveAndFlush` hits `uq_voucher_redemption_merchant_reference`,
+  which becomes `VoucherRedemptionRaceException`. `redeemIdempotent`
+  (`NOT_SUPPORTED`, through the bean's own proxy) retries ONCE in a fresh
+  transaction, which then sees the winner and answers `DUPLICATE_REFERENCE`
+  (or the replay). This mirrors `RedemptionService.redeemPointsIdempotent`.
+  **Both redeem endpoints call `redeemIdempotent`, never `redeem`**, or the
+  race surfaces as a 500. Any other integrity violation is rethrown.
+- **Unchanged around it.** The eligibility deferral is thrown before any write
+  or message, so its replay is clean. `VoucherGuessGuard` counts only
+  `VoucherCodeGuessException`: a replay, a `DUPLICATE_REFERENCE` and an amount
+  refusal are never misses.
+
+**Fees, invoicing and reports.**
+- **Fees per use**: `EffectiveFees.feeForRedemptionUse(amount, firstUse)`,
+  built on `MerchantFeeCalculator.fixedLeg` + `percentageLeg` (whose sum is
+  `compute`). Invoicing (single generate and the batched run) and the
+  dashboard / merchant-360 estimates read the USES
+  (`VoucherRedemptionRepository.usesBetween` / `usesBetweenForMerchants`,
+  half-open `[from, to)`, grouped twins; no per-merchant loop, never `IN ()`).
+  `vouchersRedeemed` on an invoice now counts uses.
+- **"Fully redeemed" counts keep their meaning** — keyed on `redeemedAt` —
+  and their descriptions now say "fully". The merchant dashboard's `today` is
+  the day's uses. `sumRedeemedValueByMerchantId(s)` sums the uses'
+  `base_amount`.
+- **Report rows**:
+  - `VoucherDetail` gained `remainingBalance`, appended last.
+  - `RedemptionDetail` gained `amount`, `reference` and `balanceAfter`.
+  - The voucher CSV appends `remainingBalance` at the END (after
+    `paymentMethod,orderRef`), so a positional parser of the old export keeps
+    working (`VoucherCsvHeaderTest`).
+  - `countByVoucherIdIn` (redemption counts) is SUCCESS rows only.
+
+**The holder's notice (`NotificationGateway.notifyVoucherUsed`).**
+- `@Async` on `notificationExecutor`, registered through `AfterCommit.run`
+  with every value snapshotted into `VoucherUse`. A use that rolls back tells
+  nobody.
+- WhatsApp first, SMS fallback, reference `VOUCHER-USE-<voucher id>`. The copy:
+  - partial: "InnBucks voucher used at Pizza Inn. USD 20.00 used, USD 30.00
+    left, valid until 20 Oct 2027.";
+  - last use: "Your InnBucks voucher for Pizza Inn is now fully used (USD 20.00
+    this time).".
+- Every message round-trips `SmsTextSanitizer` unchanged (no `$ : / ! ?`) and
+  never carries the code (`VoucherUseNoticeTest`). A failed merchant lookup
+  costs the name, never the message.
+- **Not sent**: on a replay, for a legacy whole use, for a voucher issued with
+  channel `NONE` (POS-printed stock) and when there is no holder phone.
+- `describeValue` (issue resend, expiry warning) quotes "USD 30 left of USD 50"
+  once a voucher is part-used, never its full face value.
+
+**Wire changes, all additive.** Back-compat constructors keep every old arity.
+- `RedeemVoucherRequest` and the public twin gained `amount` and `reference`.
+- `RedemptionResponse` gained `remainingBalance`, `currency`, `reference` and
+  `replayed`.
+- `VoucherResponse` gained `remainingBalance` (last; `withoutCode` keeps it),
+  and so did support's `VoucherLine`.
+- The issue path sets `remainingBalance` = `value`.
+
+**Not done, deliberately.**
+- No undo of a use: a use is final (owner default). Reversing a mistaken use is
+  an operator procedure.
+- Transfer still refuses `PARTIALLY_USED` (one voucher's value never splits
+  across two holders — the section above).
+- The fully-redeemed counts and `redeemedAt` still mean "spent to zero".
+- Legacy non-money rows get no notice and no balance.
+
+Pinned by `VoucherBalanceRedemptionTest`, `VoucherUseNoticeTest`,
+`RedemptionUseFeeTest`, `VoucherBalancePostgresIT` (10 concurrent slices of one
+voucher sum to its face value and its base value with exactly one first use; a
+double submit replays; one reference on two vouchers is one success and one
+`DUPLICATE_REFERENCE`; the index and the CHECK; an invoice over two uses) and
+`VoucherBalanceMigrationIT`.
 
 ## Customer support (`/loyalty/support/**`, V55)
 

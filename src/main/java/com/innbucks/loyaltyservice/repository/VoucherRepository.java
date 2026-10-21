@@ -144,7 +144,9 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
                                            @Param("to") Instant to);
 
     /** {@link #countByMerchantIdAndRedeemedAtBetween}, summed over every merchant
-     *  whose tenant is NOT {@code excludedTenantId} (the operator dashboard). */
+     *  whose tenant is NOT {@code excludedTenantId} (the operator dashboard).
+     *  Counts vouchers FULLY redeemed in the window — {@code redeemedAt} is
+     *  stamped when a voucher's balance reaches zero, never on a partial use. */
     @Query("""
         SELECT COUNT(v) FROM Voucher v
         WHERE v.merchantId IN (SELECT m.id FROM Merchant m WHERE m.tenantId <> :excludedTenantId)
@@ -164,7 +166,8 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
                                                 @Param("from") Instant from,
                                                 @Param("to") Instant to);
 
-    /** {@link #countByMerchantIdAndRedeemedAtBetween} per merchant: {@code [merchantId, count]}. */
+    /** {@link #countByMerchantIdAndRedeemedAtBetween} per merchant: {@code [merchantId, count]}.
+     *  FULLY redeemed vouchers only (see {@link #countRedeemedBetweenExcludingTenant}). */
     @Query("""
         SELECT v.merchantId, COUNT(v) FROM Voucher v
         WHERE v.merchantId IN :merchantIds AND v.redeemedAt BETWEEN :from AND :to
@@ -190,25 +193,14 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
                                            @Param("from") Instant from,
                                            @Param("to") Instant to);
 
-    /** {@link #findByMerchantIdAndRedeemedAtBetween} for several merchants, as
-     *  {@code [merchantId, redeemedAt, faceValue]} — see {@link #issuedFaceValuesBetween}. */
-    @Query("""
-        SELECT v.merchantId, v.redeemedAt, v.value FROM Voucher v
-        WHERE v.merchantId IN :merchantIds AND v.redeemedAt BETWEEN :from AND :to
-        """)
-    List<Object[]> redeemedFaceValuesBetween(@Param("merchantIds") Collection<UUID> merchantIds,
-                                             @Param("from") Instant from,
-                                             @Param("to") Instant to);
-
-    // Per-merchant voucher pulls used by InvoicingService + ReportingService to
-    // compute per-voucher fees under the merchant's 3-mode fee model. The
+    // Per-merchant voucher pull used by InvoicingService + ReportingService to
+    // compute per-voucher ISSUE fees under the merchant's 3-mode fee model. The
     // PERCENTAGE / FIXED_PLUS_PERCENTAGE legs need each voucher's face value,
     // so a COUNT(*) is no longer enough. The result is bounded by per-merchant
     // per-period activity (typically <10k rows / month per merchant); no
-    // pagination required at this scale.
+    // pagination required at this scale. The REDEEM side is priced per use
+    // from VoucherRedemptionRepository.usesBetween (V61), not from vouchers.
     List<Voucher> findByMerchantIdAndIssuedAtBetween(UUID merchantId, Instant from, Instant to);
-
-    List<Voucher> findByMerchantIdAndRedeemedAtBetween(UUID merchantId, Instant from, Instant to);
 
     long countByTenantIdAndStatus(UUID tenantId, Voucher.Status status);
 
@@ -293,29 +285,29 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
                                                  Voucher.Status status);
 
     /**
-     * Total USD value of the merchant's FULLY redeemed vouchers. Powers the
-     * merchant-360 report's voucher block; the issued-side value comes from
-     * {@link #reportSummaryByStatus} so it isn't duplicated here.
+     * Total USD value REDEEMED at the merchant: the summed {@code base_amount}
+     * of every successful voucher USE (V61). Powers the merchant-360 report's
+     * voucher block; the issued-side value comes from {@link #reportSummaryByStatus}
+     * so it isn't duplicated here.
      *
-     * <p><b>Fully, not partially</b> — this javadoc used to claim "(fully or
-     * partially — {@code redeemedAt} is stamped on both)" and that was never
-     * true: {@code VoucherService.doRedeem} stamps {@code redeemedAt} only in the
-     * exhaustion branch, so a MULTI_USE voucher with four of five uses spent
-     * contributes zero here. The same premise reaches
-     * {@code InvoicingService.generate} through
-     * {@link #findByMerchantIdAndRedeemedAtBetween}, which is why a partially
-     * used voucher is also never billed a redeem-side fee. Whether that is the
-     * wanted commercial rule is an open question for the platform owner; what is
-     * fixed here is the description, so nobody reads a number as something it is
-     * not.
+     * <p><b>Uses, not exhausted vouchers.</b> This used to sum the base value of
+     * vouchers whose {@code redeemedAt} was set, which is stamped only when a
+     * voucher is spent to zero — so value taken off bills by a part-used voucher
+     * counted for nothing. Since every voucher became a balance voucher, each
+     * use carries the USD share of the voucher's liability it consumed, and the
+     * shares of one voucher telescope to exactly its {@code baseValue}. So a
+     * voucher spent in full contributes what it always did, and a part-used one
+     * contributes what has actually been used.
      *
-     * <p>Sums {@code baseValue}, not {@code value}, for the same reason as
-     * {@link #reportSummaryByStatus}: one unit per sum, and no percentages
-     * masquerading as money.
+     * <p>Sums {@code baseAmount} (USD), never the local {@code amount}, for the
+     * same reason as {@link #reportSummaryByStatus}: one unit per sum. Lives on
+     * this repository, though it reads {@code VoucherRedemption}, because it
+     * answers the voucher report's question and its callers already hold this one.
      */
     @Query("""
-        SELECT COALESCE(SUM(v.baseValue), 0) FROM Voucher v
-        WHERE v.merchantId = :merchantId AND v.redeemedAt IS NOT NULL
+        SELECT COALESCE(SUM(r.baseAmount), 0) FROM VoucherRedemption r
+        WHERE r.merchantId = :merchantId
+          AND r.result = com.innbucks.loyaltyservice.entity.VoucherRedemption.Result.SUCCESS
         """)
     BigDecimal sumRedeemedValueByMerchantId(@Param("merchantId") UUID merchantId);
 
@@ -340,11 +332,12 @@ public interface VoucherRepository extends VoucherReportQueries, JpaRepository<V
                                               @Param("to") Instant to);
 
     /** {@link #sumRedeemedValueByMerchantId} per merchant: {@code [merchantId,
-     *  baseValueSum]}. Sums {@code baseValue}, never the local {@code value}. */
+     *  baseAmountSum]}. Sums {@code baseAmount}, never the local {@code amount}. */
     @Query("""
-        SELECT v.merchantId, COALESCE(SUM(v.baseValue), 0) FROM Voucher v
-        WHERE v.merchantId IN :merchantIds AND v.redeemedAt IS NOT NULL
-        GROUP BY v.merchantId
+        SELECT r.merchantId, COALESCE(SUM(r.baseAmount), 0) FROM VoucherRedemption r
+        WHERE r.merchantId IN :merchantIds
+          AND r.result = com.innbucks.loyaltyservice.entity.VoucherRedemption.Result.SUCCESS
+        GROUP BY r.merchantId
         """)
     List<Object[]> sumRedeemedValueByMerchantIds(@Param("merchantIds") Collection<UUID> merchantIds);
 

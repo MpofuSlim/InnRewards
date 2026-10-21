@@ -41,6 +41,29 @@ import java.util.UUID;
  */
 public final class EffectiveFees {
 
+    /**
+     * One successful voucher use, as fee pricing reads it (V61): when it
+     * happened, the money it took off the bill, and whether it was the
+     * voucher's first use. Built from {@code VoucherRedemptionRepository}'s
+     * {@code usesBetween} projections.
+     */
+    public record RedemptionUse(Instant at, BigDecimal amount, boolean firstUse) {
+
+        /** From a {@code [redeemedAt, amount, firstUse]} projection row, starting at {@code offset}. */
+        public static RedemptionUse of(Object[] row, int offset) {
+            Object at = row[offset];
+            return new RedemptionUse(
+                    at instanceof java.time.OffsetDateTime odt ? odt.toInstant() : (Instant) at,
+                    (BigDecimal) row[offset + 1],
+                    Boolean.TRUE.equals(row[offset + 2]));
+        }
+    }
+
+    /** {@link #feeForRedemptionUse} for one recorded use. */
+    public BigDecimal feeForRedemptionUse(RedemptionUse use) {
+        return feeForRedemptionUse(use.amount(), use.firstUse());
+    }
+
     /** One resolved side (issued or redeemed). */
     record Side(Merchant.FeeType type, BigDecimal fixed, BigDecimal percentage) {
         static final Side NONE = new Side(Merchant.FeeType.FIXED, BigDecimal.ZERO, BigDecimal.ZERO);
@@ -228,6 +251,28 @@ public final class EffectiveFees {
     public BigDecimal feeForRedeemedFaceValue(BigDecimal faceValue) {
         return MerchantFeeCalculator.compute(redeemed.type(), redeemed.fixed(), redeemed.percentage(),
                 orZero(faceValue));
+    }
+
+    /**
+     * The redeem-side fee for ONE use of a balance voucher (V61, owner decision
+     * 2026-10-21): the FIXED leg on the voucher's first use only, plus the
+     * PERCENTAGE leg on the amount this use took off the bill. Same resolved
+     * schedule as every other fee here ({@link #resolve}'s precedence, redeem
+     * side), so FIXED_PLUS_PERCENTAGE is the fixed amount once plus the
+     * percentage on every use.
+     *
+     * <p>The legs are chosen so a voucher spent in one go is billed exactly what
+     * {@link #feeForRedeemedFaceValue} always billed it — one first use of the
+     * whole face value — and a voucher spent in several uses is billed the same
+     * total, since the percentage leg is linear in the amount. {@code null}
+     * amount prices as zero, like a null face value.
+     */
+    public BigDecimal feeForRedemptionUse(BigDecimal amount, boolean firstUse) {
+        BigDecimal fixed = firstUse
+                ? MerchantFeeCalculator.fixedLeg(redeemed.type(), redeemed.fixed())
+                : BigDecimal.ZERO;
+        return fixed.add(MerchantFeeCalculator.percentageLeg(redeemed.type(), redeemed.percentage(),
+                orZero(amount)));
     }
 
     private static BigDecimal orZero(BigDecimal faceValue) {

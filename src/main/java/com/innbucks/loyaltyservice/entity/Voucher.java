@@ -51,10 +51,12 @@ public class Voucher {
     private UUID templateId;
 
     /**
-     * SINGLE_USE or MULTI_USE — stamped at issue (V45), now that no template
-     * carries it. NULL only on pre-V45 rows the backfill could not resolve.
-     * The redemption mechanics ride {@link #usesRemaining} as they always
-     * did; this is the declared shape, kept for reporting and the client.
+     * SINGLE_USE (the only issuable type) or the retired MULTI_USE — stamped at
+     * issue (V45), now that no template carries it. NULL only on pre-V45 rows
+     * the backfill could not resolve. Redemption reads neither: since V61 a
+     * voucher is spent by MONEY, down its {@link #remainingBalance}, in as many
+     * uses as it takes. This is the declared shape, kept for reporting and the
+     * client.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "voucher_type", length = 20)
@@ -151,6 +153,29 @@ public class Voucher {
     @Column(name = "fx_rate_id")
     private UUID fxRateId;
 
+    /**
+     * What is left to spend, in {@link #currency} — the same unit as
+     * {@link #value} (V61). Every voucher is a BALANCE voucher (owner decision,
+     * 2026-10-21): each redemption takes some or all of it, the voucher is
+     * PARTIALLY_USED while anything is left and REDEEMED when it reaches zero.
+     * Set to the face value at issue.
+     *
+     * <p>Null only on a legacy row with no money balance — a pre-V45 PERCENT /
+     * FREE_ITEM / COMBO voucher, or a pre-V7 row with no face value. Those are
+     * spent whole in one use, as before; see
+     * {@code VoucherService.remainingBalanceOf}. An EXPIRED or REVOKED voucher
+     * keeps the balance it had when it stopped being spendable, as history.
+     */
+    @Column(name = "remaining_balance", precision = 19, scale = 4)
+    private BigDecimal remainingBalance;
+
+    /**
+     * 1 while the voucher can still be used, 0 once it is spent. Since V61 it
+     * is no longer a count of anything — money is counted, in
+     * {@link #remainingBalance} — and stays 1 through every partial use. Kept
+     * because it is on the wire ({@code usesRemaining}) and because a legacy row
+     * with no balance still reads its spendability from it.
+     */
     @Column(name = "uses_remaining", nullable = false)
     private int usesRemaining = 1;
 
@@ -266,10 +291,16 @@ public class Voucher {
      * SINGLE_USE is the only shape issued. The old CAMPAIGN / REFERRAL /
      * CORPORATE values were distribution labels, not redemption semantics (V45);
      * MULTI_USE was retired after that (owner decision, 2026-09-18) because it
-     * never had money semantics that worked — {@code value} is a face amount and
-     * {@code usesRemaining} a bare counter, with no remaining balance anywhere,
-     * so a "$5, three uses" voucher handed the till $5 three times.
-     * {@code VoucherService.resolveUsageLimit} refuses to issue one.
+     * never had money semantics that worked — {@code value} was a face amount
+     * and {@code usesRemaining} a bare counter, with no remaining balance
+     * anywhere then, so a "$5, three uses" voucher handed the till $5 three
+     * times. {@code VoucherService.resolveUsageLimit} refuses to issue one.
+     *
+     * <p><b>V61 gave every voucher what MULTI_USE lacked: a balance.</b> A
+     * SINGLE_USE voucher can now be spent in several partial uses, down its
+     * {@link #remainingBalance}, and the name means "one voucher, spent once in
+     * total" rather than "one redemption". MULTI_USE stays retired — the balance
+     * replaces it, it does not revive it.
      *
      * <p><b>V49 collapsed the outstanding stock</b> (owner decision, the cell
      * being in test phase): every live MULTI_USE voucher keeps exactly one use,

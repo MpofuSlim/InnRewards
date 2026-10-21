@@ -455,7 +455,8 @@ public class SupportCustomerService {
                 mask(v.getSenderPhone()), v.getSenderName(),
                 mask(v.getTransferredFromPhone()),
                 v.getUsesRemaining(), v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(),
-                v.getRedeemedAt(), v.getExpiresAt(), v.getTransferredAt(), v.getCampaignSource());
+                v.getRedeemedAt(), v.getExpiresAt(), v.getTransferredAt(), v.getCampaignSource(),
+                v.getRemainingBalance());
     }
 
     private static SupportDtos.OrderLine toOrderLine(VoucherPurchaseOrder o, Collection<String> spellings,

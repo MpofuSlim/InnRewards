@@ -251,7 +251,7 @@ class VoucherReportFiltersIT extends PostgresIntegrationTestBase {
                 filters().paymentMethod(PaymentMethod.CASH).build());
 
         assertThat(csv.lines().toList()).hasSize(2);
-        assertThat(csv.lines().findFirst().orElseThrow()).endsWith(",paymentMethod,orderRef");
+        assertThat(csv.lines().findFirst().orElseThrow()).endsWith(",paymentMethod,orderRef,remainingBalance");
         assertThat(csv).contains(",CASH,VCH-");
     }
 }

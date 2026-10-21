@@ -736,8 +736,9 @@ public class Dtos {
             @Schema(example = "SINGLE_USE", nullable = true, allowableValues = {"SINGLE_USE"},
                     description = "Defaults to SINGLE_USE, which is now the only issuable type. "
                             + "`MULTI_USE` is RETIRED and refused with `MULTI_USE_RETIRED`: a voucher "
-                            + "is worth its face value and is redeemed once. Issue several vouchers "
-                            + "instead. Vouchers already issued as MULTI_USE keep their remaining uses.")
+                            + "is worth its face value once in total — it holds that value as a balance "
+                            + "that can be spent across several partial redemptions. Issue several "
+                            + "vouchers instead.")
             Voucher.VoucherType voucherType,
             @Schema(example = "5.0000",
                     description = "The voucher's money face value — always an AMOUNT in `currency`. " +
@@ -749,8 +750,9 @@ public class Dtos {
                                   "in-force exchange rate, or the issue is refused.")
             String currency,
             @Schema(example = "3", nullable = true,
-                    description = "How many times the voucher can be redeemed. SINGLE_USE: omit or 1. " +
-                                  "RETIRED: omit it. Any other value is refused.")
+                    description = "RETIRED — a voucher is spent by its balance (several partial uses until "
+                                  + "it reaches zero), not a count of uses. Omit it, or send 1; any other value is "
+                                  + "refused with USAGE_LIMIT_CONFLICT.")
             Integer usageLimit,
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
@@ -804,7 +806,8 @@ public class Dtos {
                                   "allowlist-validated, fail closed.")
             String currency,
             @Schema(example = "3", nullable = true,
-                    description = "RETIRED — a voucher has exactly one use. Omit it, or send 1.")
+                    description = "RETIRED — a voucher is spent by its balance, not a count of uses. "
+                            + "Omit it, or send 1.")
             Integer usageLimit,
             @Schema(example = "100", description = "Number of vouchers to generate.")
             @Min(1) int quantity,
@@ -836,7 +839,8 @@ public class Dtos {
                                   "only collects USD/ZWG.")
             String currency,
             @Schema(example = "3", nullable = true,
-                    description = "RETIRED — a voucher has exactly one use. Omit it, or send 1.")
+                    description = "RETIRED — a voucher is spent by its balance, not a count of uses. "
+                            + "Omit it, or send 1.")
             Integer usageLimit,
             @Schema(example = "+263786546765", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
@@ -961,6 +965,8 @@ public class Dtos {
                                   // staff member, NOT the sender. All null for pre-migration or
                                   // system-issued rows.
                                   UUID issuerUserId, String issuerPhone, String issuerEmail,
+                                  // 1 while the voucher can still be used, 0 once spent. Money
+                                  // left is `remainingBalance` (V61) — a partial use leaves this at 1.
                                   int usesRemaining,
                                   // The voucher's money face value, frozen at issuance. Always an
                                   // AMOUNT in `currency` — value types are retired (V45).
@@ -977,7 +983,32 @@ public class Dtos {
                                   Instant redeemedAt, Instant transferredAt, Instant expiresAt,
                                   // Single-hop transfer provenance (V34): the assignee the voucher
                                   // moved AWAY from. Null until transferred.
-                                  UUID transferredFromUserId, String transferredFromPhone) {
+                                  UUID transferredFromUserId, String transferredFromPhone,
+                                  // V61: every voucher is a balance voucher. Appended last so the
+                                  // positional list above is unchanged.
+                                  @Schema(example = "30.0000", nullable = true, description = "What is left to "
+                                          + "spend, in `currency`. Equals `value` until the first use; 0 once "
+                                          + "fully redeemed (status REDEEMED). Null only on a legacy non-money "
+                                          + "voucher, which is spent whole.")
+                                  BigDecimal remainingBalance) {
+
+        /** The pre-V61 component list (no {@code remainingBalance}) — kept so callers
+         *  built against it compile; the balance reads as unknown (null). */
+        public VoucherResponse(UUID id, String code, String status, String voucherType,
+                               UUID merchantId, UUID shopId, UUID batchId, String campaignSource,
+                               UUID assignedUserId, String assigneePhone, String assigneeName,
+                               String senderName, String senderPhone,
+                               UUID issuerUserId, String issuerPhone, String issuerEmail,
+                               int usesRemaining, BigDecimal value, String currency, BigDecimal baseValue,
+                               Instant issuedAt, Instant deliveredAt, Instant viewedAt,
+                               Instant redeemedAt, Instant transferredAt, Instant expiresAt,
+                               UUID transferredFromUserId, String transferredFromPhone) {
+            this(id, code, status, voucherType, merchantId, shopId, batchId, campaignSource,
+                    assignedUserId, assigneePhone, assigneeName, senderName, senderPhone,
+                    issuerUserId, issuerPhone, issuerEmail, usesRemaining, value, currency, baseValue,
+                    issuedAt, deliveredAt, viewedAt, redeemedAt, transferredAt, expiresAt,
+                    transferredFromUserId, transferredFromPhone, null);
+        }
 
         /** Copy with the {@code code} nulled out — for views where the caller must
          *  not see the redeemable code (e.g. the sender's view of a transfer they
@@ -991,7 +1022,7 @@ public class Dtos {
                     issuerUserId, issuerPhone, issuerEmail,
                     usesRemaining, value, currency, baseValue,
                     issuedAt, deliveredAt, viewedAt, redeemedAt, transferredAt, expiresAt,
-                    transferredFromUserId, transferredFromPhone);
+                    transferredFromUserId, transferredFromPhone, remainingBalance);
         }
     }
 
@@ -1058,12 +1089,71 @@ public class Dtos {
             String deviceFingerprint,
             @Schema(example = "192.168.1.100", nullable = true, maxLength = 64)
             @Size(max = 64, message = "ipAddress must be at most 64 characters")
-            String ipAddress
-    ) {}
+            String ipAddress,
+            // V61 — every voucher is a balance voucher.
+            @Schema(example = "20.00", nullable = true,
+                    description = "How much of the bill to pay with the voucher, in the voucher's currency, at "
+                            + "most two decimal places. Omit it to spend the whole remaining balance (a voucher "
+                            + "spent in one go behaves exactly as before). More than the voucher has left is "
+                            + "never refused: what is left is applied, and the response says how much "
+                            + "(`value`) and that nothing remains.")
+            @Positive(message = "amount must be greater than zero")
+            BigDecimal amount,
+            // Bounded by voucher_redemptions.reference VARCHAR(100); keep in lock-step.
+            @Schema(example = "TILL3-RCPT-88412", nullable = true, maxLength = 100,
+                    description = "Optional idempotency key for this use, unique per merchant — e.g. the till's "
+                            + "receipt number. A retry with the same reference for the same voucher returns the "
+                            + "ORIGINAL result with `replayed: true` and spends nothing again, even after the "
+                            + "voucher is fully used; the same reference on a different voucher is 409 "
+                            + "DUPLICATE_REFERENCE. Without one, every call is a new use.")
+            @Size(max = 100, message = "reference must be at most 100 characters")
+            String reference
+    ) {
 
-    public record RedemptionResponse(UUID redemptionId, UUID voucherId, String status,
-                                     int usesRemaining, BigDecimal value,
-                                     Instant redeemedAt) {}
+        /** The pre-V61 shape: no amount (spend the whole balance), no reference. */
+        public RedeemVoucherRequest(UUID merchantId, String code, UUID userId, String outletCode,
+                                    String deviceFingerprint, String ipAddress) {
+            this(merchantId, code, userId, outletCode, deviceFingerprint, ipAddress, null, null);
+        }
+    }
+
+    /**
+     * One voucher use. {@code value} is the money taken off THIS bill — the
+     * requested amount, capped at what the voucher had left; for a voucher spent
+     * in one go, its face value, exactly as before (V61). {@code status} is
+     * PARTIALLY_USED while {@code remainingBalance} is above zero and REDEEMED
+     * when it reaches zero.
+     */
+    public record RedemptionResponse(UUID redemptionId, UUID voucherId,
+                                     @Schema(example = "PARTIALLY_USED",
+                                             description = "PARTIALLY_USED while a balance remains, REDEEMED "
+                                                     + "once it is spent.")
+                                     String status,
+                                     @Schema(example = "1", description = "1 while the voucher can still be "
+                                             + "used, 0 once it is spent.")
+                                     int usesRemaining,
+                                     @Schema(example = "20.0000", description = "Money taken off this bill by "
+                                             + "this use, in `currency` — the amount asked for, or what was "
+                                             + "left when that was less.")
+                                     BigDecimal value,
+                                     Instant redeemedAt,
+                                     @Schema(example = "30.0000", nullable = true, description = "What the "
+                                             + "voucher has left after this use. Null only on a legacy non-money "
+                                             + "voucher.")
+                                     BigDecimal remainingBalance,
+                                     @Schema(example = "USD") String currency,
+                                     @Schema(example = "TILL3-RCPT-88412", nullable = true) String reference,
+                                     @Schema(example = "false", description = "True when this is the stored "
+                                             + "result of an earlier call with the same reference — nothing "
+                                             + "was spent this time.")
+                                     boolean replayed) {
+
+        /** The pre-V61 component list — kept so callers built against it compile. */
+        public RedemptionResponse(UUID redemptionId, UUID voucherId, String status,
+                                  int usesRemaining, BigDecimal value, Instant redeemedAt) {
+            this(redemptionId, voucherId, status, usesRemaining, value, redeemedAt, null, null, null, false);
+        }
+    }
 
     public record QrIssueRequest(
             @Schema(example = "MERCHANT", allowableValues = {"MERCHANT", "USER"})
@@ -1136,12 +1226,17 @@ public class Dtos {
     public record InvoiceResponse(UUID id, String invoiceNumber, UUID merchantId,
                                   LocalDate periodStart, LocalDate periodEnd,
                                   BigDecimal pointsIssued, BigDecimal pointsRedeemed,
-                                  long vouchersIssued, long vouchersRedeemed,
+                                  long vouchersIssued,
+                                  @Schema(description = "Voucher USES billed in the period (V61): a balance "
+                                          + "voucher used three times is three; one spent in one go is one.")
+                                  long vouchersRedeemed,
                                   BigDecimal totalAmount, String currency, String status,
                                   Instant paidAt) {}
 
     public record OperatorDashboard(long totalTenants, long activeMerchants,
                                     long transactionsToday, long vouchersIssuedToday,
+                                    @Schema(description = "Vouchers FULLY redeemed today (balance reached "
+                                            + "zero). A partial use of a balance voucher is not counted here.")
                                     long vouchersRedeemedToday, BigDecimal pointsIssuedToday,
                                     BigDecimal pointsRedeemedToday, long fraudAttempts24h,
                                     long invoicesPending, long invoicesPaid,
@@ -1152,8 +1247,13 @@ public class Dtos {
                                   BigDecimal totalWalletBalance,
                                   long invoicesPending) {}
 
-    public record MerchantDashboard(UUID merchantId, long redemptionsToday,
-                                    long vouchersIssued, long vouchersRedeemed,
+    public record MerchantDashboard(UUID merchantId,
+                                    @Schema(description = "Successful voucher USES at the merchant today, "
+                                            + "partial uses of a balance voucher included.")
+                                    long redemptionsToday,
+                                    long vouchersIssued,
+                                    @Schema(description = "Vouchers FULLY redeemed today (balance reached zero).")
+                                    long vouchersRedeemed,
                                     BigDecimal pointsIssued, BigDecimal pointsRedeemed,
                                     long fraudAlerts24h,
                                     LocalDate nextInvoiceDate, BigDecimal estimatedInvoice) {}
@@ -1214,13 +1314,15 @@ public class Dtos {
             Map<String, Long> byStatus,
             @Schema(example = "10300.0000", description = "Summed face value of every voucher ever issued, in USD (the platform base currency). Excludes vouchers with no money face value — PERCENT, FREE_ITEM and COMBO — which are still counted in `byStatus`.")
             BigDecimal valueIssuedAllTime,
-            @Schema(example = "7150.0000", description = "Summed face value of FULLY redeemed vouchers, in USD "
-                    + "(the platform base currency). A MULTI_USE voucher with uses still left contributes "
-                    + "nothing until its last one is spent, because the sum keys on `redeemedAt`, which is "
-                    + "stamped only at exhaustion.")
+            @Schema(example = "7150.0000", description = "Summed value REDEEMED at the merchant, in USD (the "
+                    + "platform base currency): every successful voucher use, partial uses of a balance voucher "
+                    + "included, each counted at its share of the voucher's issue-time USD value. A voucher "
+                    + "spent in full contributes exactly its face value in USD.")
             BigDecimal valueRedeemedAllTime,
             @Schema(example = "38") long issuedLast30Days,
-            @Schema(example = "22") long redeemedLast30Days) {}
+            @Schema(example = "22", description = "Vouchers FULLY redeemed in the last 30 days (balance "
+                    + "reached zero). Partial uses are not counted here.")
+            long redeemedLast30Days) {}
 
     /** The merchant's full billing picture. */
     public record InvoiceSummary(

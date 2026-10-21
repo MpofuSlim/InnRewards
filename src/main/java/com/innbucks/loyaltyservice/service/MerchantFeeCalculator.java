@@ -36,7 +36,9 @@ public final class MerchantFeeCalculator {
                        faceValue(v));
     }
 
-    /** Fee charged to the merchant the moment {@code v} is redeemed. */
+    /** Fee charged to the merchant for redeeming {@code v} in one go — its whole
+     *  face value in a single (first) use. A part-used voucher is billed per use
+     *  instead: {@code EffectiveFees.feeForRedemptionUse}. */
     public static BigDecimal feeForRedeemed(Merchant m, Voucher v) {
         return compute(m.getFeeRedeemedType(),
                        m.getFeeRedeemedFixed(),
@@ -52,19 +54,39 @@ public final class MerchantFeeCalculator {
                               BigDecimal fixed,
                               BigDecimal percentWholeNumber,
                               BigDecimal faceValue) {
-        if (type == null) return BigDecimal.ZERO;
-        BigDecimal result = BigDecimal.ZERO;
+        // The two legs, added. Kept as one call so every existing caller (and
+        // the issue side, which is always charged whole) gets exactly what it
+        // always did; the redeem side, charged per USE since V61, reads the
+        // legs separately through EffectiveFees.feeForRedemptionUse.
+        return fixedLeg(type, fixed).add(percentageLeg(type, percentWholeNumber, faceValue));
+    }
+
+    /**
+     * The FIXED part of a fee: the flat amount for FIXED and
+     * FIXED_PLUS_PERCENTAGE, zero for PERCENTAGE (and for no type at all).
+     * A balance voucher's redeem-side fixed leg is charged on its FIRST use only.
+     */
+    static BigDecimal fixedLeg(Merchant.FeeType type, BigDecimal fixed) {
         if (type == Merchant.FeeType.FIXED || type == Merchant.FeeType.FIXED_PLUS_PERCENTAGE) {
-            result = result.add(nz(fixed));
+            return nz(fixed);
         }
+        return BigDecimal.ZERO;
+    }
+
+    /**
+     * The PERCENTAGE part of a fee on {@code amount}: the percentage of it for
+     * PERCENTAGE and FIXED_PLUS_PERCENTAGE, zero for FIXED. Linear in the
+     * amount, so charging it on every use of a balance voucher adds up to the
+     * same as charging it once on the face value.
+     */
+    static BigDecimal percentageLeg(Merchant.FeeType type, BigDecimal percentWholeNumber, BigDecimal amount) {
         if (type == Merchant.FeeType.PERCENTAGE || type == Merchant.FeeType.FIXED_PLUS_PERCENTAGE) {
             BigDecimal pct = nz(percentWholeNumber);
-            BigDecimal fv = nz(faceValue);
+            BigDecimal fv = nz(amount);
             // pct is whole-number (2.5 = 2.5%), so divide by 100.
-            BigDecimal legPercent = fv.multiply(pct, MC).divide(HUNDRED, MC);
-            result = result.add(legPercent);
+            return fv.multiply(pct, MC).divide(HUNDRED, MC);
         }
-        return result;
+        return BigDecimal.ZERO;
     }
 
     private static BigDecimal faceValue(Voucher v) {

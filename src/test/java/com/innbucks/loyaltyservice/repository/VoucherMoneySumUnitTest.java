@@ -45,13 +45,27 @@ class VoucherMoneySumUnitTest {
                 .doesNotContain("SUM(v.value)");
     }
 
+    /**
+     * Since V61 the redeemed value is summed over USES (voucher_redemptions), so
+     * a part-used balance voucher counts what was actually used. The same rule
+     * holds one table over: the USD {@code baseAmount}, never the local
+     * {@code amount}.
+     */
     @Test
-    void sumRedeemedValueByMerchantId_sumsBaseValueNotFaceValue() throws Exception {
+    void sumRedeemedValueByMerchantId_sumsTheUsesBaseAmountNotTheirLocalAmount() throws Exception {
         String jpql = queryOf("sumRedeemedValueByMerchantId", java.util.UUID.class);
 
-        assertThat(jpql).contains("SUM(v.baseValue)");
+        assertThat(jpql).contains("SUM(r.baseAmount)");
         assertThat(jpql)
-                .as("summing v.value would add ZWG to USD in a mixed-currency scope")
-                .doesNotContain("SUM(v.value)");
+                .as("summing r.amount would add ZWG to USD in a mixed-currency scope")
+                .doesNotContain("SUM(r.amount)");
+        assertThat(jpql).as("only successful uses moved money").contains("Result.SUCCESS");
+    }
+
+    @Test
+    void sumRedeemedValueByMerchantIds_sumsTheUsesBaseAmountToo() throws Exception {
+        String jpql = queryOf("sumRedeemedValueByMerchantIds", java.util.Collection.class);
+
+        assertThat(jpql).contains("SUM(r.baseAmount)").doesNotContain("SUM(r.amount)").contains("Result.SUCCESS");
     }
 }

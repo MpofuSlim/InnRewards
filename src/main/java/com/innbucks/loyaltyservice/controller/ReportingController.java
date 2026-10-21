@@ -479,7 +479,8 @@ public class ReportingController {
                                             "transferredAt": null,
                                             "expiresAt": "2026-06-03T10:30:00Z",
                                             "transferredFromUserId": null,
-                                            "transferredFromPhone": null
+                                            "transferredFromPhone": null,
+                                            "remainingBalance": 5.0000
                                           }
                                         ],
                                         "recentTransactions": [
@@ -1295,7 +1296,8 @@ public class ReportingController {
                       "redemptionCount": 1,
                       "redemptions": null,
                       "paymentMethod": "ECOCASH",
-                      "orderRef": "VCH-4F9A1C22B7D3"
+                      "orderRef": "VCH-4F9A1C22B7D3",
+                      "remainingBalance": 0.0000
                     }
                   ],
                   "page": 0, "size": 20, "totalElements": 612, "totalPages": 31, "first": true, "last": false
@@ -1494,11 +1496,15 @@ public class ReportingController {
                                             "redeemerUserId": "33333333-3333-3333-3333-333333333333",
                                             "ipAddress": "41.220.10.5",
                                             "deviceFingerprint": "fp-deadbeef-0001",
-                                            "reason": null
+                                            "reason": null,
+                                            "amount": 5.0000,
+                                            "reference": "TILL3-RCPT-88412",
+                                            "balanceAfter": 0.0000
                                           }
                                         ],
                                         "paymentMethod": "ECOCASH",
-                                        "orderRef": "VCH-4F9A1C22B7D3"
+                                        "orderRef": "VCH-4F9A1C22B7D3",
+                                        "remainingBalance": 0.0000
                                       }
                                     }
                                     """))),

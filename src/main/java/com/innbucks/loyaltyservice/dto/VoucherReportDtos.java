@@ -38,7 +38,20 @@ public final class VoucherReportDtos {
                     description = "LoyaltyUser who redeemed it, if known.") UUID redeemerUserId,
             @Schema(example = "41.220.10.5") String ipAddress,
             @Schema(example = "fp-deadbeef-0001") String deviceFingerprint,
-            @Schema(example = "wrong-merchant", description = "Rejection reason (REJECTED results only).") String reason
+            @Schema(example = "wrong-merchant", description = "Rejection reason (REJECTED results only).") String reason,
+            // What the use moved (V61) — every voucher is a balance voucher, so one
+            // voucher can carry several SUCCESS rows. All null on REJECTED rows.
+            @Schema(example = "20.0000", nullable = true,
+                    description = "Money this use took off the bill, in the voucher's currency. Null on REJECTED "
+                            + "rows. Uses recorded before balance vouchers (2026-10-21) carry the face value.")
+            BigDecimal amount,
+            @Schema(example = "TILL3-RCPT-88412", nullable = true,
+                    description = "The idempotency reference the till sent with this use, if any.")
+            String reference,
+            @Schema(example = "30.0000", nullable = true,
+                    description = "The voucher's remaining balance once this use landed. Null on REJECTED rows "
+                            + "and on uses recorded before balance vouchers.")
+            BigDecimal balanceAfter
     ) {
     }
 
@@ -80,7 +93,8 @@ public final class VoucherReportDtos {
             @Schema(example = "SINGLE_USE") String voucherType,
             @Schema(example = "5.00") BigDecimal faceValue,
             @Schema(example = "USD") String currency,
-            @Schema(example = "0", description = "Remaining redemptions (multi-use vouchers).") int usesRemaining,
+            @Schema(example = "0", description = "1 while the voucher can still be used, 0 once it is spent. "
+                    + "Money left is `remainingBalance`.") int usesRemaining,
             @Schema(example = "WHATSAPP", nullable = true) String deliveryChannel,
             @Schema(example = "spring-2026", nullable = true) String campaignSource,
 
@@ -104,7 +118,9 @@ public final class VoucherReportDtos {
                     description = "The assignee the voucher moved AWAY from.") UUID transferredFromUserId,
             @Schema(example = "+263771234567", nullable = true) String transferredFromPhone,
 
-            @Schema(example = "1", description = "Number of redemption attempts logged against this voucher.") long redemptionCount,
+            @Schema(example = "1", description = "Number of successful USES of this voucher — a balance "
+                    + "voucher spent in several partial uses counts each one. Refused attempts are not counted.")
+            long redemptionCount,
             @Schema(nullable = true, description = "Full redemption log — populated only on the single-voucher "
                     + "detail endpoint; null in list/report rows.") List<RedemptionDetail> redemptions,
 
@@ -116,7 +132,13 @@ public final class VoucherReportDtos {
                             + "INNBUCKS / ECOCASH / ONLINE_CARD = that electronic rail; CASH / CARD_POS = "
                             + "confirmed at the till.") String paymentMethod,
             @Schema(example = "VCH-4F9A1C22B7D3", nullable = true,
-                    description = "The purchase order it was paid through; null when FREE.") String orderRef
+                    description = "The purchase order it was paid through; null when FREE.") String orderRef,
+            // V61 — every voucher holds a balance. APPENDED, like the two above, so the
+            // CSV (which appends the same column at its end) keeps old columns in place.
+            @Schema(example = "0.0000", nullable = true,
+                    description = "What is left to spend, in `currency`. Equals faceValue until the first use; "
+                            + "0 once fully redeemed. Null only on a legacy non-money voucher.")
+            BigDecimal remainingBalance
     ) {
     }
 
@@ -126,8 +148,10 @@ public final class VoucherReportDtos {
             @Schema(description = "Voucher count per status.") Map<String, Long> countByStatus,
             @Schema(description = "Summed face value per status, in USD (the platform base currency). Vouchers with no money face value (PERCENT/FREE_ITEM/COMBO) contribute 0 here but are still counted in countByStatus.") Map<String, BigDecimal> faceValueByStatus,
             @Schema(example = "8420.00", description = "Sum of every voucher's face value, in USD (the platform base currency), so a mixed-currency scope totals in one unit.") BigDecimal totalFaceValue,
-            @Schema(example = "388") long redeemedCount,
-            @Schema(example = "2110.00") BigDecimal redeemedFaceValue,
+            @Schema(example = "388", description = "Vouchers FULLY redeemed (status REDEEMED). A part-used "
+                    + "balance voucher is PARTIALLY_USED and is counted under outstandingCount.") long redeemedCount,
+            @Schema(example = "2110.00", description = "Summed face value, in USD, of the FULLY redeemed vouchers.")
+            BigDecimal redeemedFaceValue,
             @Schema(example = "760", description = "Live vouchers (ISSUED + VIEWED + PARTIALLY_USED).") long outstandingCount,
             @Schema(example = "88") long expiredCount,
             @Schema(example = "4") long revokedCount,

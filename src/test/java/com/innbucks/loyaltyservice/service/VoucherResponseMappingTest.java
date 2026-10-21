@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Pins {@link VoucherService#toResponse} field by field.
  *
  * <p><b>Why this test has to be exhaustive.</b> {@code VoucherResponse} is a
- * record built POSITIONALLY from a 28-component canonical constructor, and it
+ * record built POSITIONALLY from a 29-component canonical constructor, and it
  * carries several runs of adjacent same-typed components — three UUIDs, four
  * Strings, six Instants. Swapping any two neighbours within a run COMPILES
  * CLEANLY and the compiler can never catch it; the symptom is a console row
@@ -64,6 +64,9 @@ class VoucherResponseMappingTest {
         v.setValue(new BigDecimal("5.0000"));
         v.setCurrency("USD");
         v.setBaseValue(new BigDecimal("4.5000"));
+        // V61 balance: distinct from both the face value and the base value, so a
+        // swap with either of its BigDecimal neighbours cannot pass.
+        v.setRemainingBalance(new BigDecimal("2.2500"));
         v.setIssuedAt(ISSUED);
         v.setDeliveredAt(DELIVERED);
         v.setViewedAt(VIEWED);
@@ -114,6 +117,8 @@ class VoucherResponseMappingTest {
 
         assertThat(r.transferredFromUserId()).isEqualTo(TRANSFERRED_FROM);
         assertThat(r.transferredFromPhone()).isEqualTo("+263771234567");
+
+        assertThat(r.remainingBalance()).isEqualByComparingTo("2.2500");
     }
 
     @Test
@@ -188,7 +193,8 @@ class VoucherResponseMappingTest {
                 full.usesRemaining(), full.value(), full.currency(), full.baseValue(),
                 full.issuedAt(), full.deliveredAt(), full.viewedAt(),
                 full.redeemedAt(), full.transferredAt(), full.expiresAt(),
-                full.transferredFromUserId(), full.transferredFromPhone()));
+                full.transferredFromUserId(), full.transferredFromPhone(), full.remainingBalance()));
+        assertThat(redacted.remainingBalance()).isEqualByComparingTo("2.2500");
     }
 
     @Test

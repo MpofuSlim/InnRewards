@@ -407,7 +407,7 @@ class PublicTestControllerTest {
 
         org.mockito.ArgumentCaptor<com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest> req =
                 org.mockito.ArgumentCaptor.forClass(com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest.class);
-        verify(voucherService).redeem(eq(tenant), eq(merchant), req.capture());
+        verify(voucherService).redeemIdempotent(eq(tenant), eq(merchant), req.capture());
         assertThat(req.getValue().code()).isEqualTo("9087876598764566");
         verify(vouchers, never()).findByCode(any());
     }
@@ -421,7 +421,7 @@ class PublicTestControllerTest {
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(ex -> assertThat(((LoyaltyException) ex).getStatus())
                         .isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND));
-        verify(voucherService, never()).redeem(any(), any(), any());
+        verify(voucherService, never()).redeemIdempotent(any(), any(), any());
     }
 
     private static LoyaltyUser user(UUID id) {

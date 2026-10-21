@@ -58,13 +58,15 @@ class InvoicingRunIsolationTest {
     private final MerchantRepository merchants = mock(MerchantRepository.class);
     private final LoyaltyTransactionRepository transactions = mock(LoyaltyTransactionRepository.class);
     private final VoucherRepository vouchers = mock(VoucherRepository.class);
+    private final com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository redemptions =
+            mock(com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository.class);
     private final LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final RecordingTxManager tx = new RecordingTxManager();
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
     private final InvoicingService service = new InvoicingService(invoices, merchants, transactions, vouchers,
-            rules, new LoyaltyProperties(null, null, null, null, null, null, null), null, events, tx, meters);
+            redemptions, rules, new LoyaltyProperties(null, null, null, null, null, null, null), null, events, tx, meters);
 
     private final Merchant alpha = merchant("Alpha");
     private final Merchant beta = merchant("Beta");

@@ -96,7 +96,7 @@ class VoucherRedeemLockoutTest {
 
     @Test
     void fiveUnknownCodes_thenTheSixthIs429_andTheServiceIsNotCalled() throws Exception {
-        when(service.redeem(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
+        when(service.redeemIdempotent(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
 
         for (int i = 0; i < 5; i++) {
             redeem("7183502649174053").andExpect(status().isNotFound())
@@ -112,24 +112,24 @@ class VoucherRedeemLockoutTest {
                         "Too many incorrect voucher codes were tried. Please wait and try again later."))
                 .andExpect(jsonPath("$.data.retryAfterSeconds").value(1800));
 
-        verify(service, times(5)).redeem(any(), any(), any());
+        verify(service, times(5)).redeemIdempotent(any(), any(), any());
     }
 
     @Test
     void aCorrectCodeIsRefusedToo_whileTheLockLasts() throws Exception {
         lockTheCustomerOut();
         reset(service);
-        when(service.redeem(any(), any(), any())).thenReturn(
+        when(service.redeemIdempotent(any(), any(), any())).thenReturn(
                 new Dtos.RedemptionResponse(UUID.randomUUID(), UUID.randomUUID(), "REDEEMED", 0,
                         new BigDecimal("5.00"), Instant.now()));
 
         redeem("7183502649174053").andExpect(status().isTooManyRequests());
-        verify(service, times(0)).redeem(any(), any(), any());
+        verify(service, times(0)).redeemIdempotent(any(), any(), any());
     }
 
     @Test
     void someoneElsesLiveCode_countsLikeAnUnknownOne() throws Exception {
-        when(service.redeem(any(), any(), any())).thenThrow(VoucherCodeGuessException.from(
+        when(service.redeemIdempotent(any(), any(), any())).thenThrow(VoucherCodeGuessException.from(
                 LoyaltyException.forbidden("NOT_VOUCHER_OWNER", "This voucher isn't assigned to you.")));
 
         for (int i = 0; i < 5; i++) {
@@ -152,7 +152,7 @@ class VoucherRedeemLockoutTest {
                 () -> LoyaltyException.forbidden("USER_PENDING", "still being set up"));
         for (Supplier<LoyaltyException> refusal : honest) {
             reset(service);
-            when(service.redeem(any(), any(), any())).thenThrow(refusal.get());
+            when(service.redeemIdempotent(any(), any(), any())).thenThrow(refusal.get());
             for (int i = 0; i < 10; i++) {
                 redeem("7183502649174053").andExpect(result -> {
                     if (result.getResponse().getStatus() == 429) {
@@ -165,7 +165,7 @@ class VoucherRedeemLockoutTest {
 
     @Test
     void aSuccessDoesNotResetTheCount() throws Exception {
-        when(service.redeem(any(), any(), any()))
+        when(service.redeemIdempotent(any(), any(), any()))
                 .thenThrow(VoucherCodeGuessException.unknownCode())
                 .thenThrow(VoucherCodeGuessException.unknownCode())
                 .thenThrow(VoucherCodeGuessException.unknownCode())
@@ -191,7 +191,7 @@ class VoucherRedeemLockoutTest {
 
     @Test
     void oneCashiersLock_doesNotBlockAnotherTillAtTheSameShop() throws Exception {
-        when(service.redeem(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
+        when(service.redeemIdempotent(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
         UUID shop = UUID.randomUUID();
 
         asStaff(UUID.randomUUID(), shop);
@@ -208,7 +208,7 @@ class VoucherRedeemLockoutTest {
     void theBodyCannotSteerTheKey() throws Exception {
         // userId, deviceFingerprint and ipAddress are caller-chosen; changing
         // them on every attempt must not buy a fresh budget.
-        when(service.redeem(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
+        when(service.redeemIdempotent(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
         for (int i = 0; i < 5; i++) {
             mvc.perform(post("/loyalty/vouchers/redeem").contentType(MediaType.APPLICATION_JSON)
                             .content("""
@@ -282,7 +282,7 @@ class VoucherRedeemLockoutTest {
     // --------------------------------------------------------------- helpers
 
     private void lockTheCustomerOut() throws Exception {
-        when(service.redeem(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
+        when(service.redeemIdempotent(any(), any(), any())).thenThrow(VoucherCodeGuessException.unknownCode());
         for (int i = 0; i < 5; i++) {
             redeem("7183502649174053").andExpect(status().isNotFound());
         }

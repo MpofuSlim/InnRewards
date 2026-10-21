@@ -12,6 +12,7 @@ import com.innbucks.loyaltyservice.repository.InvoiceRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import io.micrometer.core.instrument.Counter;
@@ -53,6 +54,7 @@ public class InvoicingService {
     private final MerchantRepository merchants;
     private final LoyaltyTransactionRepository transactions;
     private final VoucherRepository vouchers;
+    private final VoucherRedemptionRepository redemptions;
     private final LoyaltyRuleRepository rules;
     private final LoyaltyProperties props;
     private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
@@ -71,6 +73,7 @@ public class InvoicingService {
     public InvoicingService(InvoiceRepository invoices, MerchantRepository merchants,
                             LoyaltyTransactionRepository transactions,
                             VoucherRepository vouchers,
+                            VoucherRedemptionRepository redemptions,
                             LoyaltyRuleRepository rules,
                             LoyaltyProperties props,
                             com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
@@ -81,6 +84,7 @@ public class InvoicingService {
         this.merchants = merchants;
         this.transactions = transactions;
         this.vouchers = vouchers;
+        this.redemptions = redemptions;
         this.rules = rules;
         this.props = props;
         this.merchantAuthz = merchantAuthz;
@@ -121,8 +125,12 @@ public class InvoicingService {
         // MerchantFeeCalculator.compute returns the same value for every row.
         List<BigDecimal> issuedFaceValues = vouchers.findByMerchantIdAndIssuedAtBetween(m.getId(), from, to)
                 .stream().map(Voucher::getValue).toList();
-        List<BigDecimal> redeemedFaceValues = vouchers.findByMerchantIdAndRedeemedAtBetween(m.getId(), from, to)
-                .stream().map(Voucher::getValue).toList();
+        // The redeem side is billed per USE (V61): every successful redemption
+        // in [from, to), each priced on the amount it took off the bill, with a
+        // FIXED leg on a voucher's first use only. A part-used voucher is billed
+        // for what was used in this period, not when (if ever) it reaches zero.
+        List<EffectiveFees.RedemptionUse> redemptionUses = redemptions.usesBetween(m.getId(), from, to)
+                .stream().map(r -> EffectiveFees.RedemptionUse.of(r, 0)).toList();
 
         // V29: fee schedules now also live on loyalty rules (global rule = the
         // tenant standard, merchant rule = override) — EffectiveFees resolves
@@ -130,7 +138,7 @@ public class InvoicingService {
         // the row arithmetic.
         Billing billing = Billing.of(m,
                 rules.findApplicable(m.getTenantId(), m.getId(), TransactionType.PURCHASE),
-                issuedFaceValues, redeemedFaceValues);
+                issuedFaceValues, redemptionUses);
 
         // No money owed -> no invoice.
         if (!billing.billable()) {
@@ -141,22 +149,27 @@ public class InvoicingService {
 
     /**
      * What one merchant owes for one period: the voucher counts and the fee
-     * total, priced per voucher through {@link EffectiveFees}. Both invoice
-     * paths build it — {@link #generate} from per-merchant reads, the nightly
-     * run from its batched pre-load — so they cannot price differently.
+     * total, priced per voucher (issue side) and per USE (redeem side, V61)
+     * through {@link EffectiveFees}. Both invoice paths build it —
+     * {@link #generate} from per-merchant reads, the nightly run from its
+     * batched pre-load — so they cannot price differently.
+     *
+     * <p>{@code vouchersRedeemed} is the number of successful USES in the
+     * period. A voucher spent in one go is one use, exactly as before; a
+     * balance voucher used three times is three.
      */
     record Billing(long vouchersIssued, long vouchersRedeemed, BigDecimal total) {
 
         static Billing of(Merchant m, List<LoyaltyRule> applicableRules,
-                          List<BigDecimal> issuedFaceValues, List<BigDecimal> redeemedFaceValues) {
+                          List<BigDecimal> issuedFaceValues, List<EffectiveFees.RedemptionUse> redemptionUses) {
             EffectiveFees fees = EffectiveFees.resolve(m, applicableRules, Instant.now());
             BigDecimal feeVoucherIssued = issuedFaceValues.stream()
                     .map(fees::feeForIssuedFaceValue)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal feeVoucherRedeemed = redeemedFaceValues.stream()
-                    .map(fees::feeForRedeemedFaceValue)
+            BigDecimal feeVoucherRedeemed = redemptionUses.stream()
+                    .map(fees::feeForRedemptionUse)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            return new Billing(issuedFaceValues.size(), redeemedFaceValues.size(),
+            return new Billing(issuedFaceValues.size(), redemptionUses.size(),
                     feeVoucherIssued.add(feeVoucherRedeemed));
         }
 
@@ -302,8 +315,8 @@ public class InvoicingService {
      *
      * <p><b>The reads are batched, not per merchant.</b> Everything needed to
      * decide whether a merchant owes anything — which merchants are already
-     * invoiced for their period, every applicable rule, every voucher issued or
-     * redeemed in the period — is read up front with a fixed number of queries
+     * invoiced for their period, every applicable rule, every voucher issued and
+     * every voucher USE in the period — is read up front with a fixed number of queries
      * (at most three billing periods, three queries each, plus the merchants
      * and the rules). A merchant with nothing to bill then costs no query at
      * all; one that is billed costs its own short write transaction (a re-check
@@ -354,7 +367,8 @@ public class InvoicingService {
     /**
      * The batched pre-load: every active merchant, grouped by the period its
      * billing cycle closes today; per period, the merchants already invoiced
-     * for it and the face values of every voucher issued or redeemed in it; and
+     * for it, the face values of every voucher issued in it and every voucher
+     * use (amount + first-use flag) redeemed in it; and
      * every rule of the merchants' tenants. Then prices each merchant in memory
      * through the same {@link Billing#of} as {@link #generate}, keeping only
      * the merchants that owe something.
@@ -388,8 +402,9 @@ public class InvoicingService {
 
             Set<UUID> alreadyInvoiced = new HashSet<>(invoices.findMerchantIdsInvoicedFor(ids, g.start(), g.end()));
             Map<UUID, List<BigDecimal>> issued = faceValuesByMerchant(vouchers.issuedFaceValuesBetween(ids, from, to));
-            Map<UUID, List<BigDecimal>> redeemed =
-                    faceValuesByMerchant(vouchers.redeemedFaceValuesBetween(ids, from, to));
+            // Uses in the same [from, to) generate() bills them over.
+            Map<UUID, List<EffectiveFees.RedemptionUse>> redeemed =
+                    usesByMerchant(redemptions.usesBetweenForMerchants(ids, from, to));
 
             for (Merchant m : g.merchants()) {
                 if (alreadyInvoiced.contains(m.getId())) continue;
@@ -412,6 +427,14 @@ public class InvoicingService {
             }
         }
         return new RunPlan(billable);
+    }
+
+    private static Map<UUID, List<EffectiveFees.RedemptionUse>> usesByMerchant(List<Object[]> rows) {
+        Map<UUID, List<EffectiveFees.RedemptionUse>> out = new HashMap<>();
+        for (Object[] r : rows) {
+            out.computeIfAbsent((UUID) r[0], k -> new ArrayList<>()).add(EffectiveFees.RedemptionUse.of(r, 1));
+        }
+        return out;
     }
 
     private static Map<UUID, List<BigDecimal>> faceValuesByMerchant(List<Object[]> rows) {

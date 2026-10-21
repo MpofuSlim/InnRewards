@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -53,6 +54,42 @@ public class VoucherRedemption {
 
     @Column(length = 200)
     private String reason;
+
+    /**
+     * Money this use took off the bill, in the voucher's currency (V61). The
+     * requested amount, capped at what the voucher had left. Null on REJECTED
+     * rows, and on a legacy voucher with no money face value.
+     */
+    @Column(precision = 19, scale = 4)
+    private BigDecimal amount;
+
+    /**
+     * The USD share of the voucher's issue-time liability ({@code
+     * vouchers.base_value}) this use consumed. Telescoped, never re-converted:
+     * a voucher's uses always sum to exactly its base value — see
+     * {@code VoucherService.baseShare}. Null when the voucher has no base value.
+     */
+    @Column(name = "base_amount", precision = 19, scale = 4)
+    private BigDecimal baseAmount;
+
+    /** The voucher's remaining balance once this use landed. Null on legacy and REJECTED rows. */
+    @Column(name = "balance_after", precision = 19, scale = 4)
+    private BigDecimal balanceAfter;
+
+    /**
+     * The caller's idempotency key for this use. One SUCCESS row per
+     * (merchant, reference) — a partial unique index (V61). A retry with the
+     * same reference replays this row instead of spending again.
+     */
+    @Column(length = 100)
+    private String reference;
+
+    /**
+     * True on the voucher's first SUCCESSFUL use. A FIXED redeem-side fee is
+     * billed on the first use only; a PERCENTAGE one on every use's amount.
+     */
+    @Column(name = "first_use", nullable = false)
+    private boolean firstUse;
 
     public enum Result { SUCCESS, REJECTED }
 }

@@ -230,10 +230,15 @@ public class ReportingService {
         // configuration. Without this we'd still be reporting count*flat —
         // the same regression the invoicing path used to have.
         List<Voucher> issuedVouchers   = vouchers.findByMerchantIdAndIssuedAtBetween(merchantId, from, to);
-        List<Voucher> redeemedVouchers = vouchers.findByMerchantIdAndRedeemedAtBetween(merchantId, from, to);
+        // The redeem side is priced per USE (V61) — the same rows the invoice
+        // run bills — so a part-used voucher's uses today show in the estimate.
+        List<EffectiveFees.RedemptionUse> usesToday = voucherRedemptions.usesBetween(merchantId, from, to)
+                .stream().map(r -> EffectiveFees.RedemptionUse.of(r, 0)).toList();
         long issued   = issuedVouchers.size();
-        long redeemed = redeemedVouchers.size();
-        long today    = redeemed;
+        // FULLY redeemed vouchers (redeemedAt is stamped when a balance reaches
+        // zero); redemptionsToday counts every successful use, partial ones too.
+        long redeemed = vouchers.countByMerchantIdAndRedeemedAtBetween(merchantId, from, to);
+        long today    = usesToday.size();
         BigDecimal pointsIssued = transactions.sumPointsIssued(merchantId, from, to);
         BigDecimal pointsRedeemed = transactions.sumPointsRedeemed(merchantId, from, to);
         long fraudAlerts = fraud.findTop100ByOrderByCreatedAtDesc().stream()
@@ -257,8 +262,8 @@ public class ReportingService {
             estimatedInvoice = issuedVouchers.stream()
                     .map(fees::feeForIssued)
                     .reduce(BigDecimal.ZERO, BigDecimal::add)
-                    .add(redeemedVouchers.stream()
-                            .map(fees::feeForRedeemed)
+                    .add(usesToday.stream()
+                            .map(fees::feeForRedemptionUse)
                             .reduce(BigDecimal.ZERO, BigDecimal::add));
         }
         return new Dtos.MerchantDashboard(merchantId, today, issued, redeemed,
@@ -354,7 +359,7 @@ public class ReportingService {
             Map<UUID, Long> redeemed30,
             Map<UUID, List<Invoice>> invoices,
             Map<UUID, List<FaceValueAt>> periodIssued,
-            Map<UUID, List<FaceValueAt>> periodRedeemed,
+            Map<UUID, List<EffectiveFees.RedemptionUse>> periodRedeemed,
             Map<UUID, Long> fraud30,
             Map<UUID, Long> expiring30) {}
 
@@ -419,8 +424,12 @@ public class ReportingService {
                 .min(Comparator.naturalOrder()).orElse(now);
         Map<UUID, List<FaceValueAt>> periodIssued = faceValuesByMerchant(
                 vouchers.issuedFaceValuesBetween(ids, earliest, now));
-        Map<UUID, List<FaceValueAt>> periodRedeemed = faceValuesByMerchant(
-                vouchers.redeemedFaceValuesBetween(ids, earliest, now));
+        // Redeem side per USE (V61), as the invoice run bills it: [earliest, now).
+        Map<UUID, List<EffectiveFees.RedemptionUse>> periodRedeemed = new HashMap<>();
+        for (Object[] r : voucherRedemptions.usesBetweenForMerchants(ids, earliest, now)) {
+            periodRedeemed.computeIfAbsent((UUID) r[0], k -> new ArrayList<>())
+                    .add(EffectiveFees.RedemptionUse.of(r, 1));
+        }
 
         return new MerchantPageData(shopsByMerchant, points, byType, activity, voucherStatus, redeemedValue,
                 countsByMerchant(vouchers.countIssuedBetweenByMerchant(ids, thirtyDaysAgo, now)),
@@ -543,8 +552,9 @@ public class ReportingService {
             case MONTHLY -> today.withDayOfMonth(1).plusMonths(1);
         };
         // Fees accrued in the CURRENT (not yet invoiced) billing period, priced
-        // per voucher with the merchant's fee model — same math the invoice run
-        // will apply, so the figure previews the next bill.
+        // per voucher issued and per voucher USE redeemed with the merchant's
+        // fee model — same math the invoice run will apply, so the figure
+        // previews the next bill.
         Instant periodFrom = currentPeriodFrom(m, today);
         EffectiveFees fees = EffectiveFees.resolve(m,
                 EffectiveFees.applicable(tenantRules, id, TransactionType.PURCHASE), now);
@@ -553,8 +563,8 @@ public class ReportingService {
                 .map(f -> fees.feeForIssuedFaceValue(f.faceValue()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .add(data.periodRedeemed().getOrDefault(id, List.of()).stream()
-                        .filter(f -> within(f.at(), periodFrom, now))
-                        .map(f -> fees.feeForRedeemedFaceValue(f.faceValue()))
+                        .filter(u -> within(u.at(), periodFrom, now))
+                        .map(fees::feeForRedemptionUse)
                         .reduce(BigDecimal.ZERO, BigDecimal::add));
         Dtos.InvoiceSummary invoiceSummary = new Dtos.InvoiceSummary(
                 invoiceRows.size(), pending, paid, overdue, cancelled,
@@ -1443,7 +1453,8 @@ public class ReportingService {
                 v.getTransferredAt(), v.getTransferredFromUserId(), v.getTransferredFromPhone(),
                 redemptionCount, redemptions,
                 (purchase == null ? VoucherReportFilters.PaymentMethod.FREE : purchase.method()).name(),
-                purchase == null ? null : purchase.orderRef());
+                purchase == null ? null : purchase.orderRef(),
+                v.getRemainingBalance());
     }
 
     /** How one voucher was paid for, read from its purchase order. */
@@ -1479,7 +1490,8 @@ public class ReportingService {
         return new RedemptionDetail(r.getId(), r.getRedeemedAt(),
                 r.getResult() == null ? null : r.getResult().name(),
                 r.getMerchantId(), r.getOutletCode(), r.getUserId(),
-                r.getIpAddress(), r.getDeviceFingerprint(), r.getReason());
+                r.getIpAddress(), r.getDeviceFingerprint(), r.getReason(),
+                r.getAmount(), r.getReference(), r.getBalanceAfter());
     }
 
     private String tenantName(UUID tenantId) {
@@ -1503,7 +1515,7 @@ public class ReportingService {
                     + "voucherType,faceValue,currency,usesRemaining,deliveryChannel,campaignSource,"
                     + "issuedAt,deliveredAt,viewedAt,redeemedAt,expiresAt,expired,redemptionCount,"
                     + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone,"
-                    + "paymentMethod,orderRef\n";
+                    + "paymentMethod,orderRef,remainingBalance\n";
 
     /**
      * CSV export — one fully-detailed row per voucher. {@code level} selects the
@@ -1623,7 +1635,8 @@ public class ReportingService {
                         .append(csvField(d.transferredFromUserId())).append(',')
                         .append(csvField(d.transferredFromPhone())).append(',')
                         .append(csvField(d.paymentMethod())).append(',')
-                        .append(csvField(d.orderRef()))
+                        .append(csvField(d.orderRef())).append(',')
+                        .append(csvField(d.remainingBalance()))
                         .append('\n');
             }
             write(out, sb);

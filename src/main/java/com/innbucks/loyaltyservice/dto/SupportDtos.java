@@ -161,7 +161,11 @@ public final class SupportDtos {
                               @Schema(example = "****1122") String transferredFrom,
                               int usesRemaining, Instant issuedAt, Instant deliveredAt,
                               Instant viewedAt, Instant redeemedAt, Instant expiresAt,
-                              Instant transferredAt, String campaignSource) {}
+                              Instant transferredAt, String campaignSource,
+                              @Schema(example = "30.0000", nullable = true, description = "What the voucher "
+                                      + "has left to spend, in `currency` (V61 balance vouchers). Equals `value` "
+                                      + "until the first use; null only on a legacy non-money voucher.")
+                              BigDecimal remainingBalance) {}
 
     public record VoucherSummary(long heldLive, long heldTotal, long sent, long transferredAway,
                                  @Schema(description = "The 5 most recently issued vouchers this phone holds.")

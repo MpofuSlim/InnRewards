@@ -79,6 +79,15 @@ public class VoucherService {
      */
     private final org.springframework.context.ApplicationEventPublisher events;
 
+    /**
+     * This bean through its Spring proxy, so {@link #redeemIdempotent} can run
+     * each attempt of a redemption in its OWN transaction. Null when the class is
+     * built by hand (unit tests), where there is no proxy and no transaction to
+     * start; the retry then calls straight through.
+     */
+    private final org.springframework.beans.factory.ObjectProvider<VoucherService> self;
+
+    @org.springframework.beans.factory.annotation.Autowired
     public VoucherService(VoucherRepository vouchers,
                           VoucherBatchRepository batches,
                           VoucherRedemptionRepository redemptions,
@@ -94,7 +103,9 @@ public class VoucherService {
                           com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                           LoyaltyProperties props,
                           ExchangeRateService fx,
-                          org.springframework.context.ApplicationEventPublisher events) {
+                          org.springframework.context.ApplicationEventPublisher events,
+                          org.springframework.beans.factory.ObjectProvider<VoucherService> self) {
+        this.self = self;
         this.events = events;
         this.vouchers = vouchers;
         this.batches = batches;
@@ -114,6 +125,27 @@ public class VoucherService {
         this.defaultValidityDays = props.voucher().defaultValidityDays();
         int cap = props.voucher().bulkMaxQuantity();
         this.bulkMaxQuantity = cap > 0 ? cap : LoyaltyProperties.Voucher.DEFAULT_BULK_MAX_QUANTITY;
+    }
+
+    /** Without the self proxy — for code that builds the service by hand (unit tests). */
+    public VoucherService(VoucherRepository vouchers,
+                          VoucherBatchRepository batches,
+                          VoucherRedemptionRepository redemptions,
+                          MerchantService merchants,
+                          com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz,
+                          com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
+                          LoyaltyRuleRepository rules,
+                          LoyaltyUserRepository users,
+                          UserService userService,
+                          NotificationGateway notifications,
+                          FraudService fraud,
+                          com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
+                          com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
+                          LoyaltyProperties props,
+                          ExchangeRateService fx,
+                          org.springframework.context.ApplicationEventPublisher events) {
+        this(vouchers, batches, redemptions, merchants, merchantAuthz, supportedCurrencies, rules, users,
+                userService, notifications, fraud, metrics, memberNotifier, props, fx, events, null);
     }
 
     public Dtos.VoucherResponse issue(UUID tenantId, Dtos.IssueVoucherRequest req) {
@@ -344,17 +376,21 @@ public class VoucherService {
     }
 
     /**
-     * A voucher is worth its face value and is spent ONCE. Every issue path
+     * A voucher is worth its face value ONCE IN TOTAL. Every issue path
      * resolves through here, so this is where that rule is enforced.
      *
      * <p><b>MULTI_USE is retired (owner decision, 2026-09-18) and issuing one is
-     * refused.</b> It never had money semantics that worked: {@code value} is a
+     * refused.</b> It never had money semantics that worked: {@code value} was a
      * face amount and {@code usesRemaining} a bare counter, with no remaining
      * balance anywhere, so the redeem response handed the till the FULL face
      * value on every use — a "$5, three uses" voucher was worth $5 three times
      * over. Asked which way to resolve it, the owner's answer was that a $5
-     * voucher hands over $5 once, and that the type should go rather than
-     * acquire a drawdown balance.
+     * voucher hands over $5 once.
+     *
+     * <p><b>V61 then gave every voucher a balance</b> (owner decision,
+     * 2026-10-21): one voucher can be spent in several partial uses, down to
+     * zero. That is money counted, not uses, so it does not revive MULTI_USE and
+     * {@code usageLimit} still has exactly one legal value.
      *
      * <p>Refused, not silently downgraded to one use: a caller asking for three
      * uses has priced something, and quietly giving them one is the kind of
@@ -366,13 +402,14 @@ public class VoucherService {
     static int resolveUsageLimit(Voucher.VoucherType type, Integer usageLimit) {
         if (voucherTypeOrDefault(type) == Voucher.VoucherType.MULTI_USE) {
             throw LoyaltyException.badRequest("MULTI_USE_RETIRED",
-                    "Multi-use vouchers are no longer issued — a voucher is worth its face "
-                            + "value and is redeemed once. Issue it as SINGLE_USE, or issue "
-                            + "several vouchers.");
+                    "Multi-use vouchers are no longer issued — a voucher holds its face value "
+                            + "as a balance that can be spent across several uses. Issue it as "
+                            + "SINGLE_USE, or issue several vouchers.");
         }
         if (usageLimit != null && usageLimit != 1) {
             throw LoyaltyException.badRequest("USAGE_LIMIT_CONFLICT",
-                    "A voucher has exactly one use — omit usageLimit or send 1.");
+                    "usageLimit is retired — a voucher is spent by its balance, not a count of uses. "
+                            + "Omit usageLimit or send 1.");
         }
         return 1;
     }
@@ -599,6 +636,9 @@ public class VoucherService {
         v.setBaseValue(terms.base().amount());
         v.setFxRateId(terms.base().rateId());
         v.setUsesRemaining(usageLimit);
+        // V61: the whole face value is the balance until the first use spends
+        // some of it.
+        v.setRemainingBalance(value);
         v.setExpiresAt(terms.expiresAt());
         return v;
     }
@@ -801,6 +841,39 @@ public class VoucherService {
                 "you can only act on your own vouchers");
     }
 
+    /**
+     * The redeem entry point for the HTTP endpoints: {@link #redeem}, made safe
+     * against the one race its reference pre-check cannot see (V61).
+     *
+     * <p>Two uses of the same voucher are serialised by the voucher's row lock,
+     * so a double-tapped redeem's second call waits, then finds the first's
+     * committed row in the pre-check and replays it. The unique index on
+     * {@code (merchant, reference)} can still be raced by the same reference
+     * arriving on two DIFFERENT vouchers at once; the loser's flush fails, its
+     * transaction rolls back whole, and it surfaces as
+     * {@link com.innbucks.loyaltyservice.exception.VoucherRedemptionRaceException}.
+     * Retried ONCE, from a fresh transaction, it re-enters the pre-check, which
+     * now sees the winner's committed row — and answers 409
+     * {@code DUPLICATE_REFERENCE} (another voucher), or replays it should it
+     * name this one. Same shape as {@code RedemptionService.redeemPointsIdempotent},
+     * and runs {@code NOT_SUPPORTED} for the same reason: a unique violation
+     * aborts the Postgres transaction it happened in, so the retry must start a
+     * new one.
+     *
+     * <p>In-process callers that already hold a transaction keep calling
+     * {@link #redeem}; a race there propagates as the same 409.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public Dtos.RedemptionResponse redeemIdempotent(UUID tenantId, UUID merchantId,
+                                                    Dtos.RedeemVoucherRequest req) {
+        VoucherService proxy = self == null ? this : self.getObject();
+        try {
+            return proxy.redeem(tenantId, merchantId, req);
+        } catch (com.innbucks.loyaltyservice.exception.VoucherRedemptionRaceException race) {
+            return proxy.redeem(tenantId, merchantId, req);
+        }
+    }
+
     public Dtos.RedemptionResponse redeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
         // Timer captures end-to-end latency for the hottest read+write path in
         // the service. Exception paths are timed too (Timer.record records the
@@ -834,6 +907,12 @@ public class VoucherService {
     }
 
     private Dtos.RedemptionResponse doRedeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
+        // The request's own shape, checked before any lookup: it is answered
+        // from the request alone, so it says nothing about which vouchers exist
+        // and is never a counted guess.
+        requireRedeemableAmount(req.amount());
+        String reference = referenceOf(req);
+
         Voucher v = lockByTypedCode(req.code()).orElse(null);
         if (v == null && VoucherCodes.isMistypedNumeric(VoucherCodes.normalize(req.code()))) {
             // A code the check digit says was mistyped — a wrong or swapped
@@ -907,6 +986,29 @@ public class VoucherService {
             }
         }
 
+        // Idempotent retry (V61). Placed HERE, after the signature and the
+        // customer-holder checks — so a reference is never an oracle: a
+        // non-holder has already been refused NOT_VOUCHER_OWNER — and BEFORE the
+        // expiry / REVOKED / exhausted refusals, so a till that retries the use
+        // that spent a voucher to zero gets that use back (replayed) instead of
+        // ALREADY_REDEEMED. Under the voucher's row lock, so a concurrent
+        // duplicate of the same use has already committed by the time this runs.
+        if (reference != null) {
+            java.util.Optional<VoucherRedemption> prior = redemptions.findFirstByMerchantIdAndReferenceAndResult(
+                    merchantId, reference, VoucherRedemption.Result.SUCCESS);
+            if (prior.isPresent()) {
+                // The redeeming merchant is authorized exactly as a fresh use
+                // would be, so a staff caller naming a merchant it does not
+                // administer learns nothing from a reference there either.
+                requireMayRedeemAt(tenantId, merchantId, staffCaller);
+                if (!prior.get().getVoucherId().equals(v.getId())) {
+                    throw LoyaltyException.conflict(DUPLICATE_REFERENCE,
+                            "This reference was already used for another voucher redemption.");
+                }
+                return replayOf(v, prior.get());
+            }
+        }
+
         if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
             // The EXPIRED status flip used to be set on the managed entity right
             // here, and was then discarded by the throw below along with the
@@ -934,7 +1036,12 @@ public class VoucherService {
                     FraudAttempt.Reason.ALREADY_REDEEMED, "redemption of a revoked voucher");
             throw LoyaltyException.conflict("REVOKED", "This voucher is no longer valid.");
         }
-        if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0) {
+        // Exhausted = nothing left to spend (V61). Same code and message as when
+        // a voucher could only be spent whole; for a balance voucher they now
+        // mean its balance has reached zero.
+        BigDecimal remaining = remainingBalanceOf(v);
+        if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0
+                || (remaining != null && remaining.signum() <= 0)) {
             rejectRedemption(v, merchantId, req, "already redeemed");
             recordAttempt(tenantId, req, merchantId, v.getCode(),
                     FraudAttempt.Reason.ALREADY_REDEEMED, "duplicate redemption attempt");
@@ -981,11 +1088,7 @@ public class VoucherService {
         // USER_BLOCKED. WRONG_MERCHANT above has already pinned the redemption
         // to this voucher's own merchant, so moving this changes no outcome for
         // a caller entitled to redeem here.
-        if (staffCaller) {
-            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
-        } else {
-            merchants.requireMerchant(tenantId, merchantId);
-        }
+        requireMayRedeemAt(tenantId, merchantId, staffCaller);
 
         // The HOLDER's account state, resolved from the voucher — see
         // holderAccount for why this must not come from req.userId(), which is
@@ -1035,7 +1138,33 @@ public class VoucherService {
             }
         }
 
-        v.setUsesRemaining(v.getUsesRemaining() - 1);
+        // ---- The use itself (V61: every voucher is a balance voucher). ----
+        //
+        // `applied` is what comes off THIS bill: the amount asked for, or the
+        // whole remaining balance when none was named — and never more than is
+        // left. A bill bigger than the balance is not refused (owner decision,
+        // 2026-10-21): what is left is applied and the response says how much.
+        //
+        // A legacy row with NO money balance (a pre-V45 PERCENT / FREE_ITEM /
+        // COMBO voucher, or a pre-V7 one with no face value) is spent whole,
+        // exactly as every voucher used to be: it hands the till its face value,
+        // ignores a requested amount, and is never spent down — "10% off" is
+        // not 10 of anything.
+        boolean wholeLegacyUse = v.getRemainingBalance() == null;
+        BigDecimal applied;
+        BigDecimal balanceAfter;
+        if (wholeLegacyUse) {
+            applied = v.getValue();
+            balanceAfter = null;
+            v.setUsesRemaining(v.getUsesRemaining() - 1);
+        } else {
+            BigDecimal requested = req.amount();
+            applied = (requested == null || requested.compareTo(remaining) >= 0 ? remaining : requested)
+                    .setScale(4, java.math.RoundingMode.HALF_UP);
+            balanceAfter = remaining.subtract(applied).setScale(4, java.math.RoundingMode.HALF_UP);
+            v.setRemainingBalance(balanceAfter);
+            v.setUsesRemaining(balanceAfter.signum() > 0 ? Math.max(1, v.getUsesRemaining()) : 0);
+        }
         if (v.getUsesRemaining() <= 0) {
             v.setStatus(Voucher.Status.REDEEMED);
             v.setRedeemedAt(Instant.now());
@@ -1043,12 +1172,150 @@ public class VoucherService {
             v.setStatus(Voucher.Status.PARTIALLY_USED);
         }
 
-        VoucherRedemption r = recordRedemption(v, merchantId, req, VoucherRedemption.Result.SUCCESS, null);
+        // The USD share of the voucher's issue-time liability this use consumed
+        // — telescoped from the frozen base value, never re-converted at today's
+        // rate. A legacy whole use consumes the whole base value, as it did.
+        BigDecimal baseAmount = wholeLegacyUse
+                ? v.getBaseValue()
+                : baseShare(v.getValue(), v.getBaseValue(), remaining, balanceAfter);
+        // The FIRST successful use carries a FIXED redeem-side fee; every use
+        // carries the percentage on its own amount (EffectiveFees).
+        boolean firstUse = !redemptions.existsByVoucherIdAndResult(v.getId(), VoucherRedemption.Result.SUCCESS);
+
+        VoucherRedemption r = recordSuccessfulUse(v, merchantId, req, reference, applied, baseAmount,
+                balanceAfter, firstUse);
         metrics.incVouchersRedeemed();
-        // Read the value straight off the voucher — snapshotted at issue time,
-        // always a money amount since V45.
+
+        // The holder hears about every use (owner decision, 2026-10-21): what
+        // was used and what is left. Everything the message needs is read NOW
+        // and handed over as values, then sent only once this transaction
+        // COMMITS — a use that rolls back (a lost reference race; an eligibility
+        // deferral's first pass never gets this far) tells nobody anything.
+        // Not for a legacy whole use, whose "value" may not be money; not for a
+        // voucher issued with channel NONE ("do not send" — POS-printed stock);
+        // and never on a replay, which returned above.
+        String holderNumber = holderPhone(v);
+        if (!wholeLegacyUse && v.getDeliveryChannel() != Voucher.DeliveryChannel.NONE
+                && holderNumber != null && !holderNumber.isBlank()) {
+            NotificationGateway.VoucherUse use = new NotificationGateway.VoucherUse(
+                    v.getId(), v.getMerchantId(), holderNumber, applied, balanceAfter, v.getCurrency(),
+                    v.getExpiresAt());
+            AfterCommit.run(() -> notifications.notifyVoucherUsed(use));
+        }
+
         return new Dtos.RedemptionResponse(r.getId(), v.getId(), v.getStatus().name(),
-                v.getUsesRemaining(), v.getValue(), r.getRedeemedAt());
+                v.getUsesRemaining(), applied, r.getRedeemedAt(), balanceAfter, v.getCurrency(),
+                reference, false);
+    }
+
+    /** Redeem refusal: the reference already names a successful use of ANOTHER voucher. */
+    public static final String DUPLICATE_REFERENCE = "DUPLICATE_REFERENCE";
+
+    /**
+     * Who may redeem at {@code merchantId}: staff must administer it (object-level
+     * authz); anyone else needs only that it exists in the tenant — see the long
+     * note in {@link #doRedeem} for why the two differ. One method, so the fresh
+     * use and the idempotent replay cannot drift apart.
+     */
+    private void requireMayRedeemAt(UUID tenantId, UUID merchantId, boolean staffCaller) {
+        if (staffCaller) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        } else {
+            merchants.requireMerchant(tenantId, merchantId);
+        }
+    }
+
+    /**
+     * What the voucher has left to spend (V61). The stored balance when there is
+     * one; for a legacy row with none, its face value while it still has a use
+     * and zero once spent — and null only when such a row has no face value
+     * either, which is then spent whole with nothing to quote.
+     */
+    static BigDecimal remainingBalanceOf(Voucher v) {
+        if (v.getRemainingBalance() != null) {
+            return v.getRemainingBalance();
+        }
+        if (v.getUsesRemaining() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        return v.getValue();
+    }
+
+    /**
+     * The USD share of a voucher's issue-time liability that taking its balance
+     * from {@code before} to {@code after} consumed: B(before) − B(after), where
+     * B(x) = x × base / face, rounded to the column's 4 places, with B(face) =
+     * base and B(0) = 0 exactly.
+     *
+     * <p>Because every use subtracts the SAME function at the two ends of its own
+     * step, a voucher's uses telescope: whatever amounts they took, in whatever
+     * order, they sum to exactly B(face) − B(0) = the voucher's base value. That
+     * is the property the merchant-360 "value redeemed" relies on. Rounding each
+     * use's amount on its own would let the per-use figures drift a few
+     * hundredths of a cent from the liability they add up to. Never re-converted
+     * at today's FX rate — V38 froze the voucher's USD worth when it was issued.
+     *
+     * @return null when the voucher has no base value or no face value to scale by
+     */
+    static BigDecimal baseShare(BigDecimal face, BigDecimal base, BigDecimal before, BigDecimal after) {
+        if (face == null || base == null || face.signum() <= 0) {
+            return null;
+        }
+        return baseAt(face, base, before).subtract(baseAt(face, base, after));
+    }
+
+    private static BigDecimal baseAt(BigDecimal face, BigDecimal base, BigDecimal balance) {
+        if (balance.signum() <= 0) {
+            return BigDecimal.ZERO.setScale(4);
+        }
+        if (balance.compareTo(face) >= 0) {
+            return base.setScale(4, java.math.RoundingMode.HALF_UP);
+        }
+        return balance.multiply(base).divide(face, 4, java.math.RoundingMode.HALF_UP);
+    }
+
+    /** The idempotency key as stored: stripped, and blank means none. */
+    private static String referenceOf(Dtos.RedeemVoucherRequest req) {
+        String ref = req.reference();
+        if (ref == null || ref.isBlank()) {
+            return null;
+        }
+        return ref.strip();
+    }
+
+    /**
+     * A redemption amount must be positive money in whole cents. The DTO's
+     * {@code @Positive} covers the sign at the HTTP edge; this repeats it for
+     * in-process callers and adds the precision rule, with the same domain code
+     * the purchase-order path uses for the same rule.
+     */
+    private static void requireRedeemableAmount(BigDecimal amount) {
+        if (amount == null) {
+            return;
+        }
+        if (amount.signum() <= 0) {
+            throw LoyaltyException.badRequest("INVALID_AMOUNT",
+                    "A redemption amount must be greater than zero.");
+        }
+        if (amount.stripTrailingZeros().scale() > 2) {
+            throw LoyaltyException.badRequest("AMOUNT_PRECISION",
+                    "A redemption amount cannot carry fractions of a cent.");
+        }
+    }
+
+    /**
+     * The stored outcome of an earlier use with the same reference, answered
+     * again with {@code replayed: true}. Nothing is spent, written, counted or
+     * sent: the balance, status and amount come from the ORIGINAL row, so a
+     * retry after later uses still describes the use it is retrying.
+     */
+    private Dtos.RedemptionResponse replayOf(Voucher v, VoucherRedemption original) {
+        BigDecimal after = original.getBalanceAfter();
+        boolean spent = after == null || after.signum() <= 0;
+        return new Dtos.RedemptionResponse(original.getId(), v.getId(),
+                (spent ? Voucher.Status.REDEEMED : Voucher.Status.PARTIALLY_USED).name(),
+                spent ? 0 : 1, original.getAmount(), original.getRedeemedAt(), after, v.getCurrency(),
+                original.getReference(), true);
     }
 
     /**
@@ -1059,8 +1326,9 @@ public class VoucherService {
      * <p>Refusals are the mirror image and go through
      * {@link #rejectRedemption} instead.
      */
-    private VoucherRedemption recordRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
-                                               VoucherRedemption.Result result, String reason) {
+    private VoucherRedemption recordSuccessfulUse(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
+                                                  String reference, BigDecimal amount, BigDecimal baseAmount,
+                                                  BigDecimal balanceAfter, boolean firstUse) {
         VoucherRedemption r = new VoucherRedemption();
         r.setTenantId(v.getTenantId());
         r.setVoucherId(v.getId());
@@ -1069,9 +1337,35 @@ public class VoucherService {
         r.setOutletCode(req.outletCode());
         r.setIpAddress(req.ipAddress());
         r.setDeviceFingerprint(req.deviceFingerprint());
-        r.setResult(result);
-        r.setReason(reason);
-        return redemptions.save(r);
+        r.setResult(VoucherRedemption.Result.SUCCESS);
+        r.setAmount(amount);
+        r.setBaseAmount(baseAmount);
+        r.setBalanceAfter(balanceAfter);
+        r.setReference(reference);
+        r.setFirstUse(firstUse);
+        if (reference == null) {
+            return redemptions.save(r);
+        }
+        // With a reference, flush NOW so a duplicate trips the unique index here,
+        // where it can be told apart, rather than at commit. Only the reference
+        // index is a race; any other integrity failure is a bug and propagates.
+        try {
+            return redemptions.saveAndFlush(r);
+        } catch (org.springframework.dao.DataIntegrityViolationException dup) {
+            if (isReferenceConflict(dup)) {
+                throw new com.innbucks.loyaltyservice.exception.VoucherRedemptionRaceException();
+            }
+            throw dup;
+        }
+    }
+
+    private static boolean isReferenceConflict(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && t.getMessage().contains("uq_voucher_redemption_merchant_reference")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void rejectRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
@@ -1375,6 +1669,7 @@ public class VoucherService {
                 v.getValue(), v.getCurrency(), v.getBaseValue(),
                 v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(),
                 v.getRedeemedAt(), v.getTransferredAt(), v.getExpiresAt(),
-                v.getTransferredFromUserId(), v.getTransferredFromPhone());
+                v.getTransferredFromUserId(), v.getTransferredFromPhone(),
+                v.getRemainingBalance());
     }
 }

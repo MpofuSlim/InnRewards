@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.entity.TransactionType;
+import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
 import org.junit.jupiter.api.Test;
@@ -20,17 +21,20 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for {@link ShopCheckoutService}. Pins the fix for the per-shop
- * points report reading 0: guest / shop checkout has no JWT, so the earn must
- * be posted with the server-resolved {@code shopId} — otherwise
- * {@code TransactionService} would stamp the shop from the (absent) JWT and the
- * transaction would land with a null shop, invisible to the per-shop report.
+ * Unit tests for {@link ShopCheckoutService}. The S2S checkout spends points
+ * and refuses a cash leg (CASH_EARN_NOT_ACCEPTED). An earn on a channel that
+ * earns is posted with the server-resolved {@code shopId}: the checkout has no
+ * JWT, so {@code TransactionService} would otherwise stamp the shop from the
+ * absent token and the per-shop points report would miss the row.
  */
 @ExtendWith(MockitoExtension.class)
 class ShopCheckoutServiceTest {
@@ -46,7 +50,32 @@ class ShopCheckoutServiceTest {
     @InjectMocks private ShopCheckoutService service;
 
     @Test
-    void checkout_cashEarn_attributesTheEarnToTheShop() {
+    void checkout_s2sCash_isRefused_beforeAnythingIsReadOrWritten() {
+        // payment-service's S2S checkout carries a cash amount the customer typed:
+        // nothing collected it and no till recorded the sale. It must never earn,
+        // and the refusal comes before the shop, the customer or the wallet is read.
+        assertThatThrownBy(() -> service.checkout(UUID.randomUUID(), "+263782606983",
+                new BigDecimal("5"), null, "SHOP-1"))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode())
+                        .isEqualTo("CASH_EARN_NOT_ACCEPTED"));
+
+        verifyNoInteractions(shops, merchants, users, transactionService, redemptionService);
+    }
+
+    @Test
+    void checkout_s2sCashAndPoints_isRefused_andBurnsNothing() {
+        assertThatThrownBy(() -> service.checkout(UUID.randomUUID(), "+263782606983",
+                new BigDecimal("5"), new BigDecimal("30"), "SHOP-2"))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode())
+                        .isEqualTo("CASH_EARN_NOT_ACCEPTED"));
+
+        verifyNoInteractions(transactionService, redemptionService);
+    }
+
+    @Test
+    void checkout_s2sPointsOnly_burnsAndNeverEarns() {
         UUID tenantId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         UUID shopId = UUID.randomUUID();
@@ -57,47 +86,25 @@ class ShopCheckoutServiceTest {
         shop.setTenantId(tenantId);
         shop.setMerchantId(merchantId);   // status defaults to ACTIVE
         when(shops.findById(shopId)).thenReturn(Optional.of(shop));
-
         Merchant merchant = new Merchant();
         merchant.setId(merchantId);
         merchant.setTenantId(tenantId);
         merchant.setCurrency("USD");       // status defaults to ACTIVE
         when(merchants.requireMerchant(tenantId, merchantId)).thenReturn(merchant);
-
         LoyaltyUser user = new LoyaltyUser();
         user.setId(UUID.randomUUID());
         when(users.findOrCreatePending(tenantId, phone, merchantId)).thenReturn(user);
+        when(redemptionService.redeemPoints(eq(tenantId), eq(merchantId), any(Dtos.RedemptionRequest.class)))
+                .thenReturn(new RedemptionService.RedemptionResult(UUID.randomUUID(), new BigDecimal("70")));
 
-        Dtos.TransactionResponse earnResp = new Dtos.TransactionResponse(
-                UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("5"),
-                new BigDecimal("5"), new BigDecimal("20"), null, null, shopId,
-                null, com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S, "ref", null,
-                null, "USD", new BigDecimal("5"));
-        when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId),
-                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S)))
-                .thenReturn(earnResp);
+        ShopCheckoutService.Result result = service.checkout(shopId, phone, null, new BigDecimal("30"), "SHOP-3");
 
-        ShopCheckoutService.Result result =
-                service.checkout(shopId, phone, new BigDecimal("5"), null, "ref");
-
-        // The earn MUST be posted with THIS shopId (the bug: it went through the
-        // JWT-derived overload with no JWT, so the transaction had a null shop
-        // and the per-shop points report showed 0).
-        verify(transactionService).post(eq(tenantId), eq(merchantId),
-                any(Dtos.TransactionRequest.class), eq(shopId),
-                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S));
-        assertThat(result.shopId()).isEqualTo(shopId);
-        assertThat(result.pointsEarned()).isEqualByComparingTo("5");
+        assertThat(result.pointsRedeemed()).isEqualByComparingTo("30");
+        assertThat(result.pointsEarned()).isEqualByComparingTo("0");
+        verify(transactionService, never()).post(any(), any(), any(Dtos.TransactionRequest.class), any(),
+                any(com.innbucks.loyaltyservice.entity.EarnChannel.class));
     }
 
-    /**
-     * The flagship mixed CASH_AND_POINTS flow. The earn (PURCHASE) and burn
-     * (REDEMPTION) legs must carry DISTINCT references, or they collide on the
-     * (merchant, reference) partial unique index (V16) and the whole checkout
-     * 500s. Regression guard for the arg-swap: the reference must land in the
-     * REFERENCE field (not the reason) and be ":redeem"-suffixed so it differs
-     * from the earn leg's raw reference.
-     */
     @Test
     void checkout_atTheTill_postsTheEarnAsTypedPhone_soTheStaffGuardsRun() {
         // The till's guest checkout is a cashier typing a phone number. Posting
@@ -138,6 +145,14 @@ class ShopCheckoutServiceTest {
                 eq(com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE));
     }
 
+    /**
+     * A mixed cash-and-points checkout on a channel that earns (the till's
+     * TYPED_PHONE). The earn (PURCHASE) and burn (REDEMPTION) legs must carry
+     * DISTINCT references, or they collide on the (merchant, reference) partial
+     * unique index (V16) and the whole checkout 500s. Regression guard for the
+     * arg-swap: the reference must land in the REFERENCE field (not the reason)
+     * and be ":redeem"-suffixed so it differs from the earn leg's raw reference.
+     */
     @Test
     void checkout_mixedCashAndPoints_burnUsesDistinctRedeemReference() {
         UUID tenantId = UUID.randomUUID();
@@ -165,20 +180,21 @@ class ShopCheckoutServiceTest {
         Dtos.TransactionResponse earnResp = new Dtos.TransactionResponse(
                 UUID.randomUUID(), TransactionType.PURCHASE, new BigDecimal("5"),
                 new BigDecimal("5"), new BigDecimal("20"), null, null, shopId,
-                null, com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S, reference, null, null,
+                null, com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE, reference, null, null,
                 "USD", new BigDecimal("5"));
         when(transactionService.post(eq(tenantId), eq(merchantId), any(Dtos.TransactionRequest.class), eq(shopId),
-                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S)))
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE)))
                 .thenReturn(earnResp);
         when(redemptionService.redeemPoints(eq(tenantId), eq(merchantId), any(Dtos.RedemptionRequest.class)))
                 .thenReturn(new RedemptionService.RedemptionResult(UUID.randomUUID(), new BigDecimal("10")));
 
-        service.checkout(shopId, phone, new BigDecimal("5"), new BigDecimal("30"), reference);
+        service.checkout(shopId, phone, new BigDecimal("5"), new BigDecimal("30"), reference,
+                com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE);
 
         // The earn leg carries the RAW reference...
         ArgumentCaptor<Dtos.TransactionRequest> earnCap = ArgumentCaptor.forClass(Dtos.TransactionRequest.class);
         verify(transactionService).post(eq(tenantId), eq(merchantId), earnCap.capture(), eq(shopId),
-                eq(com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S));
+                eq(com.innbucks.loyaltyservice.entity.EarnChannel.TYPED_PHONE));
         assertThat(earnCap.getValue().reference()).isEqualTo(reference);
 
         // ...and the burn leg carries a DISTINCT ":redeem"-suffixed reference, in

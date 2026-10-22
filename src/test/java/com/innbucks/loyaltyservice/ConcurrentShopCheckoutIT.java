@@ -51,9 +51,10 @@ import static org.mockito.Mockito.when;
  *       "re-read the winner's row" fallback could never run either.</li>
  * </ul>
  *
- * <p>Real Postgres, real threads, each checkout in its own transaction — the
- * same shape as payment-service's {@code /loyalty/internal/shop-checkout}
- * calls. Requires Docker, like every {@link PostgresIntegrationTestBase} test.
+ * <p>Real Postgres, real threads, each checkout in its own transaction, through
+ * the till's {@code tillCheckout} — the cash path that earns (payment-service's
+ * S2S checkout spends points only). Requires Docker, like every
+ * {@link PostgresIntegrationTestBase} test.
  */
 class ConcurrentShopCheckoutIT extends PostgresIntegrationTestBase {
 
@@ -76,6 +77,10 @@ class ConcurrentShopCheckoutIT extends PostgresIntegrationTestBase {
     void seedShopWithOnePointPerDollar() {
         when(userServiceClient.getCustomerTier(anyString()))
                 .thenAnswer(inv -> Optional.of(new CustomerTierResponseDTO(inv.getArgument(0), 1, 2)));
+        // The till's earn runs the STAFF_RECIPIENT guard: an authoritative
+        // "no staff" so it never depends on the fail-open default.
+        when(userServiceClient.merchantStaffPhones(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.of(java.util.Set.of()));
 
         Tenant t = new Tenant();
         t.setCode("checkout-race-" + System.nanoTime());
@@ -123,7 +128,8 @@ class ConcurrentShopCheckoutIT extends PostgresIntegrationTestBase {
     }
 
     private void checkout(String phone) {
-        shopCheckoutService.checkout(shopId, phone, CASH, null, "SHOP-" + UUID.randomUUID());
+        shopCheckoutService.tillCheckout(tenantId, shopId, phone, CASH, null, null,
+                TransactionType.PURCHASE, "SHOP-" + UUID.randomUUID());
     }
 
     /** Fires {@link #CONCURRENCY} checkouts for one phone at the same instant; returns what failed. */

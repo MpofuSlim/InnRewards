@@ -121,8 +121,22 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .post("/loyalty/internal/shop-checkout")
                         .header("X-Internal-Token", internalToken)
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\",\"cashAmount\":10.00}"))
+                        .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\",\"pointsAmount\":10}"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shop_checkout_with_a_cash_amount_returns_400_and_earns_nothing() throws Exception {
+        // The S2S cash amount is the customer's own figure, with no payment or
+        // till behind it, so this path never earns on it.
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/shop-checkout")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\",\"cashAmount\":10.00}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.code").value("CASH_EARN_NOT_ACCEPTED"));
     }
 
     @Test

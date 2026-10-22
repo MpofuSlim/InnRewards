@@ -35,6 +35,14 @@ import java.util.Map;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    /**
+     * The message of a 404 for a path that does not exist. The switched-off
+     * {@code /loyalty/public/**} surface answers with the same words
+     * ({@code PublicTestApiKeyFilter}), so it cannot be told apart from a path
+     * that was never there.
+     */
+    public static final String NOT_FOUND_MESSAGE = "The requested resource was not found.";
+
     // Method-level @PreAuthorize throws AuthorizationDeniedException (a subclass
     // of AccessDeniedException in Spring Security 6). Without this handler it
     // falls through to the generic Exception handler below and returns 500
@@ -295,7 +303,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ApiResult<Void>> handle(NoResourceFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiResult.error(HttpStatus.NOT_FOUND, "The requested resource was not found."));
+                .body(ApiResult.error(HttpStatus.NOT_FOUND, NOT_FOUND_MESSAGE));
     }
 
     /**

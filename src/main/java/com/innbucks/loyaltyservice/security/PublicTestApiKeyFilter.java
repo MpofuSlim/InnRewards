@@ -1,6 +1,7 @@
 package com.innbucks.loyaltyservice.security;
 
 import com.innbucks.loyaltyservice.config.LoyaltyMetrics;
+import com.innbucks.loyaltyservice.exception.GlobalExceptionHandler;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -38,11 +39,23 @@ import java.security.MessageDigest;
  * false on production is what keeps that off production; this key narrows who can
  * reach the surface on the cells that deliberately have it on.
  *
+ * <h2>Surface off: the plain unknown-path 404, before anything else</h2>
+ * With {@code loyalty.public-test.enabled} false, this filter answers every
+ * request under the prefix, whatever its method, headers or body, with exactly
+ * the 404 a path that does not exist gets
+ * ({@link GlobalExceptionHandler#NOT_FOUND_MESSAGE}). It used to stay out of the
+ * way and leave the 404 to the controller, but the controller can only answer
+ * after Spring has bound the request. So an empty body was a 400 "Validation
+ * failed" and a non-UUID path variable a 400 naming the parameter. Both told a
+ * caller the route exists and what it expects, on a cell where it is meant to
+ * look absent (reported by the super app team, 2026-10-22). A wrong method was a
+ * 405 with an {@code Allow} header, for the same reason. Nothing is counted: an
+ * off surface is not a refusal worth a metric. A 401 here would be wrong too,
+ * since it confirms there is something behind the path.
+ *
  * <h2>The gate is OPT-IN: no key configured means no gate</h2>
  * <ul>
- *   <li><b>Surface off</b> — this filter is inert. The controller answers 404
- *       ("this endpoint does not exist here"), and a 401 here would contradict
- *       that by confirming there is something behind the path.</li>
+ *   <li><b>Surface off</b> — the 404 above.</li>
  *   <li><b>Surface on, no key configured</b> — the filter is <b>inert</b> and the
  *       endpoints answer exactly as they did before this class existed. See
  *       below for why that is not a silent downgrade.</li>
@@ -65,9 +78,10 @@ import java.security.MessageDigest;
  * <p>What still fails closed is everything that matters: {@code enabled} itself,
  * and — once a key IS set — every call that does not present it.
  *
- * <p>{@code OPTIONS} is never gated: a CORS preflight carries no custom headers
- * by construction, so gating it would 401 the preflight and break the browser
- * call before the real request is ever sent.
+ * <p>{@code OPTIONS} is never gated by the key: a CORS preflight carries no
+ * custom headers by construction, so gating it would 401 the preflight and break
+ * the browser call before the real request is ever sent. On an off surface it
+ * gets the 404 like every other method; there is no real call to preflight for.
  */
 @Component
 public class PublicTestApiKeyFilter extends OncePerRequestFilter {
@@ -90,8 +104,12 @@ public class PublicTestApiKeyFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        if (!enabled) {
+        if (!covers(request.getRequestURI())) {
             return true;
+        }
+        if (!enabled) {
+            // Off: the body answers the unknown-path 404 for every method.
+            return false;
         }
         if (apiKey.length == 0) {
             // Opt-in: no key provisioned, no gate. Checked HERE rather than in
@@ -100,10 +118,7 @@ public class PublicTestApiKeyFilter extends OncePerRequestFilter {
             // counter to drown the metric in on a cell that simply has no key.
             return true;
         }
-        if (HttpMethod.OPTIONS.matches(request.getMethod())) {
-            return true;
-        }
-        return !covers(request.getRequestURI());
+        return HttpMethod.OPTIONS.matches(request.getMethod());
     }
 
     /**
@@ -120,6 +135,13 @@ public class PublicTestApiKeyFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
+        if (!enabled) {
+            // The same status, code and message as a path that does not exist.
+            // No Cache-Control, so the headers match that 404 too.
+            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+            writeBody(response, "404 NOT_FOUND", GlobalExceptionHandler.NOT_FOUND_MESSAGE);
+            return;
+        }
         String presented = request.getHeader(API_KEY_HEADER);
         if (presented == null || presented.isBlank()) {
             metrics.incPublicTestRejected("missing_key");
@@ -141,9 +163,14 @@ public class PublicTestApiKeyFilter extends OncePerRequestFilter {
     private void refuse(HttpServletResponse response, int status, String code, String message)
             throws IOException {
         response.setStatus(status);
+        response.setHeader("Cache-Control", "no-store");
+        writeBody(response, code, message);
+    }
+
+    private static void writeBody(HttpServletResponse response, String code, String message)
+            throws IOException {
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
-        response.setHeader("Cache-Control", "no-store");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}");
     }

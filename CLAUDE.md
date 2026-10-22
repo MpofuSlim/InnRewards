@@ -1303,9 +1303,14 @@ that matters: it can be rotated or revoked without an app release.
   be remembered by whoever adds the next mapping, and the one that forgets is a
   live unauthenticated spend. Covering the prefix by shape means a new endpoint
   is gated the moment it exists.
-- **Three states.** Off → the filter is inert and the controller's 404 stands (a
-  401 would confirm there is something behind a path that is meant to look
-  absent). On with a blank key → the filter is **inert**, and a boot WARN says
+- **Three states.** Off → the filter answers every request under the prefix
+  with exactly the unknown-path 404 (`GlobalExceptionHandler.NOT_FOUND_MESSAGE`),
+  whatever the method, key or body. A 401 would confirm there is something behind
+  a path that is meant to look absent. Leaving it to the controller was not enough
+  either: its 404 runs only after Spring has bound the request, so an empty body
+  was a 400 and a wrong verb a 405 with `Allow` (reported by the super app team,
+  2026-10-22; `PublicTestSurfaceOffDispatchTest`). The controller's check stays as
+  the backstop, with the same words. On with a blank key → the filter is **inert**, and a boot WARN says
   `Public test surface is UNGATED`. On with a key → one opaque **401** for
   missing and wrong alike; which it was lives in
   `loyalty.public.test.rejected{reason}`, never in the body.

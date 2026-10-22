@@ -1,6 +1,7 @@
 package com.innbucks.loyaltyservice.security;
 
 import com.innbucks.loyaltyservice.config.LoyaltyMetrics;
+import com.innbucks.loyaltyservice.exception.GlobalExceptionHandler;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.ServletException;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,9 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Pins the api-key gate on {@code /loyalty/public/**} (see
  * {@link PublicTestApiKeyFilter}):
  * <ul>
- *   <li>the surface being OFF keeps the filter inert, so the path still answers
- *       the controller's 404 rather than a 401 that would confirm something is
- *       there;</li>
+ *   <li>the surface being OFF is the plain unknown-path 404 for every method,
+ *       answered before the handler, so neither a 401 nor a binding error can
+ *       confirm something is there;</li>
  *   <li>ON with a blank key leaves the surface UNGATED — the gate is opt-in, so
  *       merging it was not a breaking change for a client that never sent a key;</li>
  *   <li>ON with a key admits an exact match and refuses everything else with one
@@ -76,14 +77,40 @@ class PublicTestApiKeyFilterTest {
     }
 
     @Test
-    void surfaceOffLeavesTheRequestAloneSoItStill404s() throws Exception {
-        // Not a 401: the controller answers 404 when the switch is off, and a
-        // 401 here would contradict it by confirming there is something behind
-        // the path after all.
-        Run run = run(filter(false, KEY), publicRequest(null));
-        assertThat(run.chainCalled()).isTrue();
-        assertThat(run.response().getStatus()).isEqualTo(200);
-        assertThat(rejections("missing_key")).isZero();
+    void surfaceOff_isTheUnknownPath404_forEveryMethodAndKey_beforeTheHandler() throws Exception {
+        // Not a 401, which would confirm something is behind the path, and not
+        // left to the controller, whose 404 comes only after Spring has bound the
+        // body and path variables (an empty body was a 400 that named the fields).
+        String unknownPath404 = "{\"code\":\"404 NOT_FOUND\","
+                + "\"message\":\"" + GlobalExceptionHandler.NOT_FOUND_MESSAGE + "\",\"data\":null}";
+        for (String configuredKey : new String[]{KEY, ""}) {
+            PublicTestApiKeyFilter filter = filter(false, configuredKey);
+            for (String method : new String[]{"GET", "POST", "PUT", "DELETE", "OPTIONS"}) {
+                for (String presented : new String[]{null, KEY, "not-the-key"}) {
+                    Run run = run(filter, request(method, "/loyalty/public/vouchers/redeem", presented));
+                    assertThat(run.chainCalled()).as("%s key=%s", method, presented).isFalse();
+                    assertThat(run.response().getStatus()).isEqualTo(404);
+                    assertThat(run.response().getContentAsString()).isEqualTo(unknownPath404);
+                    assertThat(run.response().getContentType()).startsWith("application/json");
+                    // The unknown-path 404 carries no Cache-Control either.
+                    assertThat(run.response().getHeader("Cache-Control")).isNull();
+                }
+            }
+            Run bare = run(filter, request("GET", "/loyalty/public", null));
+            assertThat(bare.response().getStatus()).isEqualTo(404);
+        }
+        // An off surface is not a refusal worth counting.
+        assertThat(registry.find("loyalty.public.test.rejected").counters()).isEmpty();
+    }
+
+    @Test
+    void surfaceOff_leavesEveryOtherPathAlone() throws Exception {
+        PublicTestApiKeyFilter filter = filter(false, KEY);
+        for (String uri : new String[]{"/loyalty/publicity/123", "/loyalty/points/123", "/loyalty/users/me"}) {
+            Run run = run(filter, request("POST", uri, null));
+            assertThat(run.chainCalled()).as(uri).isTrue();
+            assertThat(run.response().getStatus()).isEqualTo(200);
+        }
     }
 
     @Test

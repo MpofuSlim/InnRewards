@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.TransactionType;
+import com.innbucks.loyaltyservice.exception.GlobalExceptionHandler;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.service.TransactionService;
@@ -88,7 +89,7 @@ class PublicTestControllerTest {
 
         assertThatThrownBy(() -> c.transactionsByPhone(PHONE, PageRequest.of(0, 20)))
                 .isInstanceOf(LoyaltyException.class)
-                .hasMessageContaining("not enabled");
+                .hasMessage(GlobalExceptionHandler.NOT_FOUND_MESSAGE);
 
         verify(users, never()).findByPhoneNumber(any());
         verify(transactions, never()).statementForPhone(anyList(), any());
@@ -369,17 +370,17 @@ class PublicTestControllerTest {
         assertThatThrownBy(() -> c.sendPoints(PHONE,
                 new PublicTestController.PublicSendPointsRequest(
                         "+263772222222", new java.math.BigDecimal("1"), null)))
-                .isInstanceOf(LoyaltyException.class).hasMessageContaining("not enabled");
+                .isInstanceOf(LoyaltyException.class).hasMessage(GlobalExceptionHandler.NOT_FOUND_MESSAGE);
         assertThatThrownBy(() -> c.redeemPoints(PHONE,
                 new PublicTestController.PublicRedeemPointsRequest(
                         new java.math.BigDecimal("1"), null, null, null)))
-                .isInstanceOf(LoyaltyException.class).hasMessageContaining("not enabled");
+                .isInstanceOf(LoyaltyException.class).hasMessage(GlobalExceptionHandler.NOT_FOUND_MESSAGE);
         assertThatThrownBy(() -> c.transferVoucher(UUID.randomUUID(),
                 new PublicTestController.PublicVoucherTransferRequest("+263772222222", null)))
-                .isInstanceOf(LoyaltyException.class).hasMessageContaining("not enabled");
+                .isInstanceOf(LoyaltyException.class).hasMessage(GlobalExceptionHandler.NOT_FOUND_MESSAGE);
         assertThatThrownBy(() -> c.redeemVoucher(
                 new PublicTestController.PublicRedeemVoucherRequest("VCH-1", null)))
-                .isInstanceOf(LoyaltyException.class).hasMessageContaining("not enabled");
+                .isInstanceOf(LoyaltyException.class).hasMessage(GlobalExceptionHandler.NOT_FOUND_MESSAGE);
 
         // Nothing reached the database or any service.
         verify(users, never()).findByPhoneNumber(any());

@@ -58,14 +58,49 @@ class TransactionServiceTest {
             new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
             new java.math.BigDecimal("25"));
 
+    // Real MerchantAuthz over mocked repositories, so the F05 object-level
+    // ownership guard on reverse is genuinely exercised (not stubbed away).
+    private final com.innbucks.loyaltyservice.repository.MerchantRepository merchantRepo =
+            mock(com.innbucks.loyaltyservice.repository.MerchantRepository.class);
+    private final com.innbucks.loyaltyservice.repository.ShopRepository shopRepo =
+            mock(com.innbucks.loyaltyservice.repository.ShopRepository.class);
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz =
+            new com.innbucks.loyaltyservice.security.MerchantAuthz(merchantRepo, shopRepo);
+
     private final TransactionService service = new TransactionService(
             transactions, users, merchants, walletService, rulesEngine, metrics, memberNotifier,
             props, fraudService, staffRegistry,
-            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"), fx);
+            new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"), fx,
+            merchantAuthz);
 
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID MERCHANT_A = UUID.randomUUID();
     private static final UUID MERCHANT_B = UUID.randomUUID();
+    private static final UUID ORG_A = UUID.randomUUID();
+    private static final UUID ORG_B = UUID.randomUUID();
+
+    /** Stub a merchant row in this tenant for MerchantAuthz's findById. */
+    private void merchantExists(UUID merchantId, UUID organizationId) {
+        com.innbucks.loyaltyservice.entity.Merchant m =
+                mock(com.innbucks.loyaltyservice.entity.Merchant.class);
+        when(m.getId()).thenReturn(merchantId);
+        when(m.getTenantId()).thenReturn(TENANT);
+        when(m.getOrganizationId()).thenReturn(organizationId);
+        when(merchantRepo.findById(merchantId)).thenReturn(Optional.of(m));
+    }
+
+    private static void authenticateAsMerchantAdmin(UUID organizationId) {
+        var auth = new UsernamePasswordAuthenticationToken(
+                "admin@test.local", null, List.of(new SimpleGrantedAuthority("ROLE_MERCHANT_ADMIN")));
+        auth.setDetails(new CallerDetails(null, null, null, null, organizationId));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private static void authenticateAsSuperAdmin() {
+        var auth = new UsernamePasswordAuthenticationToken(
+                "root@test.local", null, List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
 
     @AfterEach
     void clearAuth() {
@@ -95,11 +130,12 @@ class TransactionServiceTest {
     @Test
     void reverse_crossMerchantShopAdmin_isRejected_andNeverDebits() {
         LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
-        authenticateAsMerchant(MERCHANT_B); // SHOP_ADMIN for a different merchant
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsMerchant(MERCHANT_B); // SHOP_ADMIN pinned to a different merchant
 
         assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund"))
                 .isInstanceOf(LoyaltyException.class)
-                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("WRONG_MERCHANT"));
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("NOT_MERCHANT_OWNER"));
 
         // Guard fires before the compensating credit is written or applied.
         assertThat(orig.getStatus()).isEqualTo(LoyaltyTransaction.Status.POSTED);
@@ -111,9 +147,10 @@ class TransactionServiceTest {
     void reverse_ownMerchantShopAdmin_passesGuard() {
         // Same merchant → guard passes. We short-circuit on the ALREADY_REVERSED
         // check right after the (passed) merchant guard so we don't have to stub
-        // the whole wallet-credit path — the assertion is that WRONG_MERCHANT did
-        // NOT fire for the owning merchant.
+        // the whole wallet-credit path — the assertion is that NOT_MERCHANT_OWNER
+        // did NOT fire for the owning merchant.
         LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.REVERSED);
+        merchantExists(MERCHANT_A, ORG_A);
         authenticateAsMerchant(MERCHANT_A);
 
         assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund"))
@@ -123,16 +160,65 @@ class TransactionServiceTest {
     }
 
     @Test
-    void reverse_tenantAdmin_noMerchantScope_bypassesGuard() {
-        // No merchant claim (MERCHANT_ADMIN / SUPER_ADMIN) → currentMerchantId()
-        // is null → guard is skipped; we progress to ALREADY_REVERSED, proving
-        // the merchant guard did not block a legitimately tenant-scoped caller.
+    void reverse_merchantAdminWhoseOrgOwnsTheMerchant_passesGuard() {
+        // F05: a MERCHANT_ADMIN carries no merchantId claim, only its org. When
+        // that org owns the transaction's merchant the guard passes, so we reach
+        // ALREADY_REVERSED — proving the guard does not block the legitimate admin.
         LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.REVERSED);
-        // No authentication set.
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsMerchantAdmin(ORG_A);
 
         assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund"))
                 .isInstanceOf(LoyaltyException.class)
                 .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("ALREADY_REVERSED"));
+    }
+
+    @Test
+    void reverse_merchantAdminOfAnotherOrg_isRejected_andNeverDebits() {
+        // F05, the hole this closes: a MERCHANT_ADMIN of org B could reverse a
+        // sibling business's transaction in the shared tenant, because the old
+        // guard only compared a (null) merchantId claim. It is now refused.
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsMerchantAdmin(ORG_B);
+
+        assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund"))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("NOT_MERCHANT_OWNER"));
+
+        assertThat(orig.getStatus()).isEqualTo(LoyaltyTransaction.Status.POSTED);
+        verify(transactions, never()).saveAndFlush(any());
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reverse_superAdmin_bypassesTheMerchantGuard() {
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.REVERSED);
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsSuperAdmin();
+
+        assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund"))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("ALREADY_REVERSED"));
+    }
+
+    @Test
+    void reverse_transferLeg_isRefused_andNeverDebits() {
+        // F13: a transfer is two independent legs. Reversing one leg would mint
+        // points. Refused outright — even for SUPER_ADMIN, which clears the
+        // merchant guard, so this proves the TRANSFER refusal, not the authz.
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        orig.setType(TransactionType.TRANSFER);
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsSuperAdmin();
+
+        assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "undo"))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("TRANSFER_NOT_REVERSIBLE"));
+
+        assertThat(orig.getStatus()).isEqualTo(LoyaltyTransaction.Status.POSTED);
+        verify(transactions, never()).saveAndFlush(any());
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
     }
 
     // --- A04: amount validation + no-mint-from-nothing reversal --------------
@@ -169,6 +255,7 @@ class TransactionServiceTest {
         // to apply). The reversal must NOT credit 100 back; it compensates only
         // what the ledger says moved (0), so no wallet apply happens.
         LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        merchantExists(MERCHANT_A, ORG_A);
         authenticateAsMerchant(MERCHANT_A);
         when(walletService.appliedForTransaction(orig.getId())).thenReturn(BigDecimal.ZERO);
 

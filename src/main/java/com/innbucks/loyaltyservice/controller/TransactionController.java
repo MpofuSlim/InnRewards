@@ -143,6 +143,15 @@ public class TransactionController {
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
         UUID tenantId = tenantContext.requireTenantId();
         UUID merchantId = CallerDetails.resolveMerchantId(req.merchantId());
+        // Object-level merchant ownership (F05). A MERCHANT_ADMIN carries no
+        // merchantId claim (V51), so resolveMerchantId takes the body value and
+        // the earn used to land against any merchant the caller named in a
+        // shared tenant. Bind it to a merchant the caller administers (SHOP_USER
+        // / SHOP_ADMIN by their pinned claim, MERCHANT_ADMIN by organization,
+        // SUPER_ADMIN exempt) before any points are minted. The S2S, guest-
+        // checkout and QR earn paths run through other controllers and are
+        // unaffected.
+        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
         // Load the STAFF_RECIPIENT snapshot before the earn's transaction opens,
         // so the guard inside it never waits on user-service. Never refuses.
         transactions.prewarmStaffRecipientGuard(tenantId, merchantId);
@@ -223,8 +232,8 @@ public class TransactionController {
                                             """),
                                     @ExampleObject(name = "Another merchant's transaction", value = """
                                             {
-                                              "code": "WRONG_MERCHANT",
-                                              "message": "This transaction belongs to a different merchant.",
+                                              "code": "NOT_MERCHANT_OWNER",
+                                              "message": "You can only act on merchants you administer.",
                                               "data": null
                                             }
                                             """)

@@ -46,9 +46,10 @@ import static org.mockito.Mockito.when;
  *   <li>{@code activeForPhone} is scoped strictly to the caller's tenant
  *       (resolves the phone's user via the tenant-keyed unique lookup, never
  *       the cross-tenant {@code findByPhoneNumber}).</li>
- *   <li>{@code revoke} enforces the per-merchant WRONG_MERCHANT guard so a
- *       merchant-scoped caller (SHOP_ADMIN) can't void another merchant's
- *       voucher inside the same tenant.</li>
+ *   <li>{@code revoke} delegates to {@code MerchantAuthz.requireCallerAdministersMerchant}
+ *       (F05), so a caller that does not administer the voucher's merchant —
+ *       including a MERCHANT_ADMIN of another organization in the same tenant —
+ *       can't void it (NOT_MERCHANT_OWNER).</li>
  * </ul>
  */
 class VoucherServiceTest {
@@ -186,37 +187,32 @@ class VoucherServiceTest {
     }
 
     @Test
-    void revoke_crossMerchantShopAdmin_isRejected_andDoesNotRevoke() {
+    void revoke_callerDoesNotAdministerMerchant_isRejected_andDoesNotRevoke() {
+        // F05: revoke now delegates to MerchantAuthz.requireCallerAdministersMerchant
+        // (object-level ownership — it catches a MERCHANT_ADMIN of another org, which
+        // the old currentMerchantId()-only guard let through). Here the guard refuses.
         Voucher v = voucherOwnedBy(MERCHANT_A);
-        authenticateAsMerchant(MERCHANT_B); // SHOP_ADMIN for a different merchant
+        org.mockito.Mockito.doThrow(LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
+                        "You can only act on merchants you administer."))
+                .when(merchantAuthz).requireCallerAdministersMerchant(TENANT, MERCHANT_A);
 
         assertThatThrownBy(() -> service.revoke(TENANT, v.getId()))
                 .isInstanceOf(LoyaltyException.class)
-                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("WRONG_MERCHANT"));
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("NOT_MERCHANT_OWNER"));
 
         // Guard fires before any state change — the voucher is untouched.
         assertThat(v.getStatus()).isEqualTo(Voucher.Status.ISSUED);
     }
 
     @Test
-    void revoke_ownMerchantShopAdmin_succeeds() {
+    void revoke_callerAdministersMerchant_succeeds_viaMerchantAuthz() {
+        // The mocked guard admits by default; revoke must actually CALL it (so it
+        // can never silently stop enforcing ownership), then revoke.
         Voucher v = voucherOwnedBy(MERCHANT_A);
-        authenticateAsMerchant(MERCHANT_A);
 
         service.revoke(TENANT, v.getId());
 
-        assertThat(v.getStatus()).isEqualTo(Voucher.Status.REVOKED);
-    }
-
-    @Test
-    void revoke_tenantAdmin_noMerchantScope_bypassesGuard() {
-        // MERCHANT_ADMIN / SUPER_ADMIN carry no merchantId claim → currentMerchantId()
-        // is null → tenant-scoped bypass, exactly like the redeem guard.
-        Voucher v = voucherOwnedBy(MERCHANT_A);
-        // No authentication set — currentMerchantId() returns null.
-
-        service.revoke(TENANT, v.getId());
-
+        verify(merchantAuthz).requireCallerAdministersMerchant(TENANT, MERCHANT_A);
         assertThat(v.getStatus()).isEqualTo(Voucher.Status.REVOKED);
     }
 

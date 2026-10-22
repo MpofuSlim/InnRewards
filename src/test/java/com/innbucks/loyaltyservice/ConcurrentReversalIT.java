@@ -25,6 +25,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -121,6 +124,14 @@ class ConcurrentReversalIT extends PostgresIntegrationTestBase {
             pool.submit(() -> {
                 try {
                     start.await();
+                    // Reversal is object-level authorized now (F05). Authenticate
+                    // the worker as SUPER_ADMIN (exempt) so the concurrency guard
+                    // under test — not the merchant-ownership check — decides each
+                    // outcome. SecurityContext is thread-local, so it is set on
+                    // every worker and cleared in finally.
+                    SecurityContextHolder.getContext().setAuthentication(
+                            new UsernamePasswordAuthenticationToken("rev-race@test.local", null,
+                                    List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"))));
                     transactionService.reverse(tenantId, redemptionTxnId, "concurrent test");
                     successes.incrementAndGet();
                 } catch (LoyaltyException ex) {
@@ -133,6 +144,8 @@ class ConcurrentReversalIT extends PostgresIntegrationTestBase {
                 } catch (Throwable other) {
                     otherErrors.incrementAndGet();
                     synchronized (unexpected) { unexpected.add(other); }
+                } finally {
+                    SecurityContextHolder.clearContext();
                 }
             });
         }

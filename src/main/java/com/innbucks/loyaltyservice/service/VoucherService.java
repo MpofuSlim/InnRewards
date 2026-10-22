@@ -1405,17 +1405,16 @@ public class VoucherService {
         if (!v.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
-        // Per-merchant ownership guard, mirroring the redeem WRONG_MERCHANT check
-        // (and RuleAdminService.deactivateRule). A merchant-scoped caller —
-        // SHOP_ADMIN carries merchantId in the JWT — may only revoke its OWN
-        // merchant's vouchers, so a SHOP_ADMIN for merchant B can't void
-        // merchant A's voucher within the same tenant. MERCHANT_ADMIN /
-        // SUPER_ADMIN are tenant-scoped (currentMerchantId() is null) and bypass,
-        // already bounded by the tenant check above.
-        UUID callerMerchantId = CallerDetails.currentMerchantId();
-        if (v.getMerchantId() != null && callerMerchantId != null
-                && !v.getMerchantId().equals(callerMerchantId)) {
-            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher belongs to a different merchant.");
+        // Object-level merchant ownership (F05), mirroring issue and redeem. The
+        // old guard only compared a SHOP_ADMIN's pinned merchantId claim, so a
+        // MERCHANT_ADMIN — which carries NO merchantId claim by design (V51) —
+        // slipped through and could void any merchant's voucher in a shared
+        // tenant. requireCallerAdministersMerchant resolves the merchant admin's
+        // organization too (SHOP_ADMIN still pinned, SUPER_ADMIN exempt),
+        // throwing NOT_MERCHANT_OWNER otherwise. A null-merchant voucher (if any)
+        // keeps the old tenant-only behaviour.
+        if (v.getMerchantId() != null) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, v.getMerchantId());
         }
         v.setStatus(Voucher.Status.REVOKED);
     }

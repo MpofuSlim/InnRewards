@@ -977,6 +977,18 @@ that, returning one row per tenant the caller has transacted with:
   (`Path=/loyalty/**`) already covers it. There is no mapping conflict with
   `/loyalty/users/{userId}/unblock` (POST) or `/loyalty/users/{id}/transactions`
   (a deeper path).
+- **`GET /loyalty/users/me/transactions` and `/me/vouchers` are the
+  authenticated twins of the public statement and voucher list**, so the
+  customer app can stop calling `/loyalty/public/**`. Same shape as `/me`
+  itself: keyed by the token's phone alone, across every tenant, no
+  `X-Tenant-Id`, paged (default 20, at most 100). The statement is
+  `TransactionService.statementForPhone` (newest first, `balanceAfter` null);
+  the voucher list is the holder's live vouchers (`Voucher.LIVE_STATUSES`),
+  codes included, because they are the caller's own. Every `VoucherResponse`
+  now carries its `tenantId` (appended last), which is the `X-Tenant-Id` a holder
+  sends to redeem or transfer that voucher. The same no-ownership-check
+  reasoning as `/me` applies: there is no input to point at another customer,
+  so never add a phone or id parameter to either.
 
 ### `innbucks_validate` (V44): ELIGIBILITY by owner decision — never identity
 

@@ -990,7 +990,33 @@ public class Dtos {
                                           + "spend, in `currency`. Equals `value` until the first use; 0 once "
                                           + "fully redeemed (status REDEEMED). Null only on a legacy non-money "
                                           + "voucher, which is spent whole.")
-                                  BigDecimal remainingBalance) {
+                                  BigDecimal remainingBalance,
+                                  // The loyalty program (tenant) the voucher belongs to: the
+                                  // X-Tenant-Id a holder sends to redeem or transfer it. Appended
+                                  // last, like remainingBalance.
+                                  @Schema(example = "0a571c1c-7c75-4000-a000-000000000001",
+                                          description = "The loyalty program the voucher belongs to. Send it "
+                                                  + "as `X-Tenant-Id` to redeem or transfer this voucher.")
+                                  UUID tenantId) {
+
+        /** The component list before {@code tenantId} — kept so callers built
+         *  against it compile; the tenant reads as unknown (null). */
+        public VoucherResponse(UUID id, String code, String status, String voucherType,
+                               UUID merchantId, UUID shopId, UUID batchId, String campaignSource,
+                               UUID assignedUserId, String assigneePhone, String assigneeName,
+                               String senderName, String senderPhone,
+                               UUID issuerUserId, String issuerPhone, String issuerEmail,
+                               int usesRemaining, BigDecimal value, String currency, BigDecimal baseValue,
+                               Instant issuedAt, Instant deliveredAt, Instant viewedAt,
+                               Instant redeemedAt, Instant transferredAt, Instant expiresAt,
+                               UUID transferredFromUserId, String transferredFromPhone,
+                               BigDecimal remainingBalance) {
+            this(id, code, status, voucherType, merchantId, shopId, batchId, campaignSource,
+                    assignedUserId, assigneePhone, assigneeName, senderName, senderPhone,
+                    issuerUserId, issuerPhone, issuerEmail, usesRemaining, value, currency, baseValue,
+                    issuedAt, deliveredAt, viewedAt, redeemedAt, transferredAt, expiresAt,
+                    transferredFromUserId, transferredFromPhone, remainingBalance, null);
+        }
 
         /** The pre-V61 component list (no {@code remainingBalance}) — kept so callers
          *  built against it compile; the balance reads as unknown (null). */
@@ -1007,7 +1033,7 @@ public class Dtos {
                     assignedUserId, assigneePhone, assigneeName, senderName, senderPhone,
                     issuerUserId, issuerPhone, issuerEmail, usesRemaining, value, currency, baseValue,
                     issuedAt, deliveredAt, viewedAt, redeemedAt, transferredAt, expiresAt,
-                    transferredFromUserId, transferredFromPhone, null);
+                    transferredFromUserId, transferredFromPhone, null, null);
         }
 
         /** Copy with the {@code code} nulled out — for views where the caller must
@@ -1022,7 +1048,7 @@ public class Dtos {
                     issuerUserId, issuerPhone, issuerEmail,
                     usesRemaining, value, currency, baseValue,
                     issuedAt, deliveredAt, viewedAt, redeemedAt, transferredAt, expiresAt,
-                    transferredFromUserId, transferredFromPhone, remainingBalance);
+                    transferredFromUserId, transferredFromPhone, remainingBalance, tenantId);
         }
     }
 

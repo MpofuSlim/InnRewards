@@ -102,7 +102,8 @@ class MultiCurrencyGuardTest {
                 new LoyaltyMetrics(new SimpleMeterRegistry()),
                 mock(com.innbucks.loyaltyservice.integration.MemberActivityNotifier.class),
                 new com.innbucks.loyaltyservice.config.LoyaltyProperties(null, null, null, null, null, null, null),
-                mock(FraudService.class), mock(StaffRegistry.class), CURRENCIES, fx);
+                mock(FraudService.class), mock(StaffRegistry.class), CURRENCIES, fx,
+                mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class));
     }
 
     /**

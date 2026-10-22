@@ -35,6 +35,24 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
     @MockitoBean TransferService transferService;
     @MockitoBean com.innbucks.loyaltyservice.service.RedemptionService redemptionService;
     @Autowired LoyaltyUserRepository loyaltyUsers;
+    // Real, so the controller's F05 merchant-ownership check resolves a genuine
+    // merchant row for the shop-user happy path below.
+    @Autowired com.innbucks.loyaltyservice.service.MerchantService merchantService;
+
+    /** A real unowned merchant in this tenant, whose id a shop token can be pinned to. */
+    private UUID merchantIn(UUID tenant) {
+        return com.innbucks.loyaltyservice.testsupport.MerchantFixtures.createAsPlatform(
+                merchantService, tenant,
+                new com.innbucks.loyaltyservice.dto.Dtos.MerchantRequest(
+                        "Till Merchant " + UUID.randomUUID(), "F&B", "USD",
+                        com.innbucks.loyaltyservice.entity.Merchant.BillingCycle.MONTHLY,
+                        new com.innbucks.loyaltyservice.dto.Dtos.FeeModel(
+                                com.innbucks.loyaltyservice.entity.Merchant.FeeType.FIXED,
+                                new java.math.BigDecimal("0.05"), null),
+                        new com.innbucks.loyaltyservice.dto.Dtos.FeeModel(
+                                com.innbucks.loyaltyservice.entity.Merchant.FeeType.FIXED,
+                                new java.math.BigDecimal("0.10"), null))).id();
+    }
 
     // Bodies satisfy @Valid so requests reach the @PreAuthorize gate.
     private static final String VALID_TXN_BODY = """
@@ -254,7 +272,10 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
         // SHOP_USER posts an earn — the till operator's bread-and-butter call.
         UUID tenant = newTenant("txn-shopuser-earn");
         joinTenant(tenant, "till-user@test.local");
-        UUID merchant = UUID.randomUUID();
+        // A real merchant the shop-user is pinned to, so the controller's F05
+        // ownership check (requireCallerAdministersMerchant) resolves it and
+        // admits the pinned till. The service itself stays mocked.
+        UUID merchant = merchantIn(tenant);
         UUID shop = UUID.randomUUID();
 
         when(transactionService.post(any(UUID.class), any(UUID.class),

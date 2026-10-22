@@ -74,7 +74,8 @@ class AdjustmentCapTest {
                 mock(MemberActivityNotifier.class),
                 props, fraud, mock(StaffRegistry.class),
                 new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
-                usdOnlyFx());
+                usdOnlyFx(),
+                mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class));
 
         Merchant m = new Merchant();
         m.setId(MERCHANT);
@@ -229,7 +230,8 @@ class AdjustmentCapTest {
                 mock(MemberActivityNotifier.class),
                 off, fraud, mock(StaffRegistry.class),
                 new com.innbucks.loyaltyservice.config.SupportedCurrencies("USD", "USD"),
-                usdOnlyFx());
+                usdOnlyFx(),
+                mock(com.innbucks.loyaltyservice.security.MerchantAuthz.class));
 
         unlimited.adjust(TENANT, TARGET, MERCHANT, new BigDecimal("999999"), "migration");
 

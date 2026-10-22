@@ -818,17 +818,18 @@ public class VoucherController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "The voucher belongs to another merchant (WRONG_MERCHANT) or another tenant "
-                            + "(CROSS_TENANT). A merchant-scoped caller may only revoke its own merchant's "
-                            + "vouchers. Note revoke does NOT reject an already-redeemed voucher — it simply "
-                            + "sets the status to REVOKED.",
+                    description = "The voucher belongs to a merchant the caller does not administer "
+                            + "(NOT_MERCHANT_OWNER) or to another tenant (CROSS_TENANT). A SHOP_ADMIN is "
+                            + "pinned to its token's merchant and a MERCHANT_ADMIN to its organization's "
+                            + "merchants; SUPER_ADMIN is exempt. Note revoke does NOT reject an "
+                            + "already-redeemed voucher — it simply sets the status to REVOKED.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Wrong merchant", value = """
+                            examples = @ExampleObject(name = "Not your merchant", value = """
                                     {
-                                      "code": "WRONG_MERCHANT",
-                                      "message": "This voucher belongs to a different merchant.",
+                                      "code": "NOT_MERCHANT_OWNER",
+                                      "message": "You can only act on merchants you administer.",
                                       "data": null
                                     }
                                     """)

@@ -41,6 +41,7 @@ public class TransactionService {
     private final StaffRegistry staffRegistry;
     private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
     private final ExchangeRateService fx;
+    private final com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               UserService users,
@@ -53,7 +54,8 @@ public class TransactionService {
                               FraudService fraud,
                               StaffRegistry staffRegistry,
                               com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies,
-                              ExchangeRateService fx) {
+                              ExchangeRateService fx,
+                              com.innbucks.loyaltyservice.security.MerchantAuthz merchantAuthz) {
         this.transactions = transactions;
         this.users = users;
         this.merchants = merchants;
@@ -66,6 +68,7 @@ public class TransactionService {
         this.staffRegistry = staffRegistry;
         this.supportedCurrencies = supportedCurrencies;
         this.fx = fx;
+        this.merchantAuthz = merchantAuthz;
     }
 
     /**
@@ -304,8 +307,9 @@ public class TransactionService {
     }
 
     public Dtos.TransactionResponse reverse(UUID tenantId, UUID txnId, String reason) {
-        return doReverse(tenantId, txnId, reason,
-                com.innbucks.loyaltyservice.security.CallerDetails.currentMerchantId(),
+        // enforceMerchantOwnership = true: this is the merchant-facing endpoint,
+        // so the reversal must be bounded to a merchant the caller administers.
+        return doReverse(tenantId, txnId, reason, true,
                 com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
     }
 
@@ -318,11 +322,14 @@ public class TransactionService {
      * transaction to the looked-up customer before calling this.
      */
     public Dtos.TransactionResponse reverseAs(UUID tenantId, UUID txnId, String reason, UUID operator) {
-        return doReverse(tenantId, txnId, reason, null, operator);
+        // enforceMerchantOwnership = false: support is platform-wide and has
+        // already bound the transaction to a looked-up customer, so it must NOT
+        // run MerchantAuthz (see the CLAUDE.md support contract).
+        return doReverse(tenantId, txnId, reason, false, operator);
     }
 
     private Dtos.TransactionResponse doReverse(UUID tenantId, UUID txnId, String reason,
-                                               UUID callerMerchantId, UUID operator) {
+                                               boolean enforceMerchantOwnership, UUID operator) {
         // Sanitize the operator-supplied reason — it is persisted in the wallet
         // ledger entry as "reverse:<reason>" (stored-XSS hardening). Null-safe.
         reason = HtmlSanitizer.stripAll(reason);
@@ -335,16 +342,28 @@ public class TransactionService {
         if (!orig.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
-        // Per-merchant ownership guard, mirroring the voucher-redeem WRONG_MERCHANT
-        // check (and RuleAdminService.deactivateRule). A merchant-scoped caller —
-        // SHOP_ADMIN carries merchantId in the JWT — may only reverse its OWN
-        // merchant's transactions, so a SHOP_ADMIN for merchant B can't reverse
-        // merchant A's transaction within the same tenant. MERCHANT_ADMIN /
-        // SUPER_ADMIN are tenant-scoped (currentMerchantId() is null) and bypass,
-        // already bounded by the tenant check above.
-        if (orig.getMerchantId() != null && callerMerchantId != null
-                && !orig.getMerchantId().equals(callerMerchantId)) {
-            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This transaction belongs to a different merchant.");
+        // Object-level merchant ownership (F05). The old guard only compared a
+        // SHOP_ADMIN's pinned merchantId claim, so a MERCHANT_ADMIN — which
+        // carries NO merchantId claim by design (V51) — slipped through and
+        // could reverse any merchant's transaction in a shared tenant.
+        // requireCallerAdministersMerchant resolves the merchant admin's
+        // organization as well (and keeps the SHOP_ADMIN pin and SUPER_ADMIN
+        // exemption), throwing NOT_MERCHANT_OWNER otherwise. Support
+        // (reverseAs) passes enforceMerchantOwnership = false — it is
+        // platform-wide and must never run MerchantAuthz. Null-merchant rows
+        // (if any) keep the old tenant-only behaviour.
+        if (enforceMerchantOwnership && orig.getMerchantId() != null) {
+            merchantAuthz.requireCallerAdministersMerchant(tenantId, orig.getMerchantId());
+        }
+        // A transfer is two independent legs — a debit on the sender and a
+        // credit on the recipient, written as separate TRANSFER rows with
+        // nothing linking them (F13). Reversing ONE leg re-credits that leg's
+        // owner while the other party keeps the points, minting from nothing.
+        // Undoing a transfer must reverse both legs atomically, which this
+        // single-row path cannot, so refuse it outright — for support too.
+        if (orig.getType() == TransactionType.TRANSFER) {
+            throw LoyaltyException.conflict("TRANSFER_NOT_REVERSIBLE",
+                    "A transfer can't be reversed one leg at a time.");
         }
         if (orig.getStatus() == LoyaltyTransaction.Status.REVERSED) {
             throw LoyaltyException.conflict("ALREADY_REVERSED", "This transaction has already been reversed.");

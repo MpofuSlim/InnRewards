@@ -155,7 +155,8 @@ public class SecurityConfig {
                 // Unlike the two filters above it REFUSES rather than falling
                 // through — the prefix is permitAll, so falling through would be
                 // the un-gated behaviour it exists to replace. Inert on every
-                // other path, and on every path when the surface is switched off.
+                // other path. With the surface switched off it answers the
+                // unknown-path 404 for the whole prefix, before the body is read.
                 .addFilterBefore(publicTestApiKeyFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

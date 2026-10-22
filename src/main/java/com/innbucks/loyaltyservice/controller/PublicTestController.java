@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.Wallet;
+import com.innbucks.loyaltyservice.exception.GlobalExceptionHandler;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
@@ -32,6 +33,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -640,10 +642,16 @@ public class PublicTestController {
      * 404 rather than 403 when the switch is off: an endpoint that isn't meant
      * to exist on this cell should look like it doesn't exist, not advertise
      * that there's a feature here waiting to be unlocked.
+     *
+     * <p>The backstop only. {@code PublicTestApiKeyFilter} answers the same 404
+     * for the whole prefix first, before the body is read. This check runs after
+     * binding, so on its own a malformed body or path variable got a 400 that
+     * showed the route exists and named its fields.
      */
     private void requireEnabled() {
         if (!enabled) {
-            throw LoyaltyException.notFound("Public test endpoints are not enabled on this deployment");
+            throw new LoyaltyException(HttpStatus.NOT_FOUND, "404 NOT_FOUND",
+                    GlobalExceptionHandler.NOT_FOUND_MESSAGE);
         }
     }
 

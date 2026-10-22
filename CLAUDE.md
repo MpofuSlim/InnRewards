@@ -2422,8 +2422,8 @@ Each is now closed:
   `STAFF_RECIPIENT`, so every sale a customer did not claim could be rung up
   to the cashier's own number or a colleague's. `REFERENCE_REQUIRED` is met by
   the server-generated `SHOP-<uuid>`. `ShopCheckoutService.checkout`'s 5-arg
-  form is still `CHECKOUT_S2S`, and that is correct for payment-service's
-  internal checkout, where the phone comes from the customer's own payment.
+  form (payment-service's internal checkout) is `CHECKOUT_S2S` and spends
+  points only: it refuses a cash leg (see "The S2S shop checkout never earns").
   The endpoint also pins a caller whose token names a shop to THAT shop
   (`403 NOT_SHOP_MEMBER`), so a sale cannot land at a sibling branch where
   nobody reconciles it against the till.
@@ -2614,7 +2614,32 @@ together.
 `pointsValue` (money paid with points, e.g. `5.00` = $5 off), plus optional
 `currency`, `transactionType` (`PURCHASE` | `CARD_PAYMENT`, for the cash part)
 and `reference`. `ShopCheckoutService.tillCheckout` runs it; the S2S
-`checkout` used by payment-service is untouched.
+`checkout` used by payment-service spends points only (next section).
+
+## The S2S shop checkout never earns (2026-10-22)
+
+**`POST /loyalty/internal/shop-checkout` (payment-service's
+`/payments/shop-checkout`) spends a customer's points and refuses a positive
+`cashAmount` with `400 CASH_EARN_NOT_ACCEPTED`.** Its cash amount is whatever
+the customer typed into their own session: payment-service collects nothing
+and no till records the sale, so earning on it credited points for money
+nobody saw. `CHECKOUT_S2S` skipped the earn guards on the premise that the
+phone came from a real payment; on this path no payment exists.
+
+- **Cash earns only where the shop vouches for the sale**: the till's guest
+  checkout (`tillCheckout`, `TYPED_PHONE`, a cashier records it) and a merchant
+  QR (`QR_PRESENCE`, issued by the shop). Do not reopen a cash earn on the S2S
+  path without something that proves the money moved, such as a COMPLETED
+  payment-service payment loyalty re-reads and binds one-to-one to the earn.
+- **The refusal is in `ShopCheckoutService.doCheckout`, keyed on the channel**,
+  right after the amount check and before any row is read or written. The
+  6-arg `checkout` with another channel and `tillCheckout` are unchanged.
+- payment-service refuses `CASH` and `CASH_AND_POINTS` at its own edge too
+  (ticketing-system), so either service can deploy first: an old
+  payment-service forwarding cash gets this 400 passed through.
+- Pinned by `ShopCheckoutServiceTest` (`checkout_s2s*`) and
+  `InternalMerchantLookupControllerSecurityTest`. `ConcurrentShopCheckoutIT`
+  now drives the concurrent-earn races through `tillCheckout`.
 
 - **The points part is burned FIRST**, so points earned on this sale's cash can
   never pay for the same sale. Don't reorder the legs.

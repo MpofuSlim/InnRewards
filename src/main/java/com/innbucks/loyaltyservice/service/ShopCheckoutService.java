@@ -24,9 +24,11 @@ import java.util.UUID;
  * portion (REDEMPTION). Both legs commit together under one transaction so
  * partial failures don't leave the customer half-charged.
  *
- * <p>Service-to-service entry point — the public flow at /loyalty/transactions
- * is JWT-gated and merchant-scoped; this one resolves tenant/merchant from the
- * supplied shopId and is reachable only via the X-Internal-Token shared secret.
+ * <p>Two entry points. {@link #tillCheckout} is the till's guest checkout: a
+ * cashier records the sale, so its cash leg earns. {@link #checkout} is
+ * payment-service's S2S checkout, reached only via the X-Internal-Token shared
+ * secret; it spends points and refuses a cash leg, because the customer typed
+ * that amount and nothing collected it.
  */
 @Service
 @RequiredArgsConstructor
@@ -53,8 +55,6 @@ public class ShopCheckoutService {
                          UUID purchaseTransactionId,
                          UUID redemptionTransactionId) {}
 
-    /** The payment-service S2S checkout: the customer's phone comes from their
-     *  own payment, so no staff member chose the recipient. */
     /**
      * Pre-load the STAFF_RECIPIENT registry for the shop's merchant before the
      * checkout's transaction opens — see
@@ -64,6 +64,15 @@ public class ShopCheckoutService {
         transactionService.prewarmStaffRecipientGuard(tenantId, merchantId);
     }
 
+    /**
+     * The payment-service S2S checkout ({@code /loyalty/internal/shop-checkout}).
+     * It spends the customer's points and never earns: the phone comes from the
+     * customer's own session, and the cash amount from the customer's own
+     * request, with no payment or till behind it, so a positive
+     * {@code cashAmount} is refused {@code CASH_EARN_NOT_ACCEPTED}. Points for a
+     * cash sale are earned where the shop vouches for the sale: the till's
+     * {@link #tillCheckout} or a merchant QR.
+     */
     @Transactional
     public Result checkout(UUID shopId,
                            String phoneNumber,
@@ -117,6 +126,13 @@ public class ShopCheckoutService {
         if (!hasCash && !hasPoints) {
             throw LoyaltyException.badRequest("AMOUNT_REQUIRED",
                     "at least one of cashAmount or pointsAmount must be positive");
+        }
+        // The S2S cash amount is whatever the customer typed: nothing collected
+        // it and no till recorded the sale, so earning on it would mint points
+        // for money nobody saw. Refused before any row is read or written.
+        if (hasCash && earnChannel == com.innbucks.loyaltyservice.entity.EarnChannel.CHECKOUT_S2S) {
+            throw LoyaltyException.badRequest("CASH_EARN_NOT_ACCEPTED",
+                    "Points for a cash purchase are earned at the till or by scanning the shop's QR code.");
         }
 
         Shop shop = shops.findById(shopId)

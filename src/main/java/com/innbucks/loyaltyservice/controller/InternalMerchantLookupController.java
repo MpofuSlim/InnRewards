@@ -170,20 +170,23 @@ public class InternalMerchantLookupController {
     }
 
     /**
-     * Shop checkout: optional earn (cash → PURCHASE) and optional burn
-     * (points → REDEMPTION), atomic. Called by payment-service when a customer
-     * pays at a shop with cash, points, or a mix of both.
+     * Shop checkout: the customer spends points at a shop (REDEMPTION). Called
+     * by payment-service when a customer pays with points.
      *
      * <p>Body: {@code {"shopId": "...", "phoneNumber": "...",
-     * "cashAmount": 10.00, "pointsAmount": 200, "reference": "POS-..."}}.
-     * At least one of {@code cashAmount} or {@code pointsAmount} must be > 0.
+     * "pointsAmount": 200, "reference": "SHOP-..."}}. {@code pointsAmount} must
+     * be > 0. A positive {@code cashAmount} is refused
+     * {@code 400 CASH_EARN_NOT_ACCEPTED}: it is an amount the customer typed,
+     * with no payment or till behind it, so it never earns. Cash sales earn at
+     * the till's guest checkout or through a merchant QR.
      */
     @PostMapping("/shop-checkout")
-    @Operation(summary = "(S2S) Shop checkout — optional earn + optional burn, atomic",
-            description = "Called by payment-service when a customer pays at a shop. The cash leg " +
-                          "earns points per the merchant's loyalty rules; the points leg burns " +
-                          "from the customer's wallet. Both legs commit in a single loyalty-service " +
-                          "transaction. At least one of cashAmount or pointsAmount must be > 0.")
+    @Operation(summary = "(S2S) Shop checkout — spend points at a shop",
+            description = "Called by payment-service when a customer pays at a shop with points. The " +
+                          "points are burned from the customer's wallet. pointsAmount must be > 0. A " +
+                          "positive cashAmount is refused 400 CASH_EARN_NOT_ACCEPTED: this path does " +
+                          "not earn, because nothing here proves the cash was paid. Cash sales earn " +
+                          "at the till or through a merchant QR.")
     public ResponseEntity<?> shopCheckout(@RequestHeader(value = "X-Internal-Token", required = false) String token,
                                           @RequestBody Dtos.ShopCheckoutInternalRequestDTO body) {
         if (!authorized(token)) {

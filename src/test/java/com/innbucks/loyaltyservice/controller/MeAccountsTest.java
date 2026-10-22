@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.service.TransactionService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,7 +54,8 @@ class MeAccountsTest {
     @BeforeEach
     void setUp() {
         users = mock(LoyaltyUserRepository.class);
-        controller = new MeController(users, mock(VoucherRepository.class), mock(WalletRepository.class));
+        controller = new MeController(users, mock(VoucherRepository.class), mock(WalletRepository.class),
+                mock(TransactionService.class));
     }
 
     @AfterEach

@@ -34,6 +34,7 @@ class VoucherResponseMappingTest {
     private static final UUID ASSIGNED_USER = UUID.fromString("00000000-0000-0000-0000-0000000000a5");
     private static final UUID ISSUER_USER = UUID.fromString("00000000-0000-0000-0000-0000000000a6");
     private static final UUID TRANSFERRED_FROM = UUID.fromString("00000000-0000-0000-0000-0000000000a7");
+    private static final UUID TENANT = UUID.fromString("00000000-0000-0000-0000-0000000000a8");
 
     private static final Instant ISSUED = Instant.parse("2026-09-01T01:00:00Z");
     private static final Instant DELIVERED = Instant.parse("2026-09-02T02:00:00Z");
@@ -75,6 +76,7 @@ class VoucherResponseMappingTest {
         v.setExpiresAt(EXPIRES);
         v.setTransferredFromUserId(TRANSFERRED_FROM);
         v.setTransferredFromPhone("+263771234567");
+        v.setTenantId(TENANT);
         return v;
     }
 
@@ -119,6 +121,7 @@ class VoucherResponseMappingTest {
         assertThat(r.transferredFromPhone()).isEqualTo("+263771234567");
 
         assertThat(r.remainingBalance()).isEqualByComparingTo("2.2500");
+        assertThat(r.tenantId()).isEqualTo(TENANT);
     }
 
     @Test
@@ -193,8 +196,10 @@ class VoucherResponseMappingTest {
                 full.usesRemaining(), full.value(), full.currency(), full.baseValue(),
                 full.issuedAt(), full.deliveredAt(), full.viewedAt(),
                 full.redeemedAt(), full.transferredAt(), full.expiresAt(),
-                full.transferredFromUserId(), full.transferredFromPhone(), full.remainingBalance()));
+                full.transferredFromUserId(), full.transferredFromPhone(), full.remainingBalance(),
+                full.tenantId()));
         assertThat(redacted.remainingBalance()).isEqualByComparingTo("2.2500");
+        assertThat(redacted.tenantId()).isEqualTo(TENANT);
     }
 
     @Test

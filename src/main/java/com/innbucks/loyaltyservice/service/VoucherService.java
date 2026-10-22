@@ -1674,6 +1674,6 @@ public class VoucherService {
                 v.getIssuedAt(), v.getDeliveredAt(), v.getViewedAt(),
                 v.getRedeemedAt(), v.getTransferredAt(), v.getExpiresAt(),
                 v.getTransferredFromUserId(), v.getTransferredFromPhone(),
-                v.getRemainingBalance());
+                v.getRemainingBalance(), v.getTenantId());
     }
 }

@@ -434,6 +434,26 @@ loyalty:
       lock-duration: ${LOYALTY_VOUCHER_GUARD_LOCK_DURATION:PT30M}
       # Bound on the in-memory store used only while Redis is unavailable.
       fallback-max-entries: ${LOYALTY_VOUCHER_GUARD_FALLBACK_MAX_ENTRIES:100000}
+  # Partner voucher API (V62): the InnBucks middleware generates, inquires and
+  # redeems vouchers for a partner merchant (MWOS), every request signed by the
+  # middleware's own key. Off by default (404). `funding` decides how a
+  # voucher's value reaches holding: NONE refuses every generate; SIMULATED
+  # confirms every leg with NO money moved and is for STAGING ONLY — set it in
+  # the staging host's gitignored local env file, never in a shared cell file.
+  voucher-partner:
+    enabled: ${LOYALTY_VOUCHER_PARTNER_ENABLED:false}
+    audience: ${LOYALTY_VOUCHER_PARTNER_AUDIENCE:}
+    funding: ${LOYALTY_VOUCHER_PARTNER_FUNDING:NONE}
+    max-clock-skew: ${LOYALTY_VOUCHER_PARTNER_MAX_CLOCK_SKEW:PT30S}
+    max-lifetime: ${LOYALTY_VOUCHER_PARTNER_MAX_LIFETIME:PT2M}
+    min-value: ${LOYALTY_VOUCHER_PARTNER_MIN_VALUE:1}
+    max-value: ${LOYALTY_VOUCHER_PARTNER_MAX_VALUE:500}
+    per-phone-daily-count: ${LOYALTY_VOUCHER_PARTNER_PER_PHONE_DAILY_COUNT:10}
+    per-phone-daily-value: ${LOYALTY_VOUCHER_PARTNER_PER_PHONE_DAILY_VALUE:1000}
+    currencies: ${LOYALTY_VOUCHER_PARTNER_CURRENCIES:USD}
+    duplicate-window: ${LOYALTY_VOUCHER_PARTNER_DUPLICATE_WINDOW:PT2M}
+    code-payment-ttl: ${LOYALTY_VOUCHER_PARTNER_CODE_PAYMENT_TTL:PT10M}
+    simulated-delay: ${LOYALTY_VOUCHER_PARTNER_SIMULATED_DELAY:PT20S}
   qr:
     secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
     ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}

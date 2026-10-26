@@ -91,5 +91,36 @@ public class VoucherRedemption {
     @Column(name = "first_use", nullable = false)
     private boolean firstUse;
 
+    // ----- partner redemptions (V62) -----
+
+    /** The partner whose platform redeemed it; null for every other surface. */
+    @Column(name = "partner_id")
+    private UUID partnerId;
+
+    /** The customer's account id on the partner's platform. */
+    @Column(name = "end_user_ref", length = 100)
+    private String endUserRef;
+
+    @Column(length = 8)
+    private String channel;
+
+    @Column(name = "terminal_id", length = 64)
+    private String terminalId;
+
+    /** Payment of this use's amount from holding to the merchant: PENDING,
+     *  SETTLED or ATTENTION (an operator must resolve it). Null off-partner. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "settlement_status", length = 16)
+    private SettlementStatus settlementStatus;
+
+    @Column(name = "settlement_ref", length = 100)
+    private String settlementRef;
+
+    @Column(name = "settled_at")
+    private Instant settledAt;
+
     public enum Result { SUCCESS, REJECTED }
+
+    /** The CHECK {@code chk_voucher_redemptions_settlement} lists every value. */
+    public enum SettlementStatus { PENDING, SETTLED, ATTENTION }
 }

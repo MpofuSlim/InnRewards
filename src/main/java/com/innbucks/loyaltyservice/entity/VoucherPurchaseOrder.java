@@ -161,10 +161,80 @@ public class VoucherPurchaseOrder {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
+    // ----- partner orders (V62): a generate through the partner API -----
+
+    /** The partner that generated this order; null for every other order. */
+    @Column(name = "partner_id")
+    private UUID partnerId;
+
+    /** The partner's own reference: the idempotency key, unique per merchant. */
+    @Column(name = "partner_reference", length = 64)
+    private String partnerReference;
+
+    /** SHA-256 of the request's money-relevant content, so a reused reference
+     *  with different content is refused rather than replayed. */
+    @Column(name = "request_fingerprint", length = 64)
+    private String requestFingerprint;
+
+    /** POS or ONLINE. */
+    @Column(length = 8)
+    private String channel;
+
+    @Column(length = 64)
+    private String outlet;
+
+    @Column(name = "terminal_id", length = 64)
+    private String terminalId;
+
+    @Column(name = "operator_ref", length = 64)
+    private String operatorRef;
+
+    @Column(name = "end_user_ref", length = 100)
+    private String endUserRef;
+
+    /** How the customer paid: CASH, CARD_SWIPE, MERCHANT_COLLECTED, INNBUCKS_CODE, … */
+    @Column(name = "funding_method", length = 24)
+    private String fundingMethod;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "funding_status", length = 16)
+    private FundingStatus fundingStatus;
+
+    @Column(name = "funding_failure_code", length = 40)
+    private String fundingFailureCode;
+
+    /** The provider's reference for the leg into holding. */
+    @Column(name = "funding_ref", length = 100)
+    private String fundingRef;
+
+    /** The payment evidence (card approval code per terminal per day, or the
+     *  merchant's collection reference) that may fund one order only. */
+    @Column(name = "funding_evidence_key", length = 160)
+    private String fundingEvidenceKey;
+
+    /** An InnBucks payment code the customer must approve (INNBUCKS_CODE). */
+    @Column(name = "payment_code", length = 32)
+    private String paymentCode;
+
+    @Column(name = "payment_expires_at")
+    private Instant paymentExpiresAt;
+
+    @Column(name = "funding_started_at")
+    private Instant fundingStartedAt;
+
     @Version
     private long version;
 
     public enum Status { PENDING_PAYMENT, PAID, EXPIRED, CANCELLED }
+
+    /**
+     * The funding leg of a partner order (V62). NOT_STARTED: claimed, nothing
+     * sent. AWAITING: the customer must still pay (an InnBucks code). PENDING:
+     * sent, outcome not yet known. CONFIRMED: the value is in holding. FAILED:
+     * final, nothing moved. The CHECK {@code chk_vpo_funding_status} lists
+     * every value.
+     */
+    public enum FundingStatus { NOT_STARTED, AWAITING, PENDING, CONFIRMED, FAILED }
 
     /** GATEWAY = payment-service confirmed an electronic rail; CASH = a staff
      *  caller vouched for cash in hand; CARD_POS = a staff caller vouched for a

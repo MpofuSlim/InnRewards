@@ -732,7 +732,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V61**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V62**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -2925,6 +2925,181 @@ voucher sum to its face value and its base value with exactly one first use; a
 double submit replays; one reference on two vouchers is one success and one
 `DUPLICATE_REFERENCE`; the index and the CHECK; an invoice over two uses) and
 `VoucherBalanceMigrationIT`.
+
+## Partner vouchers: a merchant sold through the InnBucks middleware (V62)
+
+**Owner decisions (2026-10-23 to 10-26).** MWOS, a betting company, sells
+vouchers worth what the customer paid, and never logs in to our platform. Its
+POS machines and its website reach us through the **InnBucks middleware**, which
+holds MWOS's profile, credentials and accounts. The middleware calls three
+operations: generate, inquire and redeem. **The money is held until the voucher
+is used**, and the code goes to the customer from us. More merchants will follow
+MWOS, so nothing here is MWOS-specific: a PARTNER (a calling system) is linked
+to many merchants.
+
+**Staging only, for now.** Money movement is simulated
+(`LOYALTY_VOUCHER_PARTNER_FUNDING=SIMULATED`). The real provider (BR or Veengu)
+is not built, so production must stay `enabled=false` / `funding=NONE`.
+
+### The model
+
+- `voucher_partners` (a calling system: `issuer`, `allowed_ips`, ACTIVE /
+  SUSPENDED), `voucher_partner_keys` (its public keys by `kid`, ES256 / RS256,
+  ACTIVE / REVOKED) and `voucher_partner_merchants` (one row per merchant it
+  serves: the `merchant_code` it sends, plus per-merchant settings —
+  `require_terminal`, `bind_redeem_to_holder`, `funding_methods`, `max_value`,
+  `per_phone_daily_count`, `per_phone_daily_value`, `status`).
+- Every request names its merchant (`"merchant": "MWOS"`), resolved through the
+  caller's OWN links only. A code the partner is not linked to is
+  `403 MERCHANT_NOT_PERMITTED`.
+- Set up by SUPER_ADMIN at `/loyalty/admin/voucher-partners` (create, update,
+  add / revoke key, link / update merchant). No `X-Tenant-Id`: a partner spans
+  tenants. Linking a merchant puts it in **`merchants.escrow_mode`**.
+
+### Escrow merchants: only the partner creates or spends their vouchers
+
+A voucher of an escrow merchant exists only once its value is in holding, and
+each use is owed to the merchant from holding. Every other path would break
+that, so each refuses:
+- free issue, bulk issue and till purchase orders: `409 ESCROW_MERCHANT`
+  (`VoucherService.requireNotEscrow`);
+- transfer: `409 VOUCHER_NOT_TRANSFERABLE` (the refund goes to whoever paid);
+- revoke: `409 PARTNER_VOUCHER` (a revoke must refund, which is not built);
+- any redeem but the partner's (a till, the customer's own app, the public
+  staging surface): the counted 404, as for an unknown code. Mark-viewed still
+  works: it moves no value;
+- payment-service's order endpoints and the till's confirm-cash / confirm-card:
+  a partner order is a 404 (`VoucherPurchaseService` filters them out).
+
+Never add a path that issues, moves or spends an escrow merchant's voucher
+without going through the partner flow.
+
+### Authentication (`VoucherPartnerAuthFilter` + `PartnerRequestVerifier`)
+
+- **The body is one compact JWS** (`Content-Type: application/jose`, ≤ 16 KB),
+  ES256 or RS256, header `typ: voucher-request+jwt` and a `kid`. `jku`, `x5u`,
+  `jwk`, `x5c` and `crit` are refused: a request never says where its own key is.
+  `alg` must equal the key's registered algorithm, so `none`, HS256 and
+  algorithm confusion all fail.
+- **Claims:** `iss` = the partner's, `aud` = exactly this cell's
+  `loyalty.voucher-partner.audience`, `op` = the path's operation (a generate
+  token cannot be replayed at redeem), `jti` (8–128 of `[A-Za-z0-9_-]`),
+  `iat` / `exp` with `exp − iat` ≤ 120 s and 30 s of clock skew. The request
+  itself is the `body` claim.
+- **The payload is parsed strictly** (BigDecimal numbers, duplicate keys
+  refused), so `20.00` is never a double and a payload cannot carry two amounts.
+- **The caller's address is nginx's `X-Real-IP`** (`IpLiterals`: a literal, never
+  a DNS lookup; conflicting values count as none), checked against the
+  partner's allow-list (addresses or CIDR ranges). An empty list refuses every
+  call.
+- **Replay:** the `jti` is `SET NX` in Redis with a TTL of its remaining life +
+  60 s, as the last check (so unsigned junk never writes to Redis). If Redis
+  cannot answer, the request is `503 PARTNER_REPLAY_CHECK_UNAVAILABLE`, never let
+  through. `PartnerJtiStore` is an interface so tests can supply one.
+- **Every authentication failure is one opaque `401 PARTNER_AUTH_REJECTED`**;
+  the reason goes to the log and `loyalty.partner.rejected{reason}`. Off
+  (`enabled=false`) = the unknown-path 404 for every method. Every response is
+  `no-store` and echoes a well-formed `X-Request-Id`.
+- The filter covers the three exact paths by SHAPE and `SecurityConfig` permits
+  them without a JWT, so the filter is the only thing in front of them. Never
+  widen the permit beyond those three paths.
+
+### Generate (a voucher purchase order with a funding leg)
+
+- **A generate is a `voucher_purchase_orders` row** (V47) with the partner
+  columns. `partnerReference` is the idempotency key, unique per merchant
+  (`uq_vpo_partner_reference`). The same reference with the same content
+  replays the order as it now stands (`replayed: true`, 200 once issued); a
+  different content is `422 IDEMPOTENCY_MISMATCH`. The fingerprint is SHA-256 of
+  the money-relevant fields (channel, outlet, terminal, amount, currency, phone,
+  method, approval code, collection ref).
+- **No provider call ever runs inside a transaction.** Claim the order (one
+  transaction), mark the leg PENDING (a second, BEFORE the call), call the
+  provider with none open, record the outcome (a third), issue the voucher (a
+  fourth, through the same `VoucherService.issueFromOrder` as a paid till
+  order). A crash mid-call leaves PENDING, which is resolved by ASKING the
+  provider (`status`), never by sending again. A leg starts only from
+  NOT_STARTED, so a retry never starts a second one.
+- **Funding methods:** CASH, CARD_SWIPE, MERCHANT_COLLECTED (the merchant's
+  float is debited into holding) and INNBUCKS_CODE (the customer pays a code:
+  `202 AWAITING_PAYMENT`, then the voucher appears). INNBUCKS_ACCOUNT and
+  ECOCASH are in the vocabulary but not available yet
+  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on ONLINE.
+  `paid_via`: CASH → CASH, CARD_SWIPE → CARD_POS, the rest → GATEWAY with
+  `payment_rail` = the method (no new `PaidVia` value, so V54's CHECK holds).
+- **Evidence is used once:** a card approval code per terminal per day, a
+  collection reference for ever (`uq_vpo_funding_evidence`; `409
+  APPROVAL_CODE_ALREADY_USED` / `COLLECTION_REF_ALREADY_USED`).
+- **Limits:** value between `min-value` and the link's `max_value` (else the
+  config's), whole cents, a fundable currency (`currencies`, USD at launch),
+  per phone per rolling 24 h (count and value, failed orders excluded), and a
+  possible double sale (same terminal, phone and amount within
+  `duplicate-window`) is `409 POSSIBLE_DUPLICATE` unless `confirmDuplicate`.
+- **The voucher code is never in a response** (`voucher.code` is always null).
+  It goes to the customer's phone through the ordinary issue path. Whether the
+  POS must print it is an open question (guide Q6).
+- A merchant whose vouchers would never expire is `503 MERCHANT_NOT_READY`:
+  held money must have an end.
+
+### Redeem and settlement
+
+- **`VoucherService.redeemForPartnerIdempotent`** with a `PartnerRedeemScope`:
+  only that partner's vouchers (anything else is the counted 404, before the
+  signature check); the holder's phone must match `endUserPhone` when the link
+  binds redemption to the holder (`403 NOT_VOUCHER_OWNER`, counted); the
+  currency must match; a replayed `reference` with a different amount or end
+  user is `422 IDEMPOTENCY_MISMATCH`. Partial uses, the balance and the per-use
+  rules are V61's.
+- **The holder's loyalty account gate is skipped** for a partner use: the value
+  was paid for and is held, and the customer authenticated on the partner's
+  platform. It is the one spend path without it.
+- **The guessing lockout is keyed by partner + merchant + `endUserRef`**
+  (`VoucherGuessGuard.attemptAs`), so one MWOS account guessing codes locks that
+  account, never MWOS as a whole.
+- **Each use owes its amount to the merchant**: `voucher_redemptions.settlement_status`
+  PENDING → SETTLED through the provider's `settle`, after the use commits.
+  Never settled inside the redeem transaction.
+
+### The funding port and the simulator
+
+- `VoucherFundingProvider`: `fund` (NEVER retried), `status` (a read, retried),
+  `settle` (idempotent by redemption id). `NONE` refuses every generate
+  (`503 FUNDING_UNAVAILABLE`, nothing recorded).
+- **`SIMULATED` is staging only** and WARNs at every boot. Everything confirms
+  at once, except: INNBUCKS_CODE waits `simulated-delay`; a `partnerReference`
+  starting `SIMFAIL-` is refused (`FLOAT_INSUFFICIENT`, or `PAYMENT_EXPIRED` for
+  a code), `SIMSLOW-` confirms after the delay, `SIMSLOWFAIL-` is refused after
+  it, and `SIMDOWN-` never reaches the provider (`503 PROVIDER_UNAVAILABLE`:
+  use a new reference). Responses say `funding.simulated: true`.
+- **`PartnerVoucherReconciler`** (every 15 s, ShedLock `partnerVoucherReconcile`)
+  resolves open legs, issues funded orders that have no voucher yet, and
+  settles PENDING uses. Each write is row-locked and compares its state first.
+
+### Not built yet — before any production use
+
+- **The real provider** (BR or Veengu transfers).
+- **A refund on expiry (D1).** An expired partner voucher keeps its unspent
+  value in holding. Who gets it back for cash and card sales is an open owner
+  question.
+- **Revoke and transfer** of a partner voucher (both refused today).
+- **Whether the middleware sends outlet and terminal (D26).** They are optional
+  unless the link sets `require_terminal`.
+
+### Config and gateway
+
+`LOYALTY_VOUCHER_PARTNER_ENABLED`, `_AUDIENCE` (e.g.
+`innbucks-loyalty-vouchers:zw-staging`), `_FUNDING` (NONE | SIMULATED),
+`_MAX_CLOCK_SKEW`, `_MAX_LIFETIME`, `_MIN_VALUE`, `_MAX_VALUE`,
+`_PER_PHONE_DAILY_COUNT`, `_PER_PHONE_DAILY_VALUE`, `_CURRENCIES`,
+`_DUPLICATE_WINDOW`, `_CODE_PAYMENT_TTL`, `_SIMULATED_DELAY`. The gateway route
+lives in ticketing-system: `loyalty-voucher-partner-route`, POST only, the three
+exact paths, IP-keyed fail-safe limiter, before `loyalty-service-route` (the
+catch-all keys on the `Authorization` header, which these calls do not send).
+
+Pinned by `PartnerRequestVerifierTest`, `VoucherPartnerAuthFilterTest`,
+`IpLiteralsTest`, `PartnerSigningKeysTest`, `SimulatedVoucherFundingProviderTest`
+and `PartnerVoucherFlowIT` (the whole flow through real signed requests and
+Postgres).
 
 ## Customer support (`/loyalty/support/**`, V55)
 

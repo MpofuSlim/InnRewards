@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.config;
 import com.innbucks.loyaltyservice.security.JwtFilter;
 import com.innbucks.loyaltyservice.security.MetricsScrapeAuthFilter;
 import com.innbucks.loyaltyservice.security.PublicTestApiKeyFilter;
+import com.innbucks.loyaltyservice.security.VoucherPartnerAuthFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,6 +22,7 @@ public class SecurityConfig {
     private final JwtFilter jwtFilter;
     private final MetricsScrapeAuthFilter metricsScrapeAuthFilter;
     private final PublicTestApiKeyFilter publicTestApiKeyFilter;
+    private final VoucherPartnerAuthFilter voucherPartnerAuthFilter;
 
     // CORS lives exclusively on the api-gateway (globalcors + RemoveResponseHeader
     // filters per PR #182). Browsers only ever talk to the gateway, so a per-service
@@ -81,6 +83,14 @@ public class SecurityConfig {
                         // refuses every call until key material is provisioned
                         // (503).
                         .requestMatchers(HttpMethod.POST, "/loyalty/partner/registrations").permitAll()
+                        // Partner voucher API (V62). No JWT: every request is a
+                        // JWS signed by the partner, checked by
+                        // VoucherPartnerAuthFilter, which refuses outright before
+                        // any handler. The three exact paths, nothing broader, so
+                        // anything else added under /loyalty/partner stays closed.
+                        .requestMatchers("/loyalty/partner/vouchers/generate",
+                                "/loyalty/partner/vouchers/inquire",
+                                "/loyalty/partner/vouchers/redeem").permitAll()
                         // Session renewal (V43). The credential is the refresh
                         // token in the request body, not a bearer — and the
                         // access token these calls exist to replace has usually
@@ -157,7 +167,11 @@ public class SecurityConfig {
                 // the un-gated behaviour it exists to replace. Inert on every
                 // other path. With the surface switched off it answers the
                 // unknown-path 404 for the whole prefix, before the body is read.
-                .addFilterBefore(publicTestApiKeyFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(publicTestApiKeyFilter, UsernamePasswordAuthenticationFilter.class)
+                // Signed-request authentication for the partner voucher API
+                // (V62). Refuses rather than falling through, like the filter
+                // above; inert on every other path.
+                .addFilterBefore(voucherPartnerAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 }

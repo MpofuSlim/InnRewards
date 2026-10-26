@@ -1,6 +1,7 @@
 package com.innbucks.loyaltyservice.repository;
 
 import com.innbucks.loyaltyservice.entity.VoucherRedemption;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -67,4 +68,19 @@ public interface VoucherRedemptionRepository extends JpaRepository<VoucherRedemp
     List<Object[]> usesBetweenForMerchants(@Param("merchantIds") Collection<UUID> merchantIds,
                                            @Param("from") Instant from,
                                            @Param("to") Instant to);
+
+    // ---- Partner settlements (V62) ----
+
+    /** Partner uses whose amount has not yet been paid to the merchant, oldest first. */
+    @Query("select r.id from VoucherRedemption r where r.settlementStatus = "
+            + "com.innbucks.loyaltyservice.entity.VoucherRedemption.SettlementStatus.PENDING order by r.redeemedAt asc")
+    List<UUID> findPendingSettlementIds(Pageable page);
+
+    /** Marks a partner use settled, once: only a row still PENDING changes. */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("update VoucherRedemption r set r.settlementStatus = "
+            + "com.innbucks.loyaltyservice.entity.VoucherRedemption.SettlementStatus.SETTLED, "
+            + "r.settlementRef = :ref, r.settledAt = :at where r.id = :id and r.settlementStatus = "
+            + "com.innbucks.loyaltyservice.entity.VoucherRedemption.SettlementStatus.PENDING")
+    int markSettled(@Param("id") UUID id, @Param("ref") String ref, @Param("at") Instant at);
 }

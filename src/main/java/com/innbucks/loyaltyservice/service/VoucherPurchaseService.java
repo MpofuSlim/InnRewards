@@ -113,6 +113,9 @@ public class VoucherPurchaseService {
         // administer the merchant the voucher (and the money) belongs to.
         Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
                 tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
+        // An escrow merchant's vouchers are paid into holding through its
+        // partner (V62); a till order would issue one on the cashier's word.
+        VoucherService.requireNotEscrow(merchant);
 
         // Validate EVERYTHING issue would, NOW — a refusal must land on the
         // staff caller creating the order, never on a customer who already
@@ -293,6 +296,7 @@ public class VoucherPurchaseService {
     private VoucherPurchaseOrder lockConfirmable(UUID tenantId, String orderRef) {
         VoucherPurchaseOrder order = orders.lockByOrderRef(orderRef)
                 .filter(o -> o.getTenantId().equals(tenantId))
+                .filter(o -> o.getPartnerId() == null)
                 .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
         requireCallerMayActOn(tenantId, order);
         return order;
@@ -472,6 +476,7 @@ public class VoucherPurchaseService {
                     "extend-expiry minutes must be between 1 and 60, got " + minutes);
         }
         VoucherPurchaseOrder order = orders.lockByOrderRef(orderRef)
+                .filter(o -> o.getPartnerId() == null)
                 .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
         if (!order.payable(Instant.now())) {
             throw LoyaltyException.conflict("ORDER_NOT_EXTENDABLE",
@@ -518,6 +523,7 @@ public class VoucherPurchaseService {
                     "confirm-payment requires a non-blank paymentRef");
         }
         VoucherPurchaseOrder order = orders.lockByOrderRef(orderRef)
+                .filter(o -> o.getPartnerId() == null)
                 .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
 
         if (order.getStatus() == VoucherPurchaseOrder.Status.PAID) {
@@ -571,14 +577,23 @@ public class VoucherPurchaseService {
         order.setVoucherId(voucher.id());
     }
 
+    /**
+     * A partner's order (V62) is funded only through the partner API, so the
+     * staff and payment-service surfaces never see one: it answers like an
+     * order that does not exist. Without this, a partner's VCH- reference paid
+     * through the public POST /payments would issue a voucher whose value
+     * never reached holding.
+     */
     private VoucherPurchaseOrder requireOrder(String orderRef) {
         return orders.findByOrderRef(orderRef)
+                .filter(o -> o.getPartnerId() == null)
                 .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
     }
 
     private VoucherPurchaseOrder requireTenantOrder(UUID tenantId, String orderRef) {
         return orders.findByOrderRef(orderRef)
                 .filter(o -> o.getTenantId().equals(tenantId))
+                .filter(o -> o.getPartnerId() == null)
                 .orElseThrow(() -> LoyaltyException.notFound("purchase order"));
     }
 

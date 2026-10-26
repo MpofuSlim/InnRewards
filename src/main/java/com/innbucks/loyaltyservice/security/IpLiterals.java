@@ -107,11 +107,21 @@ public final class IpLiterals {
     }
 
     /**
+     * Checks a comma-separated allow-list of IP literals and CIDR ranges before
+     * it is stored.
+     *
+     * @throws IllegalArgumentException naming the first entry that is not one
+     */
+    public static void requireValidAllowList(String list) {
+        parseAllowList(list);
+    }
+
+    /**
      * Parses a comma-separated allow-list of IP literals and CIDR ranges.
      *
      * @throws IllegalArgumentException naming the first entry that is not one
      */
-    public static List<Entry> parseAllowList(String list) {
+    static List<Entry> parseAllowList(String list) {
         List<Entry> entries = new ArrayList<>();
         if (list == null || list.isBlank()) {
             return entries;

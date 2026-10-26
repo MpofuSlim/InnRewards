@@ -223,7 +223,7 @@ public class VoucherPartnerAdminService {
         String joined = ips == null ? "" : ips.stream().map(String::strip).filter(s -> !s.isEmpty())
                 .collect(Collectors.joining(","));
         try {
-            IpLiterals.parseAllowList(joined);
+            IpLiterals.requireValidAllowList(joined);
         } catch (IllegalArgumentException e) {
             throw LoyaltyException.badRequest("BAD_IP", e.getMessage());
         }

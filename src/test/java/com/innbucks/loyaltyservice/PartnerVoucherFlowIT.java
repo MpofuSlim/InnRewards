@@ -106,7 +106,7 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
     // ------------------------------------------------------------------ flows
 
     @Test
-    void aCashSale_issuesAVoucher_whoseCodeGoesOnlyToThePhone_andItRedeemsInSettledSlices() throws Exception {
+    void aPosCashSale_issuesAVoucher_whoseCodeTheTillPrints_andItRedeemsInSettledSlices() throws Exception {
         String phone = newPhone();
         String reference = "MWOS-POS-" + UUID.randomUUID();
         Map<String, Object> sale = cashSale(reference, phone, "20.00");
@@ -119,7 +119,6 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(data.path("funding").path("method").asText()).isEqualTo("CASH");
         assertThat(data.path("funding").path("status").asText()).isEqualTo("CONFIRMED");
         assertThat(data.path("funding").path("simulated").asBoolean()).isTrue();
-        assertThat(data.path("voucher").path("code").isNull()).isTrue();
         assertThat(data.path("voucher").path("holderPhone").asText()).doesNotContain(phone.substring(4));
         assertThat(data.path("voucher").path("remainingBalance").decimalValue()).isEqualByComparingTo("20.00");
 
@@ -129,12 +128,15 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(voucher.getAssigneePhone()).isEqualTo(phone);
         assertThat(merchantRepository.findById(merchantId).orElseThrow().isEscrowMode()).isTrue();
         String code = voucher.getCode();
+        // A POS sale carries the code for the till to print on the customer's slip.
+        assertThat(data.path("voucher").path("code").asText()).isEqualTo(code).matches("\\d{16}");
 
         // The same request again is the same order; the same reference for another sale is refused.
         Call replay = partner("generate", sale);
         assertThat(replay.status()).isEqualTo(200);
         assertThat(replay.body().path("data").path("replayed").asBoolean()).isTrue();
         assertThat(replay.body().path("data").path("orderRef").asText()).isEqualTo(data.path("orderRef").asText());
+        assertThat(replay.body().path("data").path("voucher").path("code").asText()).isEqualTo(code);
         Call mismatch = partner("generate", cashSale(reference, phone, "21.00"));
         assertThat(mismatch.status()).isEqualTo(422);
         assertThat(mismatch.code()).isEqualTo("IDEMPOTENCY_MISMATCH");
@@ -143,6 +145,8 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
                 "partnerReference", reference));
         assertThat(byReference.status()).isEqualTo(200);
         assertThat(byReference.body().path("data").path("status").asText()).isEqualTo("ISSUED");
+        // ...and so does the inquiry, so a slip that failed to print can be printed again.
+        assertThat(byReference.body().path("data").path("voucher").path("code").asText()).isEqualTo(code);
 
         Call byCode = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
                 "endUserRef", "MWOS-ACC-1", "endUserPhone", phone));
@@ -202,7 +206,7 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
-    void anInnbucksCode_waitsForTheCustomerToPay_thenIssues() throws Exception {
+    void anInnbucksCode_waitsForTheCustomerToPay_thenIssues_andAnOnlineSaleNeverCarriesTheCode() throws Exception {
         String phone = newPhone();
         String reference = "MWOS-WEB-" + UUID.randomUUID();
         Map<String, Object> sale = sale(reference, "ONLINE", phone, "10.00", Map.of("method", "INNBUCKS_CODE"));
@@ -221,6 +225,8 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(paid.body().path("data").path("status").asText()).isEqualTo("ISSUED");
         assertThat(paid.body().path("data").path("voucher").path("value").decimalValue())
                 .isEqualByComparingTo("10.00");
+        assertThat(paid.body().path("data").path("voucher").path("voucherId").asText()).isNotBlank();
+        assertThat(paid.body().path("data").path("voucher").path("code").isNull()).isTrue();
     }
 
     @Test

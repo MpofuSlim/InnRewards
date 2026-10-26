@@ -66,7 +66,8 @@ public class PartnerVoucherController {
                     The voucher exists only once its value is in the InnBucks holding account. Cash, card \
                     swipe and money the merchant collected itself debit the merchant's float into holding; an \
                     InnBucks code waits for the customer to pay (`202 AWAITING_PAYMENT`). We send the code to \
-                    the customer by WhatsApp, with SMS as the fallback; it is never in the response. \
+                    the customer by WhatsApp, with SMS as the fallback. A POS sale's response also carries \
+                    it (`voucher.code`) for the till to print on the slip; an ONLINE sale's never does. \
                     `partnerReference` is the idempotency key: the same reference with the same content returns \
                     the order as it now stands (`replayed: true`), and with different content is \
                     `422 IDEMPOTENCY_MISMATCH`. On staging the funding is simulated (`funding.simulated: true`); \
@@ -132,7 +133,8 @@ public class PartnerVoucherController {
     @Operation(summary = "Inquire about an order, a voucher or a redemption",
             description = """
                     Read-only. `by` is PARTNER_REFERENCE (what happened to my sale: the generate result as it \
-                    now stands, never the code), CODE (what is this voucher worth: needs endUserRef, and \
+                    now stands, with the code for a POS sale so a slip can be printed again), CODE (what is \
+                    this voucher worth: needs endUserRef, and \
                     endUserPhone when the merchant binds redemption to the holder's phone; unknown codes count \
                     towards the guessing lockout) or REDEMPTION (has the merchant been paid for this use).
 

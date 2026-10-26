@@ -43,7 +43,6 @@ public final class PartnerVoucherDtos {
             @Schema(example = "USD") @NotBlank @Size(max = 8) String currency,
             @NotNull @Valid Customer customer,
             @NotNull @Valid Funding funding,
-            Boolean printSlip,
             Boolean confirmDuplicate) {
     }
 
@@ -114,6 +113,11 @@ public final class PartnerVoucherDtos {
 
     public record VoucherView(UUID voucherId, String status, BigDecimal value, BigDecimal remainingBalance,
                               String currency, Instant issuedAt, Instant expiresAt, String holderPhone,
+                              @Schema(example = "9087876598764566", description = """
+                                      The voucher code, for a POS sale only, so the till prints it on the \
+                                      customer's slip; null for an ONLINE sale. 16 digits, raw: print it in \
+                                      groups of four (9087-8765-9876-4566). Keep it a string. It spends the \
+                                      voucher, so never log it.""")
                               String code) {
     }
 

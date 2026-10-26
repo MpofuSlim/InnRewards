@@ -684,6 +684,14 @@ public class PartnerVoucherService {
         return readTx.execute(s -> orders.findById(orderId).orElseThrow());
     }
 
+    /**
+     * The order as it now stands. A POS sale carries the voucher code so the
+     * till can print it on the customer's slip (owner decision, 2026-10-26),
+     * here and on every later read of the same sale (a replay, an inquiry by
+     * reference), so a slip that failed to print can be printed again. An
+     * ONLINE sale never carries it: the code reaches that customer only on
+     * their phone. The code is a bearer credential: never log this result.
+     */
     PartnerVoucherDtos.GenerateResult toResult(VoucherPurchaseOrder o, String merchantCode, boolean replayed) {
         String status = statusOf(o);
         PartnerVoucherDtos.PaymentView payment = o.getFundingStatus() == FundingStatus.AWAITING
@@ -691,11 +699,13 @@ public class PartnerVoucherService {
                 ? new PartnerVoucherDtos.PaymentView(o.getFundingMethod(), o.getPaymentCode(), null,
                         o.getPaymentExpiresAt())
                 : null;
+        boolean printed = "POS".equals(o.getChannel());
         PartnerVoucherDtos.VoucherView voucher = o.getVoucherId() == null ? null
                 : readTx.execute(s -> vouchers.findById(o.getVoucherId()).map(v ->
                         new PartnerVoucherDtos.VoucherView(v.getId(), v.getStatus().name(), money2(v.getValue()),
                                 money2(v.getRemainingBalance()), v.getCurrency(), v.getIssuedAt(), v.getExpiresAt(),
-                                MsisdnMasking.mask(v.getAssigneePhone()), null)).orElse(null));
+                                MsisdnMasking.mask(v.getAssigneePhone()), printed ? v.getCode() : null))
+                        .orElse(null));
         String fundingStatus = o.getFundingStatus() == null ? null : switch (o.getFundingStatus()) {
             case NOT_STARTED, AWAITING -> "PENDING";
             default -> o.getFundingStatus().name();

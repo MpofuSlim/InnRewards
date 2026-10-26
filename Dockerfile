@@ -39,9 +39,12 @@ FROM eclipse-temurin:25-jre-alpine AS runtime
 # libexpat >= 2.9.0-r0 — CVE-2026-77214 (HIGH), heap buffer over-read in
 # XML_ParseBuffer (information disclosure). Fixed in 2.9.0-r0; failed the
 # Release Trivy gate for the #194 merge. ticketing-system raised its floor in #715.
+# brotli-libs >= 1.2.1-r0 — CVE-2026-111497 (HIGH), out-of-bounds write in the
+# Brotli decoder. The alpine 3.24.3 base ships 1.2.0-r1; failed the Release
+# Trivy gate for PR #209. ticketing-system raised its floor in #737.
 RUN apk update \
  && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust \
- && apk add --no-cache --upgrade 'libexpat>=2.9.0-r0'
+ && apk add --no-cache --upgrade 'libexpat>=2.9.0-r0' 'brotli-libs>=1.2.1-r0'
 RUN addgroup -S app && adduser -S -G app app \
     && mkdir -p /app/data \
     && chown -R app:app /app

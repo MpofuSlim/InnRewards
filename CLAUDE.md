@@ -3035,9 +3035,15 @@ without going through the partner flow.
   per phone per rolling 24 h (count and value, failed orders excluded), and a
   possible double sale (same terminal, phone and amount within
   `duplicate-window`) is `409 POSSIBLE_DUPLICATE` unless `confirmDuplicate`.
-- **The voucher code is never in a response** (`voucher.code` is always null).
-  It goes to the customer's phone through the ordinary issue path. Whether the
-  POS must print it is an open question (guide Q6).
+- **A POS sale's response carries the voucher code; an ONLINE sale's never
+  does (owner decision, 2026-10-26: the POS prints it on the slip).** Every
+  sale also sends the code to the customer's phone through the ordinary issue
+  path. `toResult` sets `voucher.code` only for an order whose channel is POS,
+  on generate, its replay and inquire by `PARTNER_REFERENCE`, so a slip that
+  failed to print can be printed again. The code is raw, like every machine
+  surface; the POS prints it hyphen-grouped. A slip cannot spend the voucher on
+  another MWOS account while the link binds redemption to the holder's phone.
+  Never log a generate or inquire result.
 - A merchant whose vouchers would never expire is `503 MERCHANT_NOT_READY`:
   held money must have an end.
 

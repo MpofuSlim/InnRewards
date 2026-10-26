@@ -46,7 +46,7 @@ final class PartnerVoucherSwaggerExamples {
                   "issuedAt": "2026-10-23T09:14:05Z",
                   "expiresAt": "2027-10-23T09:14:05Z",
                   "holderPhone": "****4567",
-                  "code": null
+                  "code": "9087876598764566"
                 },
                 "replayed": false
               }

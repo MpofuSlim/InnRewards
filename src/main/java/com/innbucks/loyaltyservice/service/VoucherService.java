@@ -157,6 +157,7 @@ public class VoucherService {
         // claim CallerDetails already merged over the body value).
         Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
                 tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
+        requireNotEscrow(merchant);
         int usageLimit = resolveUsageLimit(req.voucherType(), req.usageLimit());
         // The sender is whoever the request NAMES, or nobody. There is
         // deliberately no fallback to the caller's own JWT phone.
@@ -273,7 +274,33 @@ public class VoucherService {
         v.setIssuerUserId(order.getIssuerUserId());
         v.setIssuerPhone(order.getIssuerPhone());
         v.setIssuerEmail(order.getIssuerEmail());
+        // A partner order's voucher is redeemable through that partner only (V62).
+        v.setPartnerId(order.getPartnerId());
         return finishIssue(v);
+    }
+
+    /** Refusal code for creating or moving a voucher of an escrow merchant off the partner API. */
+    public static final String ESCROW_MERCHANT = "ESCROW_MERCHANT";
+
+    /**
+     * An escrow merchant's vouchers exist only once their value is in holding,
+     * through its partner (V62). A free issue would create one with nothing
+     * behind it, so it is refused, whoever asks.
+     */
+    public static void requireNotEscrow(Merchant merchant) {
+        if (merchant.isEscrowMode()) {
+            throw LoyaltyException.conflict(ESCROW_MERCHANT,
+                    "This merchant's vouchers are created only through its partner, once paid for.");
+        }
+    }
+
+    /**
+     * Whether a voucher issued now for this merchant would expire. A partner
+     * voucher's value is held until used, so one that never expires would hold
+     * money for ever: the partner generate refuses when this is false.
+     */
+    public boolean wouldExpire(UUID tenantId, Merchant merchant) {
+        return resolveExpiry(tenantId, merchant) != null;
     }
 
     /** The shared issue tail: persist, stamp the dispatch attempt, both
@@ -330,6 +357,7 @@ public class VoucherService {
     public List<Dtos.VoucherResponse> issueBulk(UUID tenantId, Dtos.BulkIssueRequest req) {
         Merchant merchant = merchantAuthz.requireCallerAdministersMerchant(
                 tenantId, CallerDetails.resolveMerchantId(req.merchantId()));
+        requireNotEscrow(merchant);
         // Capped in the service, not with @Max, because the cap is per-cell
         // config. One request is one transaction: without a cap a single call
         // could hold a pod and a connection for as long as it took.
@@ -875,16 +903,76 @@ public class VoucherService {
     }
 
     public Dtos.RedemptionResponse redeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
+        return redeemTimed(tenantId, merchantId, req, null);
+    }
+
+    /**
+     * Who is redeeming through the partner API (V62), and on whose behalf. The
+     * merchant is the partner's own; nothing in the request can change it.
+     *
+     * @param bindToHolderPhone when true, {@code endUserPhone} must be the
+     *        voucher's holder phone, so a leaked code is useless to anyone else
+     * @param currency          when not null, must be the voucher's currency
+     */
+    public record PartnerRedeemScope(UUID partnerId, String endUserRef, String endUserPhone,
+                                     String channel, String terminalId, boolean bindToHolderPhone,
+                                     String currency) {}
+
+    /** {@link #redeemIdempotent} for the partner API: one retry after a reference race. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public Dtos.RedemptionResponse redeemForPartnerIdempotent(UUID tenantId, UUID merchantId,
+                                                              Dtos.RedeemVoucherRequest req,
+                                                              PartnerRedeemScope scope) {
+        VoucherService proxy = self == null ? this : self.getObject();
+        try {
+            return proxy.redeemForPartner(tenantId, merchantId, req, scope);
+        } catch (com.innbucks.loyaltyservice.exception.VoucherRedemptionRaceException race) {
+            return proxy.redeemForPartner(tenantId, merchantId, req, scope);
+        }
+    }
+
+    public Dtos.RedemptionResponse redeemForPartner(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req,
+                                                    PartnerRedeemScope scope) {
+        return redeemTimed(tenantId, merchantId, req, java.util.Objects.requireNonNull(scope, "scope"));
+    }
+
+    private Dtos.RedemptionResponse redeemTimed(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req,
+                                                PartnerRedeemScope partner) {
         // Timer captures end-to-end latency for the hottest read+write path in
         // the service. Exception paths are timed too (Timer.record records the
         // duration regardless), which is intentional — slow rejections matter.
         io.micrometer.core.instrument.Timer.Sample sample =
                 io.micrometer.core.instrument.Timer.start();
         try {
-            return doRedeem(tenantId, merchantId, req);
+            return doRedeem(tenantId, merchantId, req, partner);
         } finally {
             sample.stop(metrics.redemptionLatency());
         }
+    }
+
+    /**
+     * A partner's balance inquiry by code (V62): the same early checks as its
+     * redeem, in the same order, so it reveals nothing redeem would not. Unknown,
+     * another merchant's, not this partner's, or (when bound) another person's
+     * code are COUNTED misses ({@link VoucherCodeGuessException}); a mistyped
+     * code is a plain 400.
+     */
+    @Transactional(readOnly = true)
+    public Voucher inquireForPartner(UUID tenantId, UUID merchantId, String code, PartnerRedeemScope scope) {
+        Voucher v = findByTypedCode(code).orElse(null);
+        if (v == null && VoucherCodes.isMistypedNumeric(VoucherCodes.normalize(code))) {
+            throw LoyaltyException.badRequest(MISTYPED_CODE,
+                    "That voucher code doesn't look right. Please check it and try again.");
+        }
+        if (v == null || !v.getTenantId().equals(tenantId) || !merchantId.equals(v.getMerchantId())
+                || !scope.partnerId().equals(v.getPartnerId())) {
+            throw VoucherCodeGuessException.unknownCode();
+        }
+        if (scope.bindToHolderPhone() && !samePhone(scope.endUserPhone(), holderPhone(v))) {
+            throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                    "This voucher isn't assigned to you."));
+        }
+        return v;
     }
 
     /**
@@ -906,7 +994,8 @@ public class VoucherService {
         }
     }
 
-    private Dtos.RedemptionResponse doRedeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
+    private Dtos.RedemptionResponse doRedeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req,
+                                             PartnerRedeemScope partner) {
         // The request's own shape, checked before any lookup: it is answered
         // from the request alone, so it says nothing about which vouchers exist
         // and is never a counted guess.
@@ -934,6 +1023,19 @@ public class VoucherService {
                     FraudAttempt.Reason.INVALID_CODE, "voucher not found");
             // A counted guess for the redeem lockout; the wire response is
             // byte-identical to notFound("voucher").
+            throw VoucherCodeGuessException.unknownCode();
+        }
+
+        // Partner vouchers (V62) are redeemed through their partner and nowhere
+        // else; the partner redeems its own and nothing else. Both answer exactly
+        // like an unknown code, and are counted like one, BEFORE any other check:
+        // the till, the app and the public surface learn nothing about a partner
+        // voucher, and a partner learns nothing about anyone else's.
+        if (partner == null ? v.getPartnerId() != null
+                : !partner.partnerId().equals(v.getPartnerId()) || !merchantId.equals(v.getMerchantId())) {
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.INVALID_CODE, partner == null
+                            ? "partner voucher presented off the partner API" : "not this partner's voucher");
             throw VoucherCodeGuessException.unknownCode();
         }
 
@@ -986,6 +1088,21 @@ public class VoucherService {
             }
         }
 
+        // A partner binds the use to the verified phone of the customer's
+        // account on its platform: a leaked code is then useless to anyone
+        // else. Same counted refusal as a customer redeeming someone else's.
+        if (partner != null && partner.bindToHolderPhone() && !samePhone(partner.endUserPhone(), holderPhone(v))) {
+            rejectRedemption(v, merchantId, req, "partner end user is not the voucher holder");
+            recordAttempt(tenantId, req, merchantId, v.getCode(),
+                    FraudAttempt.Reason.NOT_ASSIGNEE, "partner redeem by another person's account");
+            throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
+                    "This voucher isn't assigned to you."));
+        }
+        if (partner != null && partner.currency() != null && !partner.currency().equalsIgnoreCase(v.getCurrency())) {
+            throw LoyaltyException.badRequest("CURRENCY_MISMATCH",
+                    "This voucher is in " + v.getCurrency() + ", not " + partner.currency() + ".");
+        }
+
         // Idempotent retry (V61). Placed HERE, after the signature and the
         // customer-holder checks — so a reference is never an oracle: a
         // non-holder has already been refused NOT_VOUCHER_OWNER — and BEFORE the
@@ -1004,6 +1121,9 @@ public class VoucherService {
                 if (!prior.get().getVoucherId().equals(v.getId())) {
                     throw LoyaltyException.conflict(DUPLICATE_REFERENCE,
                             "This reference was already used for another voucher redemption.");
+                }
+                if (partner != null) {
+                    requireSamePartnerUse(prior.get(), req, partner);
                 }
                 return replayOf(v, prior.get());
             }
@@ -1112,7 +1232,10 @@ public class VoucherService {
         // VoucherRedemptionRejectedEvent (no REJECTED row, no EXPIRED flip) and
         // writes no fraud evidence: the rollback leaves nothing behind and the
         // replay starts clean.
-        java.util.Optional<LoyaltyUser> holder = holderAccount(v);
+        // Not for a partner voucher: its value is already held for it, and its
+        // holder is bound by phone above, so the holder's loyalty account state
+        // (often a PENDING projection nobody uses) has nothing to say about it.
+        java.util.Optional<LoyaltyUser> holder = partner != null ? java.util.Optional.empty() : holderAccount(v);
         if (holder.isPresent()) {
             switch (userService.spendabilityOf(holder.get())) {
                 case OK -> { /* spendable */ }
@@ -1187,7 +1310,7 @@ public class VoucherService {
         boolean firstUse = !redemptions.existsByVoucherIdAndResult(v.getId(), VoucherRedemption.Result.SUCCESS);
 
         VoucherRedemption r = recordSuccessfulUse(v, merchantId, req, reference, applied, baseAmount,
-                balanceAfter, firstUse);
+                balanceAfter, firstUse, partner);
         metrics.incVouchersRedeemed();
 
         // The holder hears about every use (owner decision, 2026-10-21): what
@@ -1214,6 +1337,23 @@ public class VoucherService {
 
     /** Redeem refusal: the reference already names a successful use of ANOTHER voucher. */
     public static final String DUPLICATE_REFERENCE = "DUPLICATE_REFERENCE";
+
+    /**
+     * A partner re-sending a redeem with a reference it already used must be
+     * re-sending the SAME use: the same customer and, when it names one, the
+     * same amount. Anything else is a bug on its side that a replay would hide.
+     */
+    private static void requireSamePartnerUse(VoucherRedemption prior, Dtos.RedeemVoucherRequest req,
+                                              PartnerRedeemScope partner) {
+        boolean sameUser = java.util.Objects.equals(prior.getEndUserRef(), partner.endUserRef());
+        boolean sameAmount = req.amount() == null || prior.getAmount() == null
+                || req.amount().compareTo(prior.getAmount()) == 0;
+        if (!sameUser || !sameAmount) {
+            throw new LoyaltyException(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "IDEMPOTENCY_MISMATCH",
+                    "This reference was already used for a different redemption.");
+        }
+    }
 
     /**
      * Who may redeem at {@code merchantId}: staff must administer it (object-level
@@ -1332,7 +1472,8 @@ public class VoucherService {
      */
     private VoucherRedemption recordSuccessfulUse(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
                                                   String reference, BigDecimal amount, BigDecimal baseAmount,
-                                                  BigDecimal balanceAfter, boolean firstUse) {
+                                                  BigDecimal balanceAfter, boolean firstUse,
+                                                  PartnerRedeemScope partner) {
         VoucherRedemption r = new VoucherRedemption();
         r.setTenantId(v.getTenantId());
         r.setVoucherId(v.getId());
@@ -1347,6 +1488,15 @@ public class VoucherService {
         r.setBalanceAfter(balanceAfter);
         r.setReference(reference);
         r.setFirstUse(firstUse);
+        if (partner != null) {
+            // The used amount is owed to the merchant from holding; the
+            // settlement runs after this commits (PartnerVoucherService).
+            r.setPartnerId(partner.partnerId());
+            r.setEndUserRef(partner.endUserRef());
+            r.setChannel(partner.channel());
+            r.setTerminalId(partner.terminalId());
+            r.setSettlementStatus(VoucherRedemption.SettlementStatus.PENDING);
+        }
         if (reference == null) {
             return redemptions.save(r);
         }
@@ -1405,6 +1555,13 @@ public class VoucherService {
         if (!v.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
+        // Revoking a partner voucher must refund its held value to the payer,
+        // which arrives with the real money movement. Until then it is refused
+        // rather than voided with the money left in holding.
+        if (v.getPartnerId() != null) {
+            throw LoyaltyException.conflict("PARTNER_VOUCHER",
+                    "This voucher is managed through its partner and can't be revoked here yet.");
+        }
         // Object-level merchant ownership (F05), mirroring issue and redeem. The
         // old guard only compared a SHOP_ADMIN's pinned merchantId claim, so a
         // MERCHANT_ADMIN — which carries NO merchantId claim by design (V51) —
@@ -1450,6 +1607,11 @@ public class VoucherService {
                 .orElseThrow(() -> LoyaltyException.notFound("voucher"));
         if (!v.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
+        }
+        // A partner voucher's refund goes to whoever PAID for it, so it never
+        // changes holder (V62).
+        if (v.getPartnerId() != null) {
+            throw LoyaltyException.conflict("VOUCHER_NOT_TRANSFERABLE", "This voucher can't be transferred.");
         }
         // Only the current holder may pass it on, or an admin of the voucher's
         // own merchant acting for them. NOT the view helper: that one lets any

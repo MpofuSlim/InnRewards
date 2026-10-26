@@ -213,6 +213,14 @@ public class Voucher {
     @Column(name = "campaign_source", length = 200)
     private String campaignSource;
 
+    /**
+     * The partner that generated this voucher through the partner API (V62).
+     * Non-null means its value is held until used and it may be redeemed ONLY
+     * through that partner: every other surface refuses it.
+     */
+    @Column(name = "partner_id")
+    private UUID partnerId;
+
     // Single-hop p2p transfer (V34). A voucher may change hands exactly once:
     // issued -> transferred -> redeemed. `transferredAt == null` IS the
     // "may still be transferred" test — see VoucherService.transfer.

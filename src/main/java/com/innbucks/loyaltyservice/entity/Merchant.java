@@ -109,5 +109,15 @@ public class Merchant extends Auditable {
     @Column(name = "fee_waived_reason", length = 200)
     private String feeWaivedReason;
 
+    /**
+     * TRUE for a merchant whose vouchers exist only through its partner API
+     * (V62; first one: MWOS). Their value is held in an InnBucks holding account
+     * until used, so every other way to create or spend one is refused: no free
+     * issue, no till purchase order, no till / app / public redemption, no
+     * transfer. Set when the merchant's partner is registered.
+     */
+    @Column(name = "escrow_mode", nullable = false)
+    private boolean escrowMode = false;
+
     public enum FeeType { FIXED, PERCENTAGE, FIXED_PLUS_PERCENTAGE }
 }

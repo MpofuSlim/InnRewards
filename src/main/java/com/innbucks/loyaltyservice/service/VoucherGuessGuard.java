@@ -190,7 +190,7 @@ public class VoucherGuessGuard {
             return {0, 0}
             """, List.class);
 
-    /** The identity a caller is locked under. {@code kind} is phone | staff | user. */
+    /** The identity a caller is locked under. {@code kind} is phone | staff | user | partner. */
     public record Identity(String kind, String value) {
         String id() {
             return kind + ":" + value;
@@ -285,10 +285,23 @@ public class VoucherGuessGuard {
      * Redis never lengthens one.
      */
     public <T> T attempt(Supplier<T> body, Predicate<? super T> countsAsMiss) {
+        return attemptAs(callerIdentity().orElse(null), body, countsAsMiss);
+    }
+
+    /**
+     * {@link #attempt(Supplier)} under an identity the caller names, for a caller
+     * with no security context to read it from: the partner API (V62), keyed by
+     * the partner and the customer's account on its platform, so one bettor
+     * guessing codes never locks every other customer of that partner out.
+     */
+    public <T> T attemptAs(Identity who, Supplier<T> body) {
+        return attemptAs(who, body, result -> false);
+    }
+
+    private <T> T attemptAs(Identity who, Supplier<T> body, Predicate<? super T> countsAsMiss) {
         if (!props.enabled()) {
             return body.get();
         }
-        Identity who = callerIdentity().orElse(null);
         if (who == null) {
             return unkeyed(body, countsAsMiss);
         }

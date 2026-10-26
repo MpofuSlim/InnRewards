@@ -454,4 +454,28 @@ public class LoyaltyMetrics {
                 .register(registry)
                 .increment();
     }
+
+    /**
+     * Partner API (V62). {@code loyalty.partner.rejected{reason}} counts requests
+     * refused authentication; the caller only ever sees one opaque 401, so this
+     * is where the reason lives. A sustained {@code bad_signature} or {@code ip}
+     * from production traffic is worth a look.
+     */
+    public void incPartnerRejected(String reason) {
+        Counter.builder("loyalty.partner.rejected")
+                .description("Partner API requests refused authentication, by reason")
+                .tag("reason", reason)
+                .register(registry)
+                .increment();
+    }
+
+    /** {@code loyalty.partner.request{op,outcome}}: every authenticated partner call. */
+    public void incPartnerRequest(String op, String outcome) {
+        Counter.builder("loyalty.partner.request")
+                .description("Partner API calls by operation and outcome")
+                .tag("op", op)
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
 }

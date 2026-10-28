@@ -1416,7 +1416,16 @@ public class Dtos {
 
     public record FraudAttemptResponse(UUID id, String voucherCode, UUID merchantId,
                                        String reason, String detail,
-                                       String deviceFingerprint, Instant createdAt) {}
+                                       String deviceFingerprint, Instant createdAt) {
+        /**
+         * The same row with {@code voucherCode} null. Most refusals record the
+         * REAL code of a live voucher (wrong merchant, not the assignee, a
+         * blocked holder), so a fraud row can carry a spendable credential.
+         */
+        public FraudAttemptResponse withoutCode() {
+            return new FraudAttemptResponse(id, null, merchantId, reason, detail, deviceFingerprint, createdAt);
+        }
+    }
 
     /**
      * Period-bounded points totals. Used by the per-merchant / per-user /

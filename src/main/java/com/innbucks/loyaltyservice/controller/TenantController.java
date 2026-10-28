@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.service.TenantService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -57,6 +58,11 @@ public class TenantController {
                     return;
                 }
             }
+        }
+        // Read-only platform access reads any tenant's roster, on a GET only
+        // (the one caller of this check is GET /{id}/members).
+        if (ReportsPermissions.readsOnThisRequest()) {
+            return;
         }
         UUID userId = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
         String email = authentication != null ? authentication.getName() : null;
@@ -142,7 +148,8 @@ public class TenantController {
     @Operation(summary = "List all tenants",
             description = "Returns every customer tenant on the platform. Intended for operator dashboards. " +
                           "The platform-internal ticketing container tenant (loyalty infrastructure for " +
-                          "event-organizer merchants) is excluded. Operator-only — no tenant header required.")
+                          "event-organizer merchants) is excluded. Operator-only — no tenant header required."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -184,7 +191,7 @@ public class TenantController {
     // Platform-operator only. This returns EVERY tenant's identity (the whole
     // white-label roster); a merchant/shop admin must not enumerate other tenants.
     // Non-operators discover the tenants they belong to via GET /loyalty/tenants/me.
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
         log.info("GET /loyalty/tenants (listing all tenants)");
         PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));
@@ -196,7 +203,8 @@ public class TenantController {
             description = "Returns every tenant the authenticated caller is a MEMBER of — matched by their " +
                           "user UUID (the id they were attached with at tenant registration) or, for legacy " +
                           "rows, their email. Use this right after login to discover which tenant UUIDs you " +
-                          "can pass as X-Tenant-Id. The response is a list — a user can belong to several tenants.")
+                          "can pass as X-Tenant-Id. The response is a list — a user can belong to several tenants."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -221,16 +229,18 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantResponse>>> mine(
             org.springframework.security.core.Authentication authentication) {
         UUID callerId = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
         String email = authentication.getName();
         log.info("GET /loyalty/tenants/me userId={} email={}", callerId, email);
         // SUPER_ADMIN oversees every tenant and needs no membership row to use
-        // one (TenantContext exempts it), so its picker lists them all.
+        // one (TenantContext exempts it), so its picker lists them all. So does
+        // read-only platform access, which TenantContext exempts on a GET.
         java.util.List<Dtos.TenantResponse> data =
                 com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")
+                        || ReportsPermissions.readsOnThisRequest()
                         ? tenantService.list()
                         : tenantService.findMine(callerId, email);
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
@@ -337,7 +347,8 @@ public class TenantController {
     @Operation(summary = "List tenant members",
             description = "Returns every user with membership of this tenant. Useful for showing a tenant's " +
                           "admin team. Membership is the gate for tenant-scoped actions (replaces the old " +
-                          "single-owner model).")
+                          "single-owner model)."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -400,7 +411,7 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantMemberResponse>>> members(
             @PathVariable UUID id,
             org.springframework.security.core.Authentication authentication) {

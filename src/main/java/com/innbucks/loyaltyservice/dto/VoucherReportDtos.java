@@ -140,6 +140,25 @@ public final class VoucherReportDtos {
                             + "0 once fully redeemed. Null only on a legacy non-money voucher.")
             BigDecimal remainingBalance
     ) {
+        /**
+         * The same row with {@code code} null, for a reader who must not hold a
+         * bearer credential (read-only platform access). Rebuilt positionally, so
+         * it lives beside the component list it mirrors; only {@code code}
+         * differs, which {@code VoucherReportDtosWithoutCodeTest} pins component
+         * by component.
+         */
+        public VoucherDetail withoutCode() {
+            return new VoucherDetail(id, null, status,
+                    tenantId, merchantId, merchantName, shopId, shopName, templateId, templateName, batchId,
+                    issuerUserId, issuerPhone, issuerEmail,
+                    receiverUserId, receiverPhone, receiverName,
+                    voucherType, faceValue, currency, usesRemaining, deliveryChannel, campaignSource,
+                    issuedAt, deliveredAt, viewedAt, redeemedAt, expiresAt, expired,
+                    senderName, senderPhone,
+                    transferredAt, transferredFromUserId, transferredFromPhone,
+                    redemptionCount, redemptions,
+                    paymentMethod, orderRef, remainingBalance);
+        }
     }
 
     @Schema(name = "VoucherSummary", description = "Aggregate totals for a report scope.")
@@ -171,5 +190,21 @@ public final class VoucherReportDtos {
             VoucherSummary summary,
             PageResponse<VoucherDetail> vouchers
     ) {
+        /** The same report with every row's {@code code} null — see {@link VoucherDetail#withoutCode()}. */
+        public VoucherReport withoutCodes() {
+            if (vouchers == null || vouchers.getContent() == null) {
+                return this;
+            }
+            PageResponse<VoucherDetail> rows = PageResponse.<VoucherDetail>builder()
+                    .content(vouchers.getContent().stream().map(VoucherDetail::withoutCode).toList())
+                    .page(vouchers.getPage())
+                    .size(vouchers.getSize())
+                    .totalElements(vouchers.getTotalElements())
+                    .totalPages(vouchers.getTotalPages())
+                    .first(vouchers.isFirst())
+                    .last(vouchers.isLast())
+                    .build();
+            return new VoucherReport(level, scopeId, scopeName, from, to, summary, rows);
+        }
     }
 }

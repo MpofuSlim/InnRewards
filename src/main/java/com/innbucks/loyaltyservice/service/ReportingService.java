@@ -29,6 +29,7 @@ import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.repository.VoucherTemplateRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -321,9 +322,12 @@ public class ReportingService {
         return new PageImpl<>(content, pageable, visible.size());
     }
 
-    /** Mirrors MerchantAuthz's ownership model as a non-throwing predicate. */
+    /** Mirrors MerchantAuthz's ownership model as a non-throwing predicate,
+     *  read-only platform access included (on a GET/HEAD, like
+     *  {@code MerchantAuthz.readableMerchants}). */
     private boolean callerMaySeeMerchant(Merchant m) {
-        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN")) {
+        if (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN")
+                || ReportsPermissions.readsOnThisRequest()) {
             return true;
         }
         UUID scopedMerchant = CallerDetails.currentMerchantId();   // SHOP_ADMIN / SHOP_USER
@@ -1555,6 +1559,18 @@ public class ReportingService {
     public void writeVoucherCsv(java.io.Writer out, String level, UUID tenantId, UUID scopeId,
                                 Set<UUID> merchantScope, Voucher.Status status, LocalDate from, LocalDate to,
                                 VoucherReportFilters filters) {
+        writeVoucherCsv(out, level, tenantId, scopeId, merchantScope, status, from, to, filters, false);
+    }
+
+    /**
+     * {@link #writeVoucherCsv(java.io.Writer, String, UUID, UUID, Set, Voucher.Status, LocalDate, LocalDate,
+     * VoucherReportFilters)} with the {@code code} column left blank on every row when
+     * {@code withholdCodes} is set (read-only platform access: a code is a bearer
+     * credential). The column stays, so a positional parser reads the same layout.
+     */
+    public void writeVoucherCsv(java.io.Writer out, String level, UUID tenantId, UUID scopeId,
+                                Set<UUID> merchantScope, Voucher.Status status, LocalDate from, LocalDate to,
+                                VoucherReportFilters filters, boolean withholdCodes) {
         UUID excludeTenantId = null, filterTenantId = null, merchantId = null, shopId = null;
         switch (level == null ? "" : level.toUpperCase()) {
             case "OPERATOR" -> excludeTenantId = TicketingLoyaltyService.TICKETING_TENANT_ID;
@@ -1595,7 +1611,8 @@ public class ReportingService {
                     PageRequest.of(pageNum, pageSize, Sort.by(Sort.Direction.DESC, "issuedAt")
                             .and(Sort.by(Sort.Direction.DESC, "id"))));
             StringBuilder sb = new StringBuilder();
-            for (VoucherDetail d : enrich(page).getContent()) {
+            for (VoucherDetail row : enrich(page).getContent()) {
+                VoucherDetail d = withholdCodes ? row.withoutCode() : row;
                 sb.append(csvField(d.id())).append(',')
                         // Grouped with hyphens HERE only — never in toDetail, which also
                         // feeds the JSON report, where the code must stay raw. A raw

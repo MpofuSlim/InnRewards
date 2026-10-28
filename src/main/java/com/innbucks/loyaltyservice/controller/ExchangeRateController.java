@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.ExchangeRate;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ExchangeRateService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -311,12 +312,13 @@ public class ExchangeRateController {
     }
 
     @GetMapping("/history")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     @Operation(summary = "Exchange-rate history for a currency (SUPER_ADMIN only)",
             description = "Every rate ever set for the currency across ALL scopes, newest-effective " +
                     "first — the audit trail of who changed FX and when. `tenantId` null marks platform " +
                     "(bank-default) rows; set marks a tenant's override. `source` distinguishes ADMIN " +
-                    "(operator) rows from FEED (automated) rows.")
+                    "(operator) rows from FEED (automated) rows."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "History, newest-effective first",

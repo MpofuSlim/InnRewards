@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.MerchantService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -300,7 +301,8 @@ public class MerchantController {
                     + "merchant-rule -> merchant-record -> global-rule precedence the invoice uses, so this is "
                     + "what will actually be billed, not what someone typed.\n\n"
                     + "`unwaived` is the number that matters: merchants onboarded and never priced. Redemption "
-                    + "being free is reported but never counted as a problem — only issuing is guarded.")
+                    + "being free is reported but never counted as a problem — only issuing is guarded."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Audit complete",
@@ -339,7 +341,7 @@ public class MerchantController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "Caller may not audit this tenant")
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.ZeroFeeAudit>> feeAudit() {
         return ResponseEntity.ok(ApiResult.ok("Zero-fee audit complete",
                 merchants.auditZeroFeeMerchants(tenantContext.requireTenantId())));
@@ -349,7 +351,8 @@ public class MerchantController {
     @Operation(summary = "List merchants for the current tenant",
             description = "Returns every merchant belonging to the X-Tenant-Id tenant. Used by the " +
                           "tenant admin UI to populate merchant pickers. Each row carries the " +
-                          "`organizationId` that owns it.")
+                          "`organizationId` that owns it."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -400,7 +403,7 @@ public class MerchantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantResponse>>> list(
             @ParameterObject Pageable pageable) {
         PageResponse<Dtos.MerchantResponse> data = PageResponse.from(

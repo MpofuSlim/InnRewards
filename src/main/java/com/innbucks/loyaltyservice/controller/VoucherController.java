@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.VoucherGuessGuard;
 import com.innbucks.loyaltyservice.service.VoucherService;
@@ -1090,7 +1091,8 @@ public class VoucherController {
     @GetMapping
     @Operation(summary = "Find vouchers by status",
             description = "Operator/merchant query: list every voucher in the given status across the tenant. " +
-                          "Common statuses: ISSUED, PARTIALLY_USED, REDEEMED, EXPIRED, REVOKED.")
+                          "Common statuses: ISSUED, PARTIALLY_USED, REDEEMED, EXPIRED, REVOKED."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1198,15 +1200,20 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> findByStatus(@RequestParam("status") Voucher.Status status,
                                                                                       @ParameterObject Pageable pageable) {
         // A merchant or shop admin lists its own merchants' vouchers, never a
         // sibling merchant's in the same tenant (codes included).
         UUID tenantId = tenantContext.requireTenantId();
-        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
-                voucherService.findByStatus(tenantId, merchantAuthz.readableMerchants(tenantId),
-                        status, pageable));
+        Page<Dtos.VoucherResponse> page = voucherService.findByStatus(tenantId,
+                merchantAuthz.readableMerchants(tenantId), status, pageable);
+        // Read-only platform access lists every merchant's vouchers and none of
+        // their codes: a code is a bearer credential.
+        if (ReportsPermissions.codesWithheld()) {
+            page = page.map(Dtos.VoucherResponse::withoutCode);
+        }
+        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(page);
         return ResponseEntity.ok(ApiResult.ok("Vouchers retrieved successfully", data));
     }
 }

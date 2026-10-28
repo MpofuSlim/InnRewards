@@ -458,24 +458,30 @@ public class TransactionService {
     public Dtos.TransactionResponse adjust(UUID tenantId, UUID userId, UUID merchantId,
                                            BigDecimal points, String reason) {
         return adjustAs(tenantId, userId, merchantId, points, reason,
-                com.innbucks.loyaltyservice.security.CallerDetails.currentUserId());
+                com.innbucks.loyaltyservice.security.CallerDetails.currentUserId(), false);
     }
 
     /**
      * {@link #adjust} with the operator named explicitly — the customer-support
      * path, where the operator is the agent. Everything else is the same code:
      * the per-adjustment and per-operator daily ceilings (keyed on
-     * {@code posted_by} = {@code operator}), the SUPER_ADMIN exemption, the
-     * ledger entry and the customer's adjustment SMS.
+     * {@code posted_by} = {@code operator}), the ledger entry and the
+     * customer's adjustment SMS.
+     *
+     * @param ceilingsForEveryRole true on the support path: the ceilings bind
+     *        SUPER_ADMIN too, so no one moves points alone from the console. The
+     *        merchant screen keeps the SUPER_ADMIN exemption, which is where a
+     *        larger correction goes, under that admin's own name.
      */
     public Dtos.TransactionResponse adjustAs(UUID tenantId, UUID userId, UUID merchantId,
-                                             BigDecimal points, String reason, UUID operator) {
+                                             BigDecimal points, String reason, UUID operator,
+                                             boolean ceilingsForEveryRole) {
         // Sanitize the operator-supplied reason once — it is persisted both as the
         // transaction reference AND in the wallet ledger entry (stored-XSS hardening).
         reason = HtmlSanitizer.stripAll(reason);
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         LoyaltyUser u = users.require(tenantId, userId);
-        requireWithinAdjustmentCeilings(tenantId, u, merchantId, points, operator);
+        requireWithinAdjustmentCeilings(tenantId, u, merchantId, points, operator, ceilingsForEveryRole);
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
         t.setMerchantId(merchantId);
@@ -509,9 +515,11 @@ public class TransactionService {
      * this path (postedBy attribution, the customer notification, the reports)
      * only tells you afterwards.
      *
-     * <p>SUPER_ADMIN is exempt. The aim is not to make large corrections
-     * impossible; it is to make them require someone accountable for them,
-     * while a shop manager can still fix a small counter mistake unaided.
+     * <p>SUPER_ADMIN is exempt on the merchant screen. The aim is not to make
+     * large corrections impossible; it is to make them require someone
+     * accountable for them, while a shop manager can still fix a small counter
+     * mistake unaided. On the support path ({@code ceilingsForEveryRole}) no
+     * one is exempt.
      *
      * <p>Both ceilings compare the ABSOLUTE movement. A large debit is as much
      * a red flag as a large credit — wiping a customer's balance is the shape a
@@ -519,11 +527,13 @@ public class TransactionService {
      * that posting +N then −N cannot present as a day of zero activity.
      */
     private void requireWithinAdjustmentCeilings(UUID tenantId, LoyaltyUser target,
-                                                 UUID merchantId, BigDecimal points, UUID operator) {
+                                                 UUID merchantId, BigDecimal points, UUID operator,
+                                                 boolean ceilingsForEveryRole) {
         if (points == null || points.signum() == 0) {
             return;
         }
-        if (com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
+        if (!ceilingsForEveryRole
+                && com.innbucks.loyaltyservice.security.CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
             return;
         }
 

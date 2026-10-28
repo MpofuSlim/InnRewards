@@ -182,6 +182,25 @@ public class SupportCustomerService {
         return customerOf(activity.requireLiveLookup(agent, lookupId));
     }
 
+    /**
+     * The merchants of one membership's programme, by name: what an adjustment's
+     * {@code merchantId} may name. A membership with no history has no
+     * transaction to take a merchant from, so without this the console had none
+     * to offer. Programme data, not the customer's, so no activity row; the
+     * lookup and the membership are still checked like every read.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<SupportDtos.MerchantLine> merchants(SupportAgent agent, UUID lookupId, UUID userId,
+                                                            int page, int size) {
+        Customer customer = customerOf(activity.requireLiveLookup(agent, lookupId));
+        LoyaltyUser membership = requireMembership(customer, userId);
+        Pageable pageable = PageRequest.of(SupportPaging.page(page), SupportPaging.size(size),
+                org.springframework.data.domain.Sort.by("name", "id"));
+        return PageResponse.from(merchants.findByTenantId(membership.getTenantId(), pageable)
+                .map(m -> new SupportDtos.MerchantLine(m.getId(), m.getName(),
+                        m.getStatus() == null ? null : m.getStatus().name(), m.getCurrency())));
+    }
+
     // ---- Drill-downs ----
 
     @Transactional

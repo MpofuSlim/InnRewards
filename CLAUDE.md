@@ -762,7 +762,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V62**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V63**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -3220,9 +3220,15 @@ builds the same surface; change them only in lock-step.
   to add the space. `SupportProperties` refuses to BOOT on an allowed host that
   is not plain ASCII (`IDN.toASCII` round-trip) or carries a path, and on a
   WhatsApp cap above the gateway's own 1600. Order is load-bearing: validate
-  (503 `channel_unavailable` before any row) → claim a PENDING row (both limits:
-  60/agent/rolling hour, 5/recipient/rolling 24h, every attempt, every kind) →
-  gateway call OUTSIDE any transaction → complete the row + `MESSAGE_SENT`. The
+  (503 `channel_unavailable` before any row) → claim a PENDING row (both limits,
+  every kind: 60/agent/rolling hour counting every attempt; 5/recipient/rolling
+  24h counting what was SENT or is PENDING, and a FAILED attempt only for
+  `failed-attempt-hold`, 1h) → gateway call OUTSIDE any transaction → complete
+  the row + `MESSAGE_SENT`. **A failure holds the customer's slot for an hour,
+  not the day**: one agent retrying a failing gateway used up the customer's day
+  for every agent. It still holds it for that hour because the gateway clients
+  cannot tell a refusal from a timeout that delivered. The customer's quota is
+  shared by every agent on purpose: it protects the customer. The
   claim takes two Postgres advisory locks (agent, then recipient — fixed order,
   no cycle) so two concurrent sends cannot both squeeze under a limit. All
   attempted channels failing is 502 `message_not_delivered` carrying the FAILED record. A
@@ -3237,14 +3243,20 @@ builds the same surface; change them only in lock-step.
   database refuse anything else.
 - **Actions reuse the rules they correct.** Adjust goes through `adjustAs`:
   the SAME per-adjustment (5000) and per-operator-per-24h (20000) ceilings,
-  counted against the AGENT as `posted_by`; a supervisor is not exempt,
-  SUPER_ADMIN still is; the customer gets the usual adjustment SMS. Adjust and
+  counted against the AGENT as `posted_by`; **nobody is exempt on this path, a
+  SUPER_ADMIN included** (`adjustAs(…, ceilingsForEveryRole = true)`): no one
+  moves points alone from the console. A larger correction is a SUPER_ADMIN's,
+  on the merchant screen (`POST /loyalty/transactions/adjust`, still exempt),
+  under their own name. The customer gets the usual adjustment SMS. Adjust and
   reverse refuse a token with no `userUuid` (`403 agent_identity_required`) —
   the daily ceiling keys on `posted_by`, and an unattributed adjustment would
   be uncounted. Reverse keeps its lock and `ALREADY_REVERSED`; unblock keeps
   BLOCKED-only `USER_NOT_BLOCKED`. Every target (membership, transaction,
   voucher, merchant) must belong to the looked-up customer or it is a 404 — the
-  same as not existing.
+  same as not existing. **`GET /lookups/{lookupId}/memberships/{userId}/merchants`**
+  lists what an adjustment's `merchantId` may name (the membership's programme,
+  by name, INACTIVE included, paged): a membership with no history otherwise had
+  nothing to take a merchant from. Programme data, so no activity row.
 - **A reason goes where the action keeps one, never into `detail`.** Adjust →
   the transaction reference + ledger (`@Size(max = 96)`: `REV-` + reference must
   still fit VARCHAR(100)); reverse → the ledger (`@Size(max = 192)`:
@@ -3268,9 +3280,20 @@ builds the same surface; change them only in lock-step.
   DELETE on either table in Postgres, so no future code path can add one.
   `support_message` is completed once by a guarded bulk UPDATE
   (`outcome = PENDING`), and `support_message_is_final` makes that the only
-  change a row can see: no DELETE, a completed row never changes, who/what/to
-  whom never changes (only `body` may, while PENDING). The same triggers guard
-  marketplace-service's copies (shared contract). A test that must AGE a row
+  change a row can see: a completed row never changes, who/what/to whom never
+  changes (only `body` may, while PENDING). **The one delete is retention
+  (V63)**: a `support_activity` or `support_message` row more than 12 months
+  old may be deleted, and the triggers refuse anything younger, whoever asks.
+  `SupportRetentionPurgeJob` does it nightly (ShedLock `supportRetentionPurge`,
+  plain SQL in the job so the repositories stay append-only by shape, cutoff
+  computed by Postgres on the trigger's clock). `support_note` is never deleted:
+  notes are case history, not a log. A longer period is
+  `LOYALTY_RETENTION_SUPPORT_MONTHS`; a shorter one needs a migration (a lower
+  setting is raised to 12). The schedule is the module's proposal for the data
+  protection officer; nothing is old enough to go before Sep 2027. The same triggers guard
+  marketplace-service's copies (shared contract); **V63's retention and the
+  failed-attempt hold are not mirrored there yet** — the same change is owed
+  in market-place. A test that must AGE a row
   goes through `SupportTestBase.maintenanceUpdate` (`session_replication_role =
   replica` for one transaction); the application has no such path. Pinned by
   `SupportMessageFlowTest.supportTablesAreAppendOnly`.
@@ -3310,7 +3333,10 @@ builds the same surface; change them only in lock-step.
   `LOYALTY_SUPPORT_WHATSAPP_MAX_CHARACTERS` (1000, ≤ 1600),
   `LOYALTY_SUPPORT_ALLOWED_LINK_HOSTS` (innbucks.co.zw),
   `LOYALTY_SUPPORT_MESSAGES_PER_AGENT_PER_HOUR` (60),
-  `LOYALTY_SUPPORT_MESSAGES_PER_RECIPIENT_PER_DAY` (5). Channels use the
+  `LOYALTY_SUPPORT_MESSAGES_PER_RECIPIENT_PER_DAY` (5),
+  `LOYALTY_SUPPORT_FAILED_MESSAGE_HOLD` (PT1H, 1 minute..24h);
+  `LOYALTY_RETENTION_SUPPORT_ENABLED` (true), `LOYALTY_RETENTION_SUPPORT_MONTHS`
+  (12, never fewer), `LOYALTY_RETENTION_SUPPORT_PURGE_CRON`. Channels use the
   existing `BANK_API_*` / `WHATSAPP_*` settings; a `change-me` WhatsApp key
   counts as unprovisioned.
 - **No gateway change.** It rides `loyalty-service-route` (`/loyalty/**`) and

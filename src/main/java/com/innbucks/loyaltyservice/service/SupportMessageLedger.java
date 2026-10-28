@@ -73,9 +73,14 @@ public class SupportMessageLedger {
             throw rateLimited("AGENT", perAgent, AGENT_WINDOW,
                     "You have sent " + perAgent + " customer messages in the last hour. Try again later.");
         }
+        // The customer's day: what was sent or is still pending counts for the
+        // whole window, a FAILED attempt only for failed-attempt-hold. One agent
+        // retrying a failing gateway would otherwise use up the day for every
+        // agent; a failure still holds its place for a while because a gateway
+        // timeout can hide a message that was delivered.
         int perRecipient = props.messages().perRecipientPerDay();
-        if (messages.countByRecipientMsisdnAndCreatedAtAfter(draft.recipientMsisdn(),
-                now.minus(RECIPIENT_WINDOW)) >= perRecipient) {
+        if (messages.countTowardRecipientLimit(draft.recipientMsisdn(), now.minus(RECIPIENT_WINDOW),
+                now.minus(props.messages().failedAttemptHold())) >= perRecipient) {
             throw rateLimited("RECIPIENT", perRecipient, RECIPIENT_WINDOW,
                     "This customer has already been sent " + perRecipient
                             + " support messages in the last 24 hours. Try again later.");

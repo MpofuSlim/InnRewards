@@ -16,7 +16,7 @@ import java.util.UUID;
 /**
  * Support messages. Not append-only — a row is completed once, PENDING to SENT
  * or FAILED — but the completion is a guarded bulk UPDATE, and there is no
- * delete: every attempt stays counted.
+ * delete here: the only delete is the retention sweep's, of rows past 12 months.
  */
 public interface SupportMessageRepository extends Repository<SupportMessage, UUID> {
 
@@ -27,8 +27,21 @@ public interface SupportMessageRepository extends Repository<SupportMessage, UUI
     /** Every attempt by one agent since {@code since}, all kinds — the per-agent limit. */
     long countByAgentUuidAndCreatedAtAfter(String agentUuid, Instant since);
 
-    /** Every attempt to one number since {@code since}, all kinds — the per-recipient limit. */
-    long countByRecipientMsisdnAndCreatedAtAfter(String recipientMsisdn, Instant since);
+    /**
+     * The per-recipient limit: attempts to one number since {@code since}, all
+     * kinds, where a FAILED attempt counts only if it is newer than
+     * {@code failedSince}. A sent or pending one counts for the whole window.
+     */
+    @Query("""
+            SELECT COUNT(m) FROM SupportMessage m
+             WHERE m.recipientMsisdn = :msisdn
+               AND m.createdAt > :since
+               AND (m.outcome <> com.innbucks.loyaltyservice.entity.SupportMessage.Outcome.FAILED
+                    OR m.createdAt > :failedSince)
+            """)
+    long countTowardRecipientLimit(@Param("msisdn") String recipientMsisdn,
+                                   @Param("since") Instant since,
+                                   @Param("failedSince") Instant failedSince);
 
     long countByRecipientMsisdn(String recipientMsisdn);
 

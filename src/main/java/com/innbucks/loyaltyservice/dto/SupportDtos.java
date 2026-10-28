@@ -186,6 +186,12 @@ public final class SupportDtos {
 
     public record Tier(int currentTier, Integer nextTier) {}
 
+    @Schema(description = "A merchant in a membership's loyalty programme: what `merchantId` on an "
+            + "adjustment may name. An INACTIVE merchant is listed too; adjustment accepts it.")
+    public record MerchantLine(UUID id, String name,
+                               @Schema(example = "ACTIVE", allowableValues = {"ACTIVE", "INACTIVE"}) String status,
+                               @Schema(example = "USD") String currency) {}
+
     // ---- Notes ----
 
     public record NoteResponse(UUID id, String subjectKind,

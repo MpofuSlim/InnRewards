@@ -50,6 +50,8 @@ class SupportSecurityTest extends SupportTestBase {
                 Arguments.of(HttpMethod.GET, l + "/ledger", null, SupportPermissions.READ, 404),
                 Arguments.of(HttpMethod.GET, l + "/vouchers", null, SupportPermissions.READ, 404),
                 Arguments.of(HttpMethod.GET, l + "/voucher-orders", null, SupportPermissions.READ, 404),
+                Arguments.of(HttpMethod.GET, l + "/memberships/" + UUID.randomUUID() + "/merchants", null,
+                        SupportPermissions.READ, 404),
                 Arguments.of(HttpMethod.GET, l + "/notes", null, SupportPermissions.READ, 404),
                 Arguments.of(HttpMethod.POST, l + "/notes", "{\"body\":\"hello\"}", SupportPermissions.MANAGE, 404),
                 Arguments.of(HttpMethod.GET, "/loyalty/support/activity", null, SupportPermissions.SUPERVISE, 200),

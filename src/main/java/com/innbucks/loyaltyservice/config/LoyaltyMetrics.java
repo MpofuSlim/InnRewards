@@ -29,6 +29,8 @@ public class LoyaltyMetrics {
     /** {@code table} tag values of {@code loyalty.retention.purged}. */
     public static final String TABLE_QR_TOKENS = "qr_tokens";
     public static final String TABLE_REFRESH_TOKENS = "loyalty_refresh_tokens";
+    public static final String TABLE_SUPPORT_ACTIVITY = "support_activity";
+    public static final String TABLE_SUPPORT_MESSAGE = "support_message";
 
     private final MeterRegistry registry;
 
@@ -95,6 +97,8 @@ public class LoyaltyMetrics {
         // purge deletes anything: increase() cannot see a series' first sample.
         retentionPurged(TABLE_QR_TOKENS);
         retentionPurged(TABLE_REFRESH_TOKENS);
+        retentionPurged(TABLE_SUPPORT_ACTIVITY);
+        retentionPurged(TABLE_SUPPORT_MESSAGE);
         for (String outcome : List.of(TILL_LOOKUP_FOUND, TILL_LOOKUP_NONE)) {
             tillBalanceLookup(outcome);
         }
@@ -140,15 +144,15 @@ public class LoyaltyMetrics {
 
     private Counter retentionPurged(String table) {
         return Counter.builder("loyalty.retention.purged")
-                .description("Rows deleted by the token retention purge, by table")
+                .description("Rows deleted by the retention purges, by table")
                 .baseUnit("rows")
                 .tag("table", table)
                 .register(registry);
     }
 
     /**
-     * Rows the retention purge ({@code TokenRetentionPurgeJob}) deleted from
-     * {@code table}. A flat line on a busy cell after the first weeks means the
+     * Rows a retention purge ({@code TokenRetentionPurgeJob},
+     * {@code SupportRetentionPurgeJob}) deleted from {@code table}. A flat line on a busy cell after the first weeks means the
      * job stopped running; a run's own counts are in its log line.
      */
     public void incRetentionPurged(String table, long rows) {

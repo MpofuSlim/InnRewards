@@ -283,7 +283,46 @@ class SupportMessageFlowTest extends SupportTestBase {
     }
 
     @Test
-    @DisplayName("the per-recipient limit (5 per 24h, every attempt) is 429 scope RECIPIENT and writes nothing")
+    @DisplayName("a failed attempt holds a place in the customer's day for one hour only, not 24")
+    void failedAttempts_holdTheCustomersQuotaForAnHourOnly() throws Exception {
+        Ctx c = customer();
+        String otherAgent = UUID.randomUUID().toString();
+        // Another agent's retries against a failing gateway, two hours ago.
+        for (int i = 0; i < 5; i++) {
+            seedMessageRow(otherAgent, c.phone(), "FAILED");
+        }
+        maintenanceUpdate("UPDATE support_message SET created_at = now() - interval '2 hours' "
+                + "WHERE recipient_msisdn = '" + c.phone() + "'");
+
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS", "Hello")))
+                .andExpect(status().isCreated());
+
+        // The same failures within the last hour still hold their places.
+        Ctx d = customer();
+        for (int i = 0; i < 5; i++) {
+            seedMessageRow(otherAgent, d.phone(), "FAILED");
+        }
+        mockMvc.perform(post(d.path()).header("Authorization", bearer(d.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS", "Hello")))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.data.scope").value("RECIPIENT"));
+
+        // A SENT message keeps its place for the whole 24h.
+        Ctx e = customer();
+        for (int i = 0; i < 5; i++) {
+            seedMessageRow(otherAgent, e.phone(), "SENT");
+        }
+        maintenanceUpdate("UPDATE support_message SET created_at = now() - interval '2 hours' "
+                + "WHERE recipient_msisdn = '" + e.phone() + "'");
+        mockMvc.perform(post(e.path()).header("Authorization", bearer(e.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS", "Hello")))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.data.scope").value("RECIPIENT"));
+    }
+
+    @Test
+    @DisplayName("the per-recipient limit (5 per 24h: sent, pending, and failures within the hour) is 429 scope RECIPIENT and writes nothing")
     void perRecipientLimit_is429() throws Exception {
         Ctx c = customer();
         UUID otherAgent = UUID.randomUUID();

@@ -103,8 +103,10 @@ public class SupportActionService {
      * Credits or debits points on one of the customer's memberships through
      * {@link TransactionService#adjustAs}: the SAME ceilings as a merchant
      * adjustment (per adjustment, and per operator per 24h keyed on
-     * {@code posted_by} = the agent), the SAME SUPER_ADMIN exemption and the
-     * SAME customer SMS. A supervisor is not exempt.
+     * {@code posted_by} = the agent) and the SAME customer SMS. Nobody is exempt
+     * here, a supervisor or a SUPER_ADMIN included: no one moves points alone
+     * from the console. A larger correction is a SUPER_ADMIN's, on the merchant
+     * screen, under their own name.
      */
     @Transactional
     public Dtos.TransactionResponse adjust(SupportAgent agent, UUID lookupId, SupportDtos.AdjustRequest req) {
@@ -123,7 +125,7 @@ public class SupportActionService {
         }
         String reason = cleanReason(req.reason());
         Dtos.TransactionResponse result = transactionService.adjustAs(membership.getTenantId(), membership.getId(),
-                merchant.getId(), points, reason, operator);
+                merchant.getId(), points, reason, operator, true);
         activity.record(agent, SupportActivity.Action.POINTS_ADJUSTED, SupportActivity.SUBJECT_PHONE,
                 customer.phone(), SupportActivityService.detail("lookupId", lookupId,
                         "transactionId", result.id(), "userId", membership.getId(),

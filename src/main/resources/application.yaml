@@ -484,6 +484,14 @@ loyalty:
     refresh-tokens-days: ${LOYALTY_RETENTION_REFRESH_TOKENS_DAYS:90}
     batch-size: ${LOYALTY_RETENTION_PURGE_BATCH_SIZE:1000}
     max-batches-per-run: ${LOYALTY_RETENTION_PURGE_MAX_BATCHES:500}
+    # Customer support logs (V63): support_activity and support_message rows
+    # older than support-months go, nightly. The database refuses anything
+    # younger than 12 months whatever this says, so a lower value is raised
+    # to 12. support_note is never swept. Shares batch-size and
+    # max-batches-per-run above.
+    support-enabled: ${LOYALTY_RETENTION_SUPPORT_ENABLED:true}
+    support-months: ${LOYALTY_RETENTION_SUPPORT_MONTHS:12}
+    support-purge-cron: ${LOYALTY_RETENTION_SUPPORT_PURGE_CRON:0 40 3 * * *}
   expiry-warning:
     days: ${LOYALTY_EXPIRY_WARNING_DAYS:7}
   public-test:
@@ -551,10 +559,16 @@ loyalty:
       # A link in a typed message must point at one of these hosts (or a
       # subdomain). Comma-separated.
       allowed-link-hosts: ${LOYALTY_SUPPORT_ALLOWED_LINK_HOSTS:innbucks.co.zw}
-      # Counted from support_message rows — every attempt, every kind,
-      # including voucher resends. Over either: 429 support_message_rate_limited.
+      # Counted from support_message rows, every kind, voucher resends
+      # included. Over either: 429 support_message_rate_limited. The agent's
+      # hour counts every attempt. The customer's day counts what was sent or
+      # is still pending, and a FAILED attempt only for failed-attempt-hold:
+      # one agent retrying a failing gateway must not use up the customer's
+      # day for every other agent. A failure still holds its place for a while
+      # because a gateway timeout can hide a delivered message.
       per-agent-per-hour: ${LOYALTY_SUPPORT_MESSAGES_PER_AGENT_PER_HOUR:60}
       per-recipient-per-day: ${LOYALTY_SUPPORT_MESSAGES_PER_RECIPIENT_PER_DAY:5}
+      failed-attempt-hold: ${LOYALTY_SUPPORT_FAILED_MESSAGE_HOLD:PT1H}
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}

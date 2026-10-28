@@ -34,6 +34,7 @@ import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.BAD_
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.CUSTOMER_360;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.FORBIDDEN;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.LOOKUP_NOT_FOUND;
+import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.MEMBERSHIP_NOT_FOUND;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.UNAUTHORIZED;
 
 /**
@@ -387,6 +388,55 @@ public class SupportCustomerController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return noStore(ApiResult.ok(customers.voucherOrders(SupportAgent.current(), lookupId, page, size)));
+    }
+
+    @GetMapping("/lookups/{lookupId}/memberships/{userId}/merchants")
+    @PreAuthorize(SupportPermissions.HAS_READ)
+    @Operation(summary = "The merchants in one membership's loyalty programme, by name",
+            description = """
+                    What a points adjustment's `merchantId` may name for this membership: every merchant \
+                    of the membership's programme, INACTIVE ones included (adjustment accepts them). Use \
+                    it when the customer has no history to take a merchant from. Programme data, not the \
+                    customer's, so it writes no activity row; the lookup must still be yours and live, \
+                    and `userId` one of the customer's memberships.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "A page of merchants",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "OK",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "name": "Example Pizza",
+                                            "status": "ACTIVE",
+                                            "currency": "USD"
+                                          }
+                                        ],
+                                        "page": 0, "size": 20, "totalElements": 1, "totalPages": 1,
+                                        "first": true, "last": true
+                                      }
+                                    }"""))),
+            @ApiResponse(responseCode = "400", description = "A page/size that is not a number",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = BAD_PAGE_PARAM))),
+            @ApiResponse(responseCode = "401", description = "No or invalid token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = UNAUTHORIZED))),
+            @ApiResponse(responseCode = "403", description = "Token lacks loyalty-support:read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN))),
+            @ApiResponse(responseCode = "404", description = "Lookup expired or not yours, or not one of the customer's memberships",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Membership", value = MEMBERSHIP_NOT_FOUND),
+                            @ExampleObject(name = "Lookup", value = LOOKUP_NOT_FOUND)}))
+    })
+    public ResponseEntity<ApiResult<PageResponse<SupportDtos.MerchantLine>>> merchants(
+            @PathVariable UUID lookupId,
+            @PathVariable UUID userId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return noStore(ApiResult.ok(customers.merchants(SupportAgent.current(), lookupId, userId, page, size)));
     }
 
     @GetMapping("/lookups/{lookupId}/notes")

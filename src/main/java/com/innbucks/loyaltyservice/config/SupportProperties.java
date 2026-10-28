@@ -43,14 +43,19 @@ public record SupportProperties(Duration lookupTtl, Messages messages) {
      * @param allowedLinkHosts      hosts a link in a typed message may point at;
      *                              subdomains of each are allowed too
      * @param perAgentPerHour       attempts one agent may make in a rolling hour
-     * @param perRecipientPerDay    attempts one number may receive in a rolling 24h
+     * @param perRecipientPerDay    messages one number may receive in a rolling 24h
+     * @param failedAttemptHold     how long a FAILED attempt keeps its place in
+     *                              {@code perRecipientPerDay}; a sent or still
+     *                              pending one keeps it for the whole 24h. Between
+     *                              1 minute and 24h.
      */
     public record Messages(String signature,
                            Integer smsMaxCharacters,
                            Integer whatsappMaxCharacters,
                            List<String> allowedLinkHosts,
                            Integer perAgentPerHour,
-                           Integer perRecipientPerDay) {
+                           Integer perRecipientPerDay,
+                           Duration failedAttemptHold) {
 
         /** The WhatsApp gateway refuses anything longer; a configured cap above it could never be met. */
         public static final int WHATSAPP_GATEWAY_CAP =
@@ -63,6 +68,7 @@ public record SupportProperties(Duration lookupTtl, Messages messages) {
             allowedLinkHosts = normaliseHosts(allowedLinkHosts == null ? List.of("innbucks.co.zw") : allowedLinkHosts);
             perAgentPerHour = perAgentPerHour == null ? 60 : perAgentPerHour;
             perRecipientPerDay = perRecipientPerDay == null ? 5 : perRecipientPerDay;
+            failedAttemptHold = failedAttemptHold == null ? Duration.ofHours(1) : failedAttemptHold;
             if (smsMaxCharacters < 1) {
                 throw new IllegalArgumentException("loyalty.support.messages.sms-max-characters must be positive");
             }
@@ -76,10 +82,23 @@ public record SupportProperties(Duration lookupTtl, Messages messages) {
             if (perAgentPerHour < 1 || perRecipientPerDay < 1) {
                 throw new IllegalArgumentException("loyalty.support.messages limits must be at least 1");
             }
+            if (failedAttemptHold.compareTo(Duration.ofMinutes(1)) < 0
+                    || failedAttemptHold.compareTo(Duration.ofHours(24)) > 0) {
+                throw new IllegalArgumentException(
+                        "loyalty.support.messages.failed-attempt-hold must be 1 minute..24 hours, was "
+                                + failedAttemptHold);
+            }
+        }
+
+        /** The shape before {@code failedAttemptHold}: the hold takes its default. */
+        public Messages(String signature, Integer smsMaxCharacters, Integer whatsappMaxCharacters,
+                        List<String> allowedLinkHosts, Integer perAgentPerHour, Integer perRecipientPerDay) {
+            this(signature, smsMaxCharacters, whatsappMaxCharacters, allowedLinkHosts, perAgentPerHour,
+                    perRecipientPerDay, null);
         }
 
         public static Messages defaults() {
-            return new Messages(null, null, null, null, null, null);
+            return new Messages(null, null, null, null, null, null, null);
         }
 
         /**

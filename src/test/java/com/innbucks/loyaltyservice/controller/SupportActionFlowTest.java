@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.entity.LoyaltyRefreshToken;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
+import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.repository.LoyaltyRefreshTokenRepository;
 import com.innbucks.loyaltyservice.security.SupportPermissions;
@@ -21,6 +22,7 @@ import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -136,6 +138,38 @@ class SupportActionFlowTest extends SupportTestBase {
                 .andExpect(jsonPath("$.code").value("merchant_not_found"));
         assertThat(transactionRepository.findTop50ByUserIdOrderByCreatedAtDesc(stranger.membership().getId()))
                 .hasSize(1);
+    }
+
+    @Test
+    @DisplayName("merchants: a membership's programme by name, inactive included; another phone's membership is 404")
+    void merchants_listTheMembershipsProgramme() throws Exception {
+        String phone = randomPhone();
+        Seeded s = seedCustomer(phone);
+        Merchant second = newMerchant(s.tenantId(), "Aardvark Grill");
+        second.setStatus(Merchant.Status.INACTIVE);
+        merchantRepository.save(second);
+        Seeded stranger = seedCustomer(randomPhone());
+        UUID supervisor = UUID.randomUUID();
+        String token = supervisorToken(supervisor);
+        UUID lookupId = lookup(token, phone);
+
+        MvcResult r = mockMvc.perform(get(url(lookupId, "/memberships/" + s.membership().getId() + "/merchants"))
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.content[0].id").value(second.getId().toString()))
+                .andExpect(jsonPath("$.data.content[0].status").value("INACTIVE"))
+                .andExpect(jsonPath("$.data.content[1].id").value(s.merchantId().toString()))
+                .andExpect(jsonPath("$.data.content[1].currency").value("USD"))
+                .andReturn();
+        assertThat(body(r).path("data").path("content").toString()).doesNotContain(stranger.merchantId().toString());
+
+        mockMvc.perform(get(url(lookupId, "/memberships/" + stranger.membership().getId() + "/merchants"))
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("membership_not_found"));
+        // Programme data, not the customer's: no activity row beyond the lookup.
+        assertThat(actionsOf(supervisor)).containsExactly("CUSTOMER_LOOKUP");
     }
 
     @Test
@@ -359,8 +393,8 @@ class SupportActionFlowTest extends SupportTestBase {
     }
 
     @Test
-    @DisplayName("SUPER_ADMIN (with the expanded perms) stays exempt from the adjustment ceiling")
-    void superAdmin_remainsExempt() throws Exception {
+    @DisplayName("SUPER_ADMIN is NOT exempt on the support path: no one moves points alone from the console")
+    void superAdmin_isBoundByTheCeilingsHere() throws Exception {
         String phone = randomPhone();
         Seeded s = seedCustomer(phone);
         String token = TestJwtFactory.builder("owner@example.com").role("SUPER_ADMIN").userId(UUID.randomUUID())
@@ -373,6 +407,15 @@ class SupportActionFlowTest extends SupportTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json("{'userId':'" + s.membership().getId() + "','merchantId':'" + s.merchantId()
                                 + "','points':6000,'reason':'Platform correction'}")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ADJUSTMENT_LIMIT_EXCEEDED"));
+        assertThat(transactionRepository.findTop50ByUserIdOrderByCreatedAtDesc(s.membership().getId())).hasSize(1);
+
+        // Within the ceiling it goes through as for anyone else.
+        mockMvc.perform(post(url(lookupId, "/points/adjust")).header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json("{'userId':'" + s.membership().getId() + "','merchantId':'" + s.merchantId()
+                                + "','points':500,'reason':'Platform correction'}")))
                 .andExpect(status().isOk());
     }
 

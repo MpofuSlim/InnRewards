@@ -173,8 +173,9 @@ public class SupportActionController {
                     their memberships and `merchantId` a merchant in that membership's programme. The \
                     SAME ceilings apply — at most 5000 points per adjustment and 20000 per operator per \
                     rolling 24h (LOYALTY_MAX_PER_ADJUSTMENT / LOYALTY_MAX_DAILY_ADJUSTMENT_PER_OPERATOR), \
-                    counted against YOU as the operator. A supervisor is not exempt; only SUPER_ADMIN is. \
-                    The customer gets the usual adjustment SMS.
+                    counted against YOU as the operator. Nobody is exempt here, a SUPER_ADMIN included: a \
+                    larger correction is made by a SUPER_ADMIN on the merchant adjustment screen, under \
+                    their own name. The customer gets the usual adjustment SMS.
 
                     `reason` (1..96) is stored where every adjustment keeps it: the transaction \
                     reference and the ledger entry. Writes a POINTS_ADJUSTED activity row.""")

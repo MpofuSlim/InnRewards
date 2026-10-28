@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.RedemptionService;
 import com.innbucks.loyaltyservice.service.TransactionService;
@@ -460,7 +461,8 @@ public class TransactionController {
                           "(SHOP_USER and SHOP_ADMIN tokens carry it) and `shopId` is ignored, so a " +
                           "cashier sees only their own outlet's earn / redemption / reversal feed. " +
                           "SUPER_ADMIN has no shop on its token and passes `?shopId=` to read any " +
-                          "shop's feed in the X-Tenant-Id tenant.")
+                          "shop's feed in the X-Tenant-Id tenant."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -551,7 +553,7 @@ public class TransactionController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.TransactionResponse>>> myShop(
             @RequestParam(value = "shopId", required = false) UUID requestedShopId,
             @ParameterObject Pageable pageable) {
@@ -559,9 +561,11 @@ public class TransactionController {
         // Shop staff are pinned to the shop on their token; a shopId they send is
         // ignored. SUPER_ADMIN oversees every shop and has none on its token, so
         // it names one — still bounded to the X-Tenant-Id tenant by MerchantAuthz.
+        // Read-only platform access names one the same way.
         UUID shopId = CallerDetails.currentShopId();
-        if (shopId == null && requestedShopId != null && CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN")) {
-            merchantAuthz.requireCallerAccessesShop(tenantId, requestedShopId);
+        if (shopId == null && requestedShopId != null
+                && (CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN") || ReportsPermissions.readsOnThisRequest())) {
+            merchantAuthz.requireCallerMayReadShop(tenantId, requestedShopId);
             shopId = requestedShopId;
         }
         if (shopId == null) {

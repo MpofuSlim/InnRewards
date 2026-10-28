@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.RedemptionRate;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.service.RedemptionRateService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -143,10 +144,11 @@ public class RedemptionRateController {
     }
 
     @GetMapping("/history")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     @Operation(summary = "Redemption rate history (SUPER_ADMIN only)",
             description = "Every rate ever set for the currency, newest-effective first — the audit trail of " +
-                    "who changed the platform's point valuation and when.")
+                    "who changed the platform's point valuation and when."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "History, newest-effective first",

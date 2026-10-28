@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ShopCheckoutService;
 import com.innbucks.loyaltyservice.service.ShopService;
@@ -261,7 +262,8 @@ public class ShopController {
                           "only a merchant (`merchantId` claim) gets that merchant's shops. MERCHANT_ADMIN, " +
                           "SUPER_ADMIN and tenant roles see every shop in the tenant. Pass `merchantId` to " +
                           "filter to one merchant's outlets; a filter outside the caller's scope returns an " +
-                          "empty page, not an error.")
+                          "empty page, not an error."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -306,7 +308,7 @@ public class ShopController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.ShopResponse>>> list(
             @Parameter(description = "Optional merchant filter — return only shops under this merchant.")
             @RequestParam(required = false) UUID merchantId,
@@ -317,7 +319,8 @@ public class ShopController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "Get a shop by id")
+    @Operation(summary = "Get a shop by id",
+            description = ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -373,7 +376,7 @@ public class ShopController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SHOP_USER','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> get(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.getForCaller(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Shop retrieved successfully", data));
@@ -561,7 +564,8 @@ public class ShopController {
             description = "Convenience endpoint for nested navigation. A token that names a shop sees only " +
                           "that shop here, and a token naming a different merchant is refused " +
                           "(NOT_MERCHANT_OWNER). Otherwise returns every shop belonging " +
-                          "to the given merchant in the current tenant.")
+                          "to the given merchant in the current tenant."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -611,7 +615,7 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No merchant with that id in this tenant")
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<List<Dtos.ShopResponse>>> listForMerchant(@PathVariable UUID merchantId) {
         List<Dtos.ShopResponse> data = shops.listForMerchant(tenantContext.requireTenantId(), merchantId);
         return ResponseEntity.ok(ApiResult.ok("Shops retrieved successfully", data));

@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherDetail;
 import com.innbucks.loyaltyservice.dto.VoucherReportDtos.VoucherReport;
 import com.innbucks.loyaltyservice.entity.Voucher;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ReportingService;
 import com.innbucks.loyaltyservice.service.SuperAppService;
@@ -56,7 +57,7 @@ public class ReportingController {
      *  (object-level authz for merchant-scoped reports). Returns the tenant id. */
     private UUID merchantAuthzTenant(UUID merchantId) {
         UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        merchantAuthz.requireCallerMayReadMerchant(tenantId, merchantId);
         return tenantId;
     }
 
@@ -67,9 +68,15 @@ public class ReportingController {
      * named, the caller's readable merchants ({@code null} = every merchant, for
      * SUPER_ADMIN and the tenant/platform admin roles).
      */
+    /** A voucher report as this caller may see it: without codes for read-only
+     *  platform access ({@link ReportsPermissions#codesWithheld()}). */
+    private static VoucherReport forCaller(VoucherReport report) {
+        return ReportsPermissions.codesWithheld() ? report.withoutCodes() : report;
+    }
+
     private java.util.Set<UUID> reportScope(UUID tenantId, UUID merchantId) {
         if (merchantId != null) {
-            merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+            merchantAuthz.requireCallerMayReadMerchant(tenantId, merchantId);
             return java.util.Set.of(merchantId);
         }
         return merchantAuthz.readableMerchants(tenantId);
@@ -78,14 +85,14 @@ public class ReportingController {
     /** A merchant or shop named in the report filters must be the caller's. */
     private void requireFilterOwnership(UUID tenantId, com.innbucks.loyaltyservice.dto.VoucherReportFilters f) {
         if (f == null) return;
-        if (f.shopId() != null) merchantAuthz.requireCallerAccessesShop(tenantId, f.shopId());
-        if (f.merchantId() != null) merchantAuthz.requireCallerAdministersMerchant(tenantId, f.merchantId());
+        if (f.shopId() != null) merchantAuthz.requireCallerMayReadShop(tenantId, f.shopId());
+        if (f.merchantId() != null) merchantAuthz.requireCallerMayReadMerchant(tenantId, f.merchantId());
     }
 
     /** Resolves the tenant AND enforces the caller may access {@code shopId}. */
     private UUID shopAuthzTenant(UUID shopId) {
         UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
+        merchantAuthz.requireCallerMayReadShop(tenantId, shopId);
         return tenantId;
     }
 
@@ -93,7 +100,8 @@ public class ReportingController {
     @Operation(summary = "Operator dashboard (platform-wide)",
             description = "Cross-tenant aggregates for the platform operator: total tenants, active " +
                           "merchants, transactions/vouchers/points today, fraud attempts in last 24h, " +
-                          "invoice and voucher-expiry counts. No tenant header required.")
+                          "invoice and voucher-expiry counts. No tenant header required."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -124,7 +132,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.OperatorDashboard>> operator() {
         Dtos.OperatorDashboard data = reporting.operator();
         return ResponseEntity.ok(ApiResult.ok("Operator dashboard retrieved successfully", data));
@@ -133,7 +141,8 @@ public class ReportingController {
     @GetMapping("/tenant")
     @Operation(summary = "Tenant dashboard",
             description = "Per-tenant rollup for the current X-Tenant-Id: merchants, active campaigns, " +
-                          "outstanding/expired vouchers, total wallet balance, pending invoices." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
+                          "outstanding/expired vouchers, total wallet balance, pending invoices." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -159,7 +168,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.TenantDashboard>> tenant() {
         UUID tenantId = tenantContext.requireTenantId();
         Dtos.TenantDashboard data = reporting.tenant(tenantId, merchantAuthz.readableMerchants(tenantId));
@@ -184,7 +193,8 @@ public class ReportingController {
                           "merchants their organization owns; SHOP_ADMIN sees only the " +
                           "merchant pinned in their token. Out-of-scope merchants are absent rather " +
                           "than 403 — the list is \"everything you administer\". Paginated (name-ordered); " +
-                          "page numbers are per-caller stable. Requires X-Tenant-Id.")
+                          "page numbers are per-caller stable. Requires X-Tenant-Id."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -330,7 +340,7 @@ public class ReportingController {
                                     }
                                     """)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantFullReport>>> merchantsFull(
             @ParameterObject Pageable pageable) {
         PageResponse<Dtos.MerchantFullReport> data = PageResponse.from(
@@ -341,7 +351,8 @@ public class ReportingController {
     @GetMapping("/merchant/{id}")
     @Operation(summary = "Merchant dashboard",
             description = "Per-merchant operational view: redemptions today, vouchers issued/redeemed, points " +
-                          "issued/redeemed, fraud alerts in last 24h, next invoice date and estimated amount.")
+                          "issued/redeemed, fraud alerts in last 24h, next invoice date and estimated amount."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -401,10 +412,10 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.MerchantDashboard>> merchant(@PathVariable UUID id) {
         UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, id);
+        merchantAuthz.requireCallerMayReadMerchant(tenantId, id);
         Dtos.MerchantDashboard data = reporting.merchant(tenantId, id);
         return ResponseEntity.ok(ApiResult.ok("Merchant dashboard retrieved successfully", data));
     }
@@ -634,7 +645,8 @@ public class ReportingController {
     @GetMapping("/transactions/mix")
     @Operation(summary = "Transaction mix (counts per type)",
             description = "Returns a map of `TransactionType -> count` for the (optional) merchant within " +
-                          "[from, to]. Use for revenue-mix charts. `from` and `to` are required ISO dates.")
+                          "[from, to]. Use for revenue-mix charts. `from` and `to` are required ISO dates."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -683,7 +695,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Map<String, Long>>> transactionMix(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
@@ -696,7 +708,8 @@ public class ReportingController {
     @Operation(summary = "Points report (per merchant, period-bounded)",
             description = "Sum of points issued and redeemed at this merchant between `from` and `to` (UTC " +
                           "calendar days, inclusive). Complements `/reports/merchant/{id}` which is hardcoded " +
-                          "to today only. `netPoints = pointsIssued - pointsRedeemed`.")
+                          "to today only. `netPoints = pointsIssued - pointsRedeemed`."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -769,13 +782,13 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.PointsReport>> pointsForMerchant(
             @PathVariable UUID merchantId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        merchantAuthz.requireCallerMayReadMerchant(tenantId, merchantId);
         Dtos.PointsReport data = reporting.pointsForMerchant(
                 tenantId, merchantId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
@@ -945,7 +958,8 @@ public class ReportingController {
                           "(type/status/reference/timestamp), amount and points awarded (newest first; page " +
                           "with `page`/`size`). Only transactions stamped with `shopId` count — those from " +
                           "the shop-checkout / guest-checkout flow. Used by the per-outlet leaderboard and " +
-                          "the outlet transaction ledger on the merchant dashboard.")
+                          "the outlet transaction ledger on the merchant dashboard."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1030,14 +1044,14 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<Dtos.ShopPointsReport>> pointsForShop(
             @PathVariable UUID shopId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @ParameterObject Pageable pageable) {
         UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAccessesShop(tenantId, shopId);
+        merchantAuthz.requireCallerMayReadShop(tenantId, shopId);
         Dtos.ShopPointsReport data = reporting.pointsForShop(
                 tenantId, shopId, from, to, pageable);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
@@ -1050,7 +1064,8 @@ public class ReportingController {
                           "endpoint returns counts only (kept for backwards-compat); this one is the " +
                           "report your donut-chart actually wants. Optional `merchantId` narrows to one " +
                           "merchant (403 NOT_MERCHANT_OWNER for one you do not administer); omit it for " +
-                          "everything you may see." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
+                          "everything you may see." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1072,7 +1087,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<List<Dtos.PointsByTypeRow>>> pointsByType(
             @RequestParam(required = false) UUID merchantId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -1089,7 +1104,8 @@ public class ReportingController {
                           "pointsRedeemed / transactionCount. Days with no activity are filled with zeros " +
                           "so the FE always gets a contiguous series and can render a chart without holes. " +
                           "Optional `merchantId` narrows to one merchant. Cap the range at a few months — " +
-                          "the response is one JSON object per day, no streaming.")
+                          "the response is one JSON object per day, no streaming."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1111,7 +1127,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<List<Dtos.PointsTimeSeriesPoint>>> pointsTimeSeries(
             @RequestParam(required = false) UUID merchantId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -1126,7 +1142,8 @@ public class ReportingController {
     @Operation(summary = "Recent fraud attempts",
             description = "Returns rejected redemption attempts (signature mismatch, expired, duplicate, " +
                           "wrong-merchant, blocked-user, blocked-device) for the current tenant. Used by " +
-                          "compliance dashboards and to triage velocity-blocked users." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
+                          "compliance dashboards and to triage velocity-blocked users." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1171,11 +1188,16 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.FraudAttemptResponse>>> fraud(@ParameterObject Pageable pageable) {
         UUID tenantId = tenantContext.requireTenantId();
-        PageResponse<Dtos.FraudAttemptResponse> data = PageResponse.from(
-                reporting.recentFraud(tenantId, merchantAuthz.readableMerchants(tenantId)), pageable);
+        List<Dtos.FraudAttemptResponse> rows = reporting.recentFraud(tenantId, merchantAuthz.readableMerchants(tenantId));
+        // A refusal records the REAL code of a live voucher (wrong merchant, not
+        // the assignee, a blocked holder), so a fraud row can be spendable.
+        if (ReportsPermissions.codesWithheld()) {
+            rows = rows.stream().map(Dtos.FraudAttemptResponse::withoutCode).toList();
+        }
+        PageResponse<Dtos.FraudAttemptResponse> data = PageResponse.from(rows, pageable);
         return ResponseEntity.ok(ApiResult.ok("Fraud attempts retrieved successfully", data));
     }
 
@@ -1191,7 +1213,8 @@ public class ReportingController {
                           "row isn't on any invoice — either its period hasn't been invoiced yet, or the " +
                           "merchant had no billable voucher activity that period and no invoice was raised " +
                           "(invoice totals come from voucher fees, not points, and zero-total invoices are " +
-                          "skipped). A blank is a real answer, not missing data.")
+                          "skipped). A blank is a real answer, not missing data."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1212,7 +1235,7 @@ public class ReportingController {
                     description = "Missing/invalid date range"
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public void exportCsv(@RequestParam(required = false) UUID merchantId,
                           @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                           @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
@@ -1322,12 +1345,13 @@ public class ReportingController {
     @GetMapping("/vouchers/operator")
     @Operation(summary = "Voucher report — platform-wide (operator)",
             description = "Every voucher across every real tenant (the internal ticketing container tenant is " +
-                          "excluded). Summary aggregates + paginated per-voucher detail. No tenant header needed.")
+                          "excluded). Summary aggregates + paginated per-voucher detail. No tenant header needed."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(
             responseCode = "200", description = "Report retrieved",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                     examples = @ExampleObject(name = "Operator voucher report", value = VOUCHER_REPORT_EXAMPLE))))
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<VoucherReport>> vouchersOperator(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -1335,7 +1359,7 @@ public class ReportingController {
             @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             @ParameterObject Pageable pageable) {
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForOperator(status, from, to, filters, pageable)));
+                forCaller(reporting.vouchersForOperator(status, from, to, filters, pageable))));
     }
 
     @GetMapping("/vouchers/tenant")
@@ -1345,12 +1369,13 @@ public class ReportingController {
                           "shopId, currency, paymentMethod (FREE / ONLINE / INNBUCKS / ECOCASH / ONLINE_CARD / CASH / " +
                           "CARD_POS), issuedBy, phone (recipient or sender, any spelling), q (code / name / phone / " +
                           "issuer email), bulk, batchId, campaign, expiresFrom/expiresTo, redeemedFrom/redeemedTo, " +
-                          "minValue/maxValue. Sort with `sort=issuedAt,desc` / `value` / `expiresAt` / `redeemedAt`." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant.")
+                          "minValue/maxValue. Sort with `sort=issuedAt,desc` / `value` / `expiresAt` / `redeemedAt`." + "\n\n**Scope:** a MERCHANT_ADMIN sees only the merchants its organization owns, a SHOP_ADMIN only the merchant on its token; SUPER_ADMIN sees the whole tenant."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(
             responseCode = "200", description = "Report retrieved",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                     examples = @ExampleObject(name = "Tenant voucher report", value = VOUCHER_REPORT_EXAMPLE))))
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<VoucherReport>> vouchersTenant(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -1360,15 +1385,16 @@ public class ReportingController {
         UUID tenantId = tenantContext.requireTenantId();
         requireFilterOwnership(tenantId, filters);
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForTenant(tenantId, merchantAuthz.readableMerchants(tenantId),
-                        status, from, to, filters, pageable)));
+                forCaller(reporting.vouchersForTenant(tenantId, merchantAuthz.readableMerchants(tenantId),
+                        status, from, to, filters, pageable))));
     }
 
     @GetMapping("/vouchers/merchant/{merchantId}")
     @Operation(summary = "Voucher report — one merchant",
             description = "Vouchers issued under {merchantId}. Authorisation runs before any row is read: a merchant " +
                           "outside your tenant is 404 (its existence is never confirmed), and a merchant you do not " +
-                          "administer is 403 NOT_MERCHANT_OWNER.")
+                          "administer is 403 NOT_MERCHANT_OWNER."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report retrieved",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -1382,7 +1408,7 @@ public class ReportingController {
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Not found", value = MERCHANT_NOT_FOUND_EXAMPLE)))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<VoucherReport>> vouchersMerchant(
             @PathVariable UUID merchantId,
             @RequestParam(required = false) Voucher.Status status,
@@ -1392,10 +1418,10 @@ public class ReportingController {
             @ParameterObject Pageable pageable) {
         UUID tenantId = merchantAuthzTenant(merchantId);
         if (filters != null && filters.shopId() != null) {
-            merchantAuthz.requireCallerAccessesShop(tenantId, filters.shopId());
+            merchantAuthz.requireCallerMayReadShop(tenantId, filters.shopId());
         }
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForMerchant(tenantId, merchantId, status, from, to, filters, pageable)));
+                forCaller(reporting.vouchersForMerchant(tenantId, merchantId, status, from, to, filters, pageable))));
     }
 
     @GetMapping("/vouchers/shop/{shopId}")
@@ -1403,7 +1429,8 @@ public class ReportingController {
             description = "Vouchers issued from {shopId}. A shop outside your tenant is 404 (its existence is never " +
                           "confirmed); a shop you are not assigned to is 403 NOT_SHOP_MEMBER, and a MERCHANT_ADMIN " +
                           "who does not administer the shop's owning merchant gets 403 NOT_MERCHANT_OWNER. Only " +
-                          "vouchers issued after shop attribution landed carry a shop_id; older ones won't appear here.")
+                          "vouchers issued after shop attribution landed carry a shop_id; older ones won't appear here."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report retrieved",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -1423,7 +1450,7 @@ public class ReportingController {
                             examples = @ExampleObject(name = "Not found",
                                     value = "{ \"code\": \"404 NOT_FOUND\", \"message\": \"shop not found\", \"data\": null }")))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<VoucherReport>> vouchersShop(
             @PathVariable UUID shopId,
             @RequestParam(required = false) Voucher.Status status,
@@ -1432,7 +1459,7 @@ public class ReportingController {
             @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             @ParameterObject Pageable pageable) {
         return ResponseEntity.ok(ApiResult.ok("Voucher report retrieved successfully",
-                reporting.vouchersForShop(shopAuthzTenant(shopId), shopId, status, from, to, filters, pageable)));
+                forCaller(reporting.vouchersForShop(shopAuthzTenant(shopId), shopId, status, from, to, filters, pageable))));
     }
 
     @GetMapping("/vouchers/detail/{id}")
@@ -1440,7 +1467,8 @@ public class ReportingController {
             description = "`{id}` is the voucher id (UUID) or its code, raw or grouped "
                           + "(`2615207387054439`, `2615-2073-8705-4439` and `2615 2073 8705 4439` all work). " +
                           "Every field of one voucher plus its complete redemption history (who redeemed it, when, " +
-                          "at which merchant/outlet, success/rejected + reason). Tenant-guarded.")
+                          "at which merchant/outlet, success/rejected + reason). Tenant-guarded."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Voucher found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -1513,11 +1541,12 @@ public class ReportingController {
                             examples = @ExampleObject(name = "Not found",
                                     value = "{ \"code\": \"404 NOT_FOUND\", \"message\": \"voucher not found\", \"data\": null }")))
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<VoucherDetail>> voucherDetail(@PathVariable String id) {
         UUID tenantId = tenantContext.requireTenantId();
+        VoucherDetail detail = reporting.voucherDetail(tenantId, id, merchantAuthz.readableMerchants(tenantId));
         return ResponseEntity.ok(ApiResult.ok("Voucher detail retrieved successfully",
-                reporting.voucherDetail(tenantId, id, merchantAuthz.readableMerchants(tenantId))));
+                ReportsPermissions.codesWithheld() ? detail.withoutCode() : detail));
     }
 
     @GetMapping(value = "/vouchers/export", produces = "text/csv")
@@ -1527,7 +1556,8 @@ public class ReportingController {
                           "The code column is grouped in fours with hyphens (7183-5026-4917-4053) — a raw " +
                           "16-digit number opened in a spreadsheet loses its last digit (15 significant digits) " +
                           "and would never redeem; hyphens keep the cell as text, and redeem accepts the code " +
-                          "with them. Returns Content-Disposition: attachment; filename=vouchers.csv.")
+                          "with them. Returns Content-Disposition: attachment; filename=vouchers.csv."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
             content = @Content(mediaType = "text/csv", examples = @ExampleObject(name = "CSV", value =
                     "id,code,status,tenantId,merchantId,merchantName,shopId,shopName,templateId,templateName,batchId,"
@@ -1542,7 +1572,7 @@ public class ReportingController {
                     + "SINGLE_USE,5.0000,USD,0,WHATSAPP,spring-2026,2026-06-01T08:00:00Z,2026-06-01T08:00:05Z,2026-06-02T18:20:00Z,"
                     + "2026-06-14T09:31:00Z,2026-12-31T23:59:59Z,false,1,"
                     + "Tawanda Mpofu,+263782608767,,,\\n"))))
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public void vouchersExport(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -1560,20 +1590,22 @@ public class ReportingController {
         requireFilterOwnership(tenantId, filters);
         java.util.Set<UUID> scope = "TENANT".equals(level) ? merchantAuthz.readableMerchants(tenantId) : null;
         try (CsvResponseWriter out = new CsvResponseWriter(response, "vouchers.csv")) {
-            reporting.writeVoucherCsv(out, level, tenantId, scopeId, scope, status, from, to, filters);
+            reporting.writeVoucherCsv(out, level, tenantId, scopeId, scope, status, from, to, filters,
+                    ReportsPermissions.codesWithheld());
         }
     }
 
     @GetMapping(value = "/vouchers/export/operator", produces = "text/csv")
     @Operation(summary = "Voucher CSV export — platform-wide (operator)",
             description = "One row per voucher across every real tenant (ticketing container tenant excluded). " +
-                          "SUPER_ADMIN only. Same columns as the tenant-scoped export.")
+                          "SUPER_ADMIN only. Same columns as the tenant-scoped export."
+                    + ReportsPermissions.DOC_CODES_WITHHELD)
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV stream",
             content = @Content(mediaType = "text/csv",
                     examples = @ExampleObject(name = "CSV header",
                             value = "id,code,status,tenantId,merchantId,merchantName,...,expired,redemptionCount,"
                                     + "senderName,senderPhone,transferredAt,transferredFromUserId,transferredFromPhone\\n"))))
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public void vouchersExportOperator(
             @RequestParam(required = false) Voucher.Status status,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -1581,7 +1613,8 @@ public class ReportingController {
             @ParameterObject com.innbucks.loyaltyservice.dto.VoucherReportFilters filters,
             jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         try (CsvResponseWriter out = new CsvResponseWriter(response, "vouchers-operator.csv")) {
-            reporting.writeVoucherCsv(out, "OPERATOR", null, null, null, status, from, to, filters);
+            reporting.writeVoucherCsv(out, "OPERATOR", null, null, null, status, from, to, filters,
+                    ReportsPermissions.codesWithheld());
         }
     }
 }

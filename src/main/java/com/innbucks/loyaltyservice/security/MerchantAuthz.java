@@ -136,9 +136,44 @@ public class MerchantAuthz {
     }
 
     /**
+     * {@link #requireCallerAdministersMerchant} for a READ: a GET handler that
+     * shows one merchant's figures calls this instead, so read-only platform
+     * access ({@link ReportsPermissions#READ}, on a GET or HEAD) reads any
+     * merchant of the tenant. Everyone else gets exactly the write-side check.
+     *
+     * <p>Never call this from a write path. It would not widen one — the reader
+     * branch is dead on anything but GET/HEAD — but the write-side check is
+     * what a write means, and a reader must fail it.
+     */
+    public Merchant requireCallerMayReadMerchant(UUID tenantId, UUID merchantId) {
+        if (merchantId != null && ReportsPermissions.readsOnThisRequest()) {
+            // Same tenant-scoped 404 as the write-side check: a merchant in
+            // another tenant is absent, never confirmed by a 403.
+            return merchants.findById(merchantId)
+                    .filter(m -> m.getTenantId().equals(tenantId))
+                    .orElseThrow(() -> LoyaltyException.notFound("merchant"));
+        }
+        return requireCallerAdministersMerchant(tenantId, merchantId);
+    }
+
+    /**
+     * {@link #requireCallerAccessesShop} for a READ, on the same terms as
+     * {@link #requireCallerMayReadMerchant}.
+     */
+    public Shop requireCallerMayReadShop(UUID tenantId, UUID shopId) {
+        if (shopId != null && ReportsPermissions.readsOnThisRequest()) {
+            return shops.findById(shopId)
+                    .filter(s -> s.getTenantId().equals(tenantId))
+                    .orElseThrow(() -> LoyaltyException.notFound("shop"));
+        }
+        return requireCallerAccessesShop(tenantId, shopId);
+    }
+
+    /**
      * The merchants in {@code tenantId} whose figures the caller may READ, for
      * reports that aggregate across a tenant. {@code null} means every merchant
-     * (SUPER_ADMIN and the tenant/platform admin roles); otherwise the set is
+     * (SUPER_ADMIN, the tenant/platform admin roles, and read-only platform
+     * access on a GET/HEAD); otherwise the set is
      * exactly the merchants {@link #callerMayRead} admits — possibly empty,
      * which reads as "nothing", never as "everything".
      *
@@ -179,7 +214,8 @@ public class MerchantAuthz {
     }
 
     private static boolean readsEveryMerchant() {
-        return CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN");
+        return CallerDetails.hasAnyRole("ROLE_SUPER_ADMIN", "ROLE_TENANT_ADMIN", "ROLE_PLATFORM_ADMIN")
+                || ReportsPermissions.readsOnThisRequest();
     }
 
     private static LoyaltyException notOwner() {

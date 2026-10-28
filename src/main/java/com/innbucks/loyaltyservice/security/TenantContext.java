@@ -22,7 +22,9 @@ import java.util.UUID;
  * <p>Membership is enforced once per request in {@link #requireTenant()}: the
  * authenticated principal must be a member of the tenant (row in
  * {@code tenant_members}), unless they hold the SUPER_ADMIN role — SUPER_ADMIN
- * acts across every tenant on the platform without needing membership rows.
+ * acts across every tenant on the platform without needing membership rows —
+ * or hold {@link ReportsPermissions#READ} on a GET/HEAD request (read-only
+ * platform access: every tenant readable, none writable).
  *
  * <p>Members are attached when a tenant is registered ({@code POST
  * /loyalty/tenants}, keyed by the user's UUID) and removed via
@@ -106,6 +108,14 @@ public class TenantContext {
             throw new AccessDeniedException("Authentication required to access tenant data");
         }
         if (hasRole(authentication, "ROLE_SUPER_ADMIN")) {
+            return;
+        }
+        // Read-only platform access reads every tenant the way SUPER_ADMIN does,
+        // and is a member of none. ON A GET OR HEAD ONLY: a write keeps the
+        // membership check below, so a write endpoint that ever let the
+        // permission in would still be refused here. Resolution above is
+        // unchanged — the tenant header is still required and still validated.
+        if (ReportsPermissions.readsOnThisRequest(request)) {
             return;
         }
         // A plain CUSTOMER is exempt, because membership can never admit one and

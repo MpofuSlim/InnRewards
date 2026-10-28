@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Campaign;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.RuleAdminService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -219,7 +220,8 @@ public class RuleController {
             description = "Returns every rule belonging to the tenant — both merchant-specific and tenant-wide. " +
                           "Useful to audit which earn rates, earning floors and voucher fees are currently in " +
                           "effect. A null fee field means \"not configured at this level\": the merchant " +
-                          "inherits the tenant-wide (global) rule's value.")
+                          "inherits the tenant-wide (global) rule's value."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -288,7 +290,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<LoyaltyRule>>> list(@ParameterObject Pageable pageable) {
         PageResponse<LoyaltyRule> data = PageResponse.from(
                 rules.listRules(tenantContext.requireTenantId(), pageable));
@@ -487,7 +489,8 @@ public class RuleController {
     @GetMapping("/campaigns")
     @Operation(summary = "List campaigns for the current tenant",
             description = "Returns past, current, and future campaigns. Filter client-side by " +
-                          "`startsAt`/`endsAt` to find live ones.")
+                          "`startsAt`/`endsAt` to find live ones."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -527,7 +530,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Campaign>>> listCampaigns(@ParameterObject Pageable pageable) {
         PageResponse<Campaign> data = PageResponse.from(
                 rules.listCampaigns(tenantContext.requireTenantId(), pageable));

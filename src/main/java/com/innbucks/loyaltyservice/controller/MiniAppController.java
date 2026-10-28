@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.MiniAppService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -42,7 +43,8 @@ public class MiniAppController {
             description = "Returns every mini-app available to the current tenant, optionally filtered to a " +
                           "single merchant via the `merchantId` query param. Each manifest carries the " +
                           "entry URL, icon, and human-readable name the SuperApp shell renders on the home " +
-                          "screen.")
+                          "screen."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -85,7 +87,7 @@ public class MiniAppController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.MiniAppManifest>>> manifest(
             @RequestParam(required = false) UUID merchantId,
             @ParameterObject Pageable pageable) {

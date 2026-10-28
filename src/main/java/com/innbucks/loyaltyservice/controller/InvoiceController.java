@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.security.ReportsPermissions;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.InvoicingService;
 import com.innbucks.loyaltyservice.service.MerchantService;
@@ -52,7 +53,8 @@ public class InvoiceController {
     @GetMapping("/merchant/{merchantId}")
     @Operation(summary = "List invoices for a merchant",
             description = "Returns every invoice ever generated for the merchant, most recent first. " +
-                          "Includes paid, pending, and overdue. Used by the merchant billing dashboard.")
+                          "Includes paid, pending, and overdue. Used by the merchant billing dashboard."
+                    + ReportsPermissions.DOC)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -124,11 +126,11 @@ public class InvoiceController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN') or " + ReportsPermissions.HAS_READ)
     public ResponseEntity<ApiResult<PageResponse<Dtos.InvoiceResponse>>> listForMerchant(@PathVariable UUID merchantId,
                                                                                           @ParameterObject Pageable pageable) {
         UUID tenantId = tenantContext.requireTenantId();
-        merchantAuthz.requireCallerAdministersMerchant(tenantId, merchantId);
+        merchantAuthz.requireCallerMayReadMerchant(tenantId, merchantId);
         PageResponse<Dtos.InvoiceResponse> data = PageResponse.from(
                 invoicing.listForMerchant(tenantId, merchantId, pageable));
         return ResponseEntity.ok(ApiResult.ok("Invoices retrieved successfully", data));

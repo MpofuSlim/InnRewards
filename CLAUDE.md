@@ -2424,6 +2424,59 @@ and the purchase-order shop pin exempts it. Still open by design: a
 tenant-scoped GET needs `X-Tenant-Id` (there is no cross-tenant list), and a
 detail read sent with the wrong tenant is 403 `CROSS_TENANT`.
 
+## Read-only platform access (`loyalty-reports:read`)
+
+**A holder of `loyalty-reports:read` reads what SUPER_ADMIN reads, in every
+tenant and merchant, through GET endpoints only, and changes nothing.** It
+exists for a developer account (`PRODUCT_OFFICER` + a custom role): Ticketize
+treats that role as a read-only platform reader, and loyalty had no read-only
+platform role at all (TENANT_ADMIN and PLATFORM_ADMIN can write). So it is a
+permission, not a role. The code is PLATFORM scope in user-service's
+`PermissionCatalog`; `security/ReportsPermissions` holds it and must stay
+character-identical.
+
+- **What it grants:** 34 GETs carry `or hasAuthority('loyalty-reports:read')`:
+  every report under `/reports/**` except the customer-level ones, merchants,
+  shops, rules and campaigns, invoices, tenants (list, the picker, members),
+  `/transactions/my-shop?shopId=`, `GET /vouchers?status=`, and both rate
+  histories. `ReadOnlyPlatformAccessTest.GRANTED` is the list; adding a GET to it
+  is a decision, not a copied annotation.
+- **What it never does:**
+  - **No write.** `ReadOnlyPlatformAccessTest` walks every non-GET handler of
+    every controller (method and class `@PreAuthorize`; a `@RequestMapping` with
+    no method counts as a write) and fails if one names the permission.
+  - **No voucher code.** A code is a bearer credential. The voucher list, every
+    voucher report row, the detail, both CSV exports and the fraud feed (whose
+    rows carry the REAL code of live vouchers: wrong merchant, not the
+    assignee, a blocked holder) return `code: null` to a holder
+    (`ReportsPermissions.codesWithheld()`). SUPER_ADMIN keeps codes: its `*`
+    wildcard puts the permission in its token too, so "holds the permission"
+    alone must never be the redaction test.
+  - **No customer-level read.** `/reports/user/**`, `/reports/points/user/**`,
+    `/users/{id}/transactions` and the by-phone voucher list stay closed: one
+    person's activity is support work, which has its own logged surface. So
+    does the till's order poll (`/vouchers/purchase/{ref}`, which carries the
+    issued code).
+- **The scope helpers widen on a GET or HEAD only** (`readsOnThisRequest`):
+  `TenantContext` skips membership (resolution is unchanged: `X-Tenant-Id` is
+  still required and validated), `MerchantAuthz.readableMerchants` is `null`
+  and `callerMayRead` true, and `ReportingService.callerMaySeeMerchant` follows.
+  On any other method, and outside a request, the permission widens nothing.
+  So a write that ever let it through its `@PreAuthorize` would still meet
+  every membership and ownership check.
+- **Single-merchant reads use the read twins**,
+  `requireCallerMayReadMerchant` / `requireCallerMayReadShop`: the reader on a
+  GET, else exactly the write-side check. `requireCallerAdministersMerchant`,
+  `requireCallerAccessesShop` and the services' role lists are untouched; a
+  reader fails every one of them, whatever the method. Never call a read twin
+  from a write path.
+- **Foundry portal:** show the InnRewards tile when the session's `permissions`
+  holds `loyalty-reports:read`, and hide every write button for that account.
+- Pinned by `ReadOnlyPlatformAccessTest`, `ReadOnlyPlatformAccessSecurityTest`
+  (real JWT, real chain), `TenantContextReadOnlyAccessTest`,
+  `MerchantAuthzReadOnlyAccessTest`, `ReportsPermissionsTest` and
+  `VoucherReportDtosWithoutCodeTest`.
+
 ## A cashier (SHOP_USER) can serve a customer, never take from one
 
 **Owner decision (2026-09-29):** a customer at the till who sends a voucher to

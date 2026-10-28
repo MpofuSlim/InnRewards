@@ -266,6 +266,73 @@ class TransactionServiceTest {
         verify(walletService, never()).apply(any(), any(), any(), any(), any());
     }
 
+    // --- The reversal's reference fits its column ----------------------------
+
+    @Test
+    void reversalReference_isCutToTheColumn_andNeverSplitsACharacter() throws Exception {
+        int column = LoyaltyTransaction.class.getDeclaredField("reference")
+                .getAnnotation(jakarta.persistence.Column.class).length();
+        assertThat(TransactionService.REFERENCE_MAX).isEqualTo(column);
+
+        assertThat(TransactionService.reversalReference(null)).isNull();
+        assertThat(TransactionService.reversalReference("POS-1")).isEqualTo("REV-POS-1");
+        // 96 + "REV-" is exactly the column: kept whole.
+        assertThat(TransactionService.reversalReference("r".repeat(96))).isEqualTo("REV-" + "r".repeat(96));
+        // A reversal of that reversal: REV-REV-… is cut, not refused.
+        String twice = TransactionService.reversalReference("REV-" + "r".repeat(96));
+        assertThat(twice).hasSize(100).isEqualTo("REV-REV-" + "r".repeat(92));
+        // Postgres counts code points: 100 emoji fit a VARCHAR(100), and the
+        // cut lands between two of them, never inside one.
+        String emoji = "😀".repeat(120);
+        String cut = TransactionService.reversalReference(emoji);
+        assertThat(cut.codePointCount(0, cut.length())).isEqualTo(100);
+        assertThat(cut).startsWith("REV-").endsWith("😀");
+    }
+
+    @Test
+    void reverse_aLongReference_isSavedWithinTheColumn() {
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        orig.setType(TransactionType.ADJUSTMENT);
+        orig.setReference("REV-" + "r".repeat(96));
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsSuperAdmin();
+        when(walletService.appliedForTransaction(orig.getId())).thenReturn(BigDecimal.ZERO);
+
+        var resp = service.reverse(TENANT, orig.getId(), "undo the undo");
+
+        assertThat(resp.reference()).hasSize(100).startsWith("REV-REV-");
+    }
+
+    @Test
+    void reverse_anIntegrityFailureOtherThanTheReversalIndex_isNotReportedAsAlreadyReversed() {
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsSuperAdmin();
+        when(walletService.appliedForTransaction(orig.getId())).thenReturn(new BigDecimal("100"));
+        var overflow = new org.springframework.dao.DataIntegrityViolationException(
+                "could not execute statement [ERROR: value too long for type character varying(100)]");
+        when(transactions.saveAndFlush(any())).thenThrow(overflow);
+
+        assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund")).isSameAs(overflow);
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reverse_theReversalIndex_isStillAlreadyReversed() {
+        LoyaltyTransaction orig = original(MERCHANT_A, LoyaltyTransaction.Status.POSTED);
+        merchantExists(MERCHANT_A, ORG_A);
+        authenticateAsSuperAdmin();
+        when(walletService.appliedForTransaction(orig.getId())).thenReturn(new BigDecimal("100"));
+        when(transactions.saveAndFlush(any())).thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                "could not execute statement [ERROR: duplicate key value violates unique constraint "
+                        + "\"uq_txn_reverses_id\"]"));
+
+        assertThatThrownBy(() -> service.reverse(TENANT, orig.getId(), "refund"))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(ex -> assertThat(((LoyaltyException) ex).getCode()).isEqualTo("ALREADY_REVERSED"));
+        verify(walletService, never()).apply(any(), any(), any(), any(), any());
+    }
+
     // --- Earn-integrity guards (V32): SELF_EARN + REFERENCE_REQUIRED ---------
 
     private static final String CASHIER_PHONE = "+263771234567";

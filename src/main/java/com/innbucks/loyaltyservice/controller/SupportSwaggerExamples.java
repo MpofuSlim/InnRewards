@@ -140,7 +140,8 @@ final class SupportSwaggerExamples {
                         "redeemedAt": null,
                         "expiresAt": "2027-09-20T10:00:00Z",
                         "transferredAt": null,
-                        "campaignSource": null
+                        "campaignSource": null,
+                        "remainingBalance": 5.0000
                       }
                     ]
                   },
@@ -274,6 +275,22 @@ final class SupportSwaggerExamples {
             {
               "code": "membership_not_found",
               "message": "This customer has no loyalty membership with that id.",
+              "data": null
+            }""";
+
+    /** WalletService.apply refusing a debit the main wallet cannot cover. */
+    static final String INSUFFICIENT_FUNDS = """
+            {
+              "code": "INSUFFICIENT_FUNDS",
+              "message": "You don't have enough loyalty points for this.",
+              "data": null
+            }""";
+
+    /** WalletService.apply refusing a debit while the wallet is locked. */
+    static final String WALLET_LOCKED = """
+            {
+              "code": "WALLET_LOCKED",
+              "message": "wallet is locked until 2026-10-31",
               "data": null
             }""";
 

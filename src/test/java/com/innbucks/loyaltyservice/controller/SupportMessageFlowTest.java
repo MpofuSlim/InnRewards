@@ -228,6 +228,36 @@ class SupportMessageFlowTest extends SupportTestBase {
     }
 
     @Test
+    @DisplayName("SMS_THEN_WHATSAPP with no SMS is held to the WhatsApp cap the preview shows, not the SMS one")
+    void smsThenWhatsApp_withoutSms_sendAcceptsWhatThePreviewAccepts() throws Exception {
+        Ctx c = customer();
+        when(sms.isConfigured()).thenReturn(false);
+        // Over the SMS cap (459), well under the WhatsApp cap (1000).
+        String text = "y".repeat(600);
+
+        mockMvc.perform(post(c.path() + "/preview").header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", text)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.maxCharacters").value(1000));
+        // It used to be refused here with message_too_long, channel SMS, though
+        // no SMS would ever have been sent.
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", text)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.deliveredVia").value("WHATSAPP"));
+        verify(sms, never()).sendSms(anyString(), anyString(), anyString());
+
+        // With SMS on, the SMS leg is tried first, so the SMS cap applies again.
+        when(sms.isConfigured()).thenReturn(true);
+        mockMvc.perform(post(c.path()).header("Authorization", bearer(c.token()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body("SMS_THEN_WHATSAPP", text)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("message_too_long"))
+                .andExpect(jsonPath("$.data.channel").value("SMS"))
+                .andExpect(jsonPath("$.data.maxCharacters").value(459));
+    }
+
+    @Test
     @DisplayName("SMS_THEN_WHATSAPP: a failed SMS falls back to WhatsApp, which gets the ORIGINAL text")
     void smsFails_fallsBackToWhatsApp() throws Exception {
         Ctx c = customer();

@@ -30,6 +30,7 @@ import java.util.UUID;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.AGENT_IDENTITY_REQUIRED;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.CHANNEL_UNAVAILABLE;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.FORBIDDEN;
+import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.INSUFFICIENT_FUNDS;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.INVALID_REASON;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.LOOKUP_NOT_FOUND;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.MEMBERSHIP_NOT_FOUND;
@@ -37,6 +38,7 @@ import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.NOT_
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.RATE_LIMITED;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.REASON_BLANK;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.UNAUTHORIZED;
+import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.WALLET_LOCKED;
 import static com.innbucks.loyaltyservice.controller.SupportSwaggerExamples.VOUCHER_RESENT;
 
 /**
@@ -204,7 +206,8 @@ public class SupportActionController {
                                         "baseAmount": null
                                       }
                                     }"""))),
-            @ApiResponse(responseCode = "400", description = "Zero, fractional or missing points; a missing or over-long reason",
+            @ApiResponse(responseCode = "400", description = "Zero, fractional or missing points; a missing or "
+                    + "over-long reason; or a debit the wallet cannot take (too few points, or locked)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Zero", value = """
                                     {
@@ -217,7 +220,9 @@ public class SupportActionController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "reason": "size must be between 0 and 96" }
-                                    }""")})),
+                                    }"""),
+                            @ExampleObject(name = "Debit larger than the balance", value = INSUFFICIENT_FUNDS),
+                            @ExampleObject(name = "Wallet locked", value = WALLET_LOCKED)})),
             @ApiResponse(responseCode = "401", description = "No or invalid token",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = UNAUTHORIZED))),
             @ApiResponse(responseCode = "403", description = "No supervise permission, over a ceiling, or a token with no userUuid",
@@ -287,10 +292,14 @@ public class SupportActionController {
                                         "baseAmount": null
                                       }
                                     }"""))),
-            @ApiResponse(responseCode = "400", description = "Missing, over-long, or empty once formatting is removed",
+            @ApiResponse(responseCode = "400", description = "A reason that is missing, over-long or empty once "
+                    + "formatting is removed; or a compensating debit the wallet cannot take (the customer has "
+                    + "spent the points being reversed, or the wallet is locked)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Blank", value = REASON_BLANK),
-                            @ExampleObject(name = "Empty after stripping", value = INVALID_REASON)})),
+                            @ExampleObject(name = "Empty after stripping", value = INVALID_REASON),
+                            @ExampleObject(name = "Points already spent", value = INSUFFICIENT_FUNDS),
+                            @ExampleObject(name = "Wallet locked", value = WALLET_LOCKED)})),
             @ApiResponse(responseCode = "401", description = "No or invalid token",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = UNAUTHORIZED))),
             @ApiResponse(responseCode = "403", description = "No supervise permission, or a token with no userUuid",
@@ -306,13 +315,20 @@ public class SupportActionController {
                                       "data": null
                                     }"""),
                             @ExampleObject(name = "Lookup", value = LOOKUP_NOT_FOUND)})),
-            @ApiResponse(responseCode = "409", description = "Already reversed",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            {
-                              "code": "ALREADY_REVERSED",
-                              "message": "This transaction has already been reversed.",
-                              "data": null
-                            }""")))
+            @ApiResponse(responseCode = "409", description = "Already reversed, or one leg of a transfer",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Already reversed", value = """
+                                    {
+                                      "code": "ALREADY_REVERSED",
+                                      "message": "This transaction has already been reversed.",
+                                      "data": null
+                                    }"""),
+                            @ExampleObject(name = "Transfer leg", value = """
+                                    {
+                                      "code": "TRANSFER_NOT_REVERSIBLE",
+                                      "message": "A transfer can't be reversed one leg at a time.",
+                                      "data": null
+                                    }""")}))
     })
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> reverse(
             @PathVariable UUID lookupId, @PathVariable UUID transactionId,

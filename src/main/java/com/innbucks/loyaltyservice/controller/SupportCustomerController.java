@@ -304,7 +304,8 @@ public class SupportCustomerController {
                                             "redeemedAt": null,
                                             "expiresAt": "2027-09-20T10:00:00Z",
                                             "transferredAt": null,
-                                            "campaignSource": null
+                                            "campaignSource": null,
+                                            "remainingBalance": 5.0000
                                           }
                                         ],
                                         "page": 0, "size": 20, "totalElements": 1, "totalPages": 1,

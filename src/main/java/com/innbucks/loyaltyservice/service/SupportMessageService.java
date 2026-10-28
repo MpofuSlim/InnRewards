@@ -306,13 +306,21 @@ public class SupportMessageService {
         return SupportMessageComposer.withSignature(body, props.messages().signature());
     }
 
+    /**
+     * Each cap applies to the legs this send will actually try, the same
+     * {@link #legsFor} the delivery and the preview use. It used to read the
+     * CHANNEL, so SMS_THEN_WHATSAPP on a cell with no SMS was held to the SMS
+     * cap (459) while the preview, correctly, showed the WhatsApp one (1000):
+     * a 460–1000 character message previewed fine and was then refused.
+     */
     private void requireWithinLength(SupportMessage.Channel channel, SupportMessageComposer.Rendered rendered) {
+        Legs legs = legsFor(channel);
         int smsMax = props.messages().smsMaxCharacters();
         int waMax = props.messages().whatsappMaxCharacters();
-        if (channel != SupportMessage.Channel.WHATSAPP && rendered.smsText().length() > smsMax) {
+        if (legs.sms() && rendered.smsText().length() > smsMax) {
             throw tooLong("SMS", rendered.smsText().length(), smsMax);
         }
-        if (channel != SupportMessage.Channel.SMS && rendered.whatsappText().length() > waMax) {
+        if (legs.whatsApp() && rendered.whatsappText().length() > waMax) {
             throw tooLong("WHATSAPP", rendered.whatsappText().length(), waMax);
         }
     }

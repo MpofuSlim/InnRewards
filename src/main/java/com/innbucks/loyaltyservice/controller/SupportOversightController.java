@@ -78,6 +78,7 @@ public class SupportOversightController {
                                               "lookupId": "0c9b8a7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
                                               "transactionId": "33333333-4444-5555-6666-777777777777",
                                               "userId": "8f14e45f-ceea-467a-9ba6-7c3f0e2a1b44",
+                                              "tenantId": "0a571c1c-7c75-4000-a000-000000000001",
                                               "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                               "points": 250
                                             },

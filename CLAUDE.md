@@ -3202,7 +3202,10 @@ builds the same surface; change them only in lock-step.
   `failureCode` names what was tried (`sms_failed` / `whatsapp_failed` /
   `sms_and_whatsapp_failed`). Body HTML-stripped, signed `- InnBucks Loyalty Support`
   on a new line, capped on the FINAL text: 459 SMS characters after
-  `SmsTextSanitizer` (three GSM-7 segments), 1000 WhatsApp. **The sanitiser
+  `SmsTextSanitizer` (three GSM-7 segments), 1000 WhatsApp. A send checks only
+  the legs it will try (`legsFor`, the same rule as the preview): an
+  SMS_THEN_WHATSAPP send on a cell with no SMS is held to the WhatsApp cap, and
+  used to be refused at the SMS one while the preview said it fit. **The sanitiser
   turns `:` and `/` into spaces, so a full URL never survives SMS** — the
   preview shows the agent that. **Link detection is STRICT and
   character-identical to marketplace's** (`SupportMessageComposer.URL_LIKE`):
@@ -3286,13 +3289,21 @@ builds the same surface; change them only in lock-step.
   `POST /loyalty/transactions/adjust` accepts a `reason` up to 1000 characters
   into `loyalty_transactions.reference` VARCHAR(100). Measured: 101+ characters
   fail the INSERT and come back as `409 CONFLICT` "…the original may already
-  have succeeded" — it did not. Worse, a transaction whose reference is 97–100
-  characters can NEVER be reversed: `REV-` + reference overflows the same column
-  and the reversal's catch maps every `DataIntegrityViolationException` to
-  `409 ALREADY_REVERSED`, which that endpoint's Swagger tells clients to "treat
-  as success". The earn request's `reference` has no `@Size` at all (101+ →
-  `409 DUPLICATE_REFERENCE`). The support caps above are sized to avoid all of
-  it; fixing the merchant contract is a separate change.
+  have succeeded" — it did not. The earn request's `reference` has no `@Size`
+  at all (101+ → `409 DUPLICATE_REFERENCE`). The support caps above are sized to
+  avoid both; fixing the merchant contract is a separate change.
+- **A reversal's reference is cut to the column, and only `uq_txn_reverses_id`
+  means ALREADY_REVERSED** (`TransactionService.reversalReference` /
+  `isReversesIdConflict`). `REV-` + a reference of 97+ characters (a long
+  adjustment reason, or the reversal of a reversal: `REV-REV-…`) used to
+  overflow VARCHAR(100), and the catch mapped every integrity failure to
+  `409 ALREADY_REVERSED`, which the merchant endpoint's Swagger tells clients to
+  "treat as success" — so the transaction could never be reversed, and the
+  client was told it had been. The cut counts code points, as Postgres does.
+  The reference is a label (`reverses_id` is the link, and ADJUSTMENT rows are
+  outside V16's reference index), so a cut value cannot collide. Any other
+  integrity failure now propagates. Pinned by `TransactionServiceTest` and
+  `SupportActionFlowTest`.
 - **Config** (`loyalty.support.*`, `SupportProperties`):
   `LOYALTY_SUPPORT_LOOKUP_TTL` (PT12H), `LOYALTY_SUPPORT_MESSAGE_SIGNATURE`,
   `LOYALTY_SUPPORT_SMS_MAX_CHARACTERS` (459),

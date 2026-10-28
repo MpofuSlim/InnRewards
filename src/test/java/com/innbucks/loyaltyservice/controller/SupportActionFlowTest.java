@@ -300,6 +300,46 @@ class SupportActionFlowTest extends SupportTestBase {
                 .andExpect(jsonPath("$.data.reference").value("REV-" + reason))
                 .andReturn();
         assertThat(body(reversed).path("data").path("pointsDelta").decimalValue()).isEqualByComparingTo("-40");
+
+        // Reversing that reversal makes REV-REV-…, 104 characters: it used to
+        // fail the INSERT and come back as a false ALREADY_REVERSED. The
+        // reference is now cut to the column and the reversal goes through.
+        String reversalId = body(reversed).path("data").path("id").asText();
+        mockMvc.perform(post(url(lookupId, "/transactions/" + reversalId + "/reverse"))
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json("{'reason':'undo the undo'}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.reference").value("REV-REV-" + "r".repeat(92)))
+                .andExpect(jsonPath("$.data.pointsDelta").value(40));
+    }
+
+    @Test
+    @DisplayName("reverse: only the one-reversal-per-row index reads as ALREADY_REVERSED, and it still does")
+    void reverse_theReversalIndexStillAnswersAlreadyReversed() throws Exception {
+        String phone = randomPhone();
+        Seeded s = seedCustomer(phone);
+        String token = supervisorToken(UUID.randomUUID());
+        UUID lookupId = lookup(token, phone);
+        // A reversal row already exists while the original still reads POSTED,
+        // so the status check passes and the INSERT meets uq_txn_reverses_id.
+        LoyaltyTransaction existing = new LoyaltyTransaction();
+        existing.setTenantId(s.transaction().getTenantId());
+        existing.setMerchantId(s.transaction().getMerchantId());
+        existing.setUserId(s.transaction().getUserId());
+        existing.setType(TransactionType.ADJUSTMENT);
+        existing.setAmount(s.transaction().getAmount());
+        existing.setCurrency(s.transaction().getCurrency());
+        existing.setPointsDelta(BigDecimal.ZERO);
+        existing.setReversesId(s.transaction().getId());
+        transactionRepository.saveAndFlush(existing);
+
+        mockMvc.perform(post(url(lookupId, "/transactions/" + s.transaction().getId() + "/reverse"))
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(json("{'reason':'x'}")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ALREADY_REVERSED"));
+        assertThat(transactionRepository.findById(s.transaction().getId()).orElseThrow().getStatus())
+                .isEqualTo(LoyaltyTransaction.Status.POSTED);
     }
 
     // ---- unblock ----

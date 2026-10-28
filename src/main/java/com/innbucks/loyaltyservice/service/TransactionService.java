@@ -393,15 +393,20 @@ public class TransactionService {
         // Attribution: the operator who posted the reversal (channel stays
         // null — reversals aren't earns).
         rev.setPostedBy(operator);
-        rev.setReference(orig.getReference() == null ? null : "REV-" + orig.getReference());
+        rev.setReference(reversalReference(orig.getReference()));
         // saveAndFlush so the uq_txn_reverses_id unique index (V20) surfaces a
         // second reversal as a clean ALREADY_REVERSED here — and crucially
         // BEFORE we credit the wallet below — rather than as a 500 at commit.
-        // Belt-and-suspenders with the row lock above.
+        // Belt-and-suspenders with the row lock above. Only THAT index means
+        // "already reversed": any other integrity failure propagates, so it can
+        // never again be reported as a reversal that happened.
         try {
             transactions.saveAndFlush(rev);
         } catch (DataIntegrityViolationException dup) {
-            throw LoyaltyException.conflict("ALREADY_REVERSED", "This transaction has already been reversed.");
+            if (isReversesIdConflict(dup)) {
+                throw LoyaltyException.conflict("ALREADY_REVERSED", "This transaction has already been reversed.");
+            }
+            throw dup;
         }
 
         BigDecimal balance = BigDecimal.ZERO;
@@ -416,6 +421,38 @@ public class TransactionService {
 
         metrics.incTransactionPosted("REVERSAL");
         return toResponse(rev, balance);
+    }
+
+    /** Width of {@code loyalty_transactions.reference} (VARCHAR(100)). */
+    static final int REFERENCE_MAX = 100;
+
+    /**
+     * {@code "REV-" + reference}, cut to the column's width. Without the cut, a
+     * reference of 97 characters or more (a merchant adjustment's long reason,
+     * or the reversal of a reversal: {@code REV-REV-…}) failed the INSERT, and
+     * the failure came back as a false {@code ALREADY_REVERSED}. The reference
+     * is a label here, never a key: {@code reverses_id} links the rows, and
+     * ADJUSTMENT rows are outside the reference unique index (V16), so a cut
+     * value cannot collide. Counted in code points, as Postgres counts a
+     * VARCHAR, so a surrogate pair is never split.
+     */
+    static String reversalReference(String original) {
+        if (original == null) {
+            return null;
+        }
+        String ref = "REV-" + original;
+        return ref.codePointCount(0, ref.length()) <= REFERENCE_MAX
+                ? ref
+                : ref.substring(0, ref.offsetByCodePoints(0, REFERENCE_MAX));
+    }
+
+    private static boolean isReversesIdConflict(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && t.getMessage().contains("uq_txn_reverses_id")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public Dtos.TransactionResponse adjust(UUID tenantId, UUID userId, UUID merchantId,

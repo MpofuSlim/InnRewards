@@ -51,6 +51,13 @@ never with a placeholder like `[Your name]`.
 - **Flag it when the owner's own request is the weak link.** Disagreeing with
   evidence is part of the job; silent compliance is not.
 
+## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
+
+**Send a Markdown file (`SendUserFile`) only when it is a frontend integration
+guide.** Everything meant for Tawanda (plans, briefs for another session,
+deploy steps, investigation results, summaries) goes in the chat reply, not a
+file. Don't re-send a file because one line in it changed; say what changed.
+
 ## Frontend integration docs on merge (standing)
 
 > [!IMPORTANT]

@@ -9,7 +9,11 @@ loyalty-relevant subset of that monorepo's `CLAUDE.md`.
 > Sessions often start on an auto-assigned `claude/<random-words>` branch — that
 > is a harness artifact, not our convention. Create the `feature/*` branch from
 > the latest `master` before committing, push with `git push -u origin <branch>`,
-> and open a **draft** PR. One feature per branch.
+> and open the PR **ready for review, never as a draft**
+> (owner decision, 2026-10-29). A draft cannot be merged, and taking a PR out
+> of draft is a GraphQL-only GitHub operation, which this account is often
+> refused (`graphql_rate_limit`); that left ticketing PR #570 green but
+> unmergeable. One feature per branch.
 
 ## The owner is Tawanda
 
@@ -46,6 +50,13 @@ never with a placeholder like `[Your name]`.
   owner a reply they can send back.
 - **Flag it when the owner's own request is the weak link.** Disagreeing with
   evidence is part of the job; silent compliance is not.
+
+## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
+
+**Send a Markdown file (`SendUserFile`) only when it is a frontend integration
+guide.** Everything meant for Tawanda (plans, briefs for another session,
+deploy steps, investigation results, summaries) goes in the chat reply, not a
+file. Don't re-send a file because one line in it changed; say what changed.
 
 ## Frontend integration docs on merge (standing)
 

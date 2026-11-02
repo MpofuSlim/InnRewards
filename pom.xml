@@ -63,7 +63,7 @@
         <jackson-bom.version>3.2.4</jackson-bom.version>
         <jackson-2-bom.version>2.22.4</jackson-2-bom.version>
         <spring.cloud.version>2025.1.4</spring.cloud.version>
-        <springdoc.version>3.1.1</springdoc.version>
+        <springdoc.version>3.2.0</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
         <!-- jjwt centralized here to keep JWT verification aligned with the rest
              of the fleet. 0.12.x cleans up Java 17/21 compatibility, tightens

@@ -773,7 +773,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V63**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V64**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -786,6 +786,30 @@ migration — add the next version.
 > breakage appears only against a cell with real history. Always ship the
 > `UPDATE` that rewrites existing rows in the same migration, BEFORE narrowing
 > any CHECK constraint (see V48).
+
+## A tenant code is a unique short name, never the country (V64)
+
+`tenants.code` is what a caller may send as `X-Tenant-Code` in place of the
+tenant id. The Foundry portal filled it with the country (`ZW`), so most
+tenants shared one code and every lookup by it answered `AMBIGUOUS_TENANT`;
+our own Swagger example for `GET /tenants/me` showed `"code": "ZW"`. A tenant
+has no country: every tenant on a cell is in that cell's country.
+
+- **Create** (`TenantService.normalizeCode`): the code is trimmed and
+  lower-cased, then must be 2 to 50 lowercase letters, digits and single
+  hyphens (`400 BAD_TENANT_CODE`), and no other tenant may hold it in any
+  letter case (`409 TENANT_CODE_TAKEN`). Lower-casing rather than refusing
+  upper case keeps a client that sends `MWOS` working.
+- **`uq_tenants_code_lower`** (V64) backs the check against two creates
+  racing; a lost race is the same 409.
+- **V64 renamed every shared code** from the tenant's name (`Simbisa Brands`
+  -> `simbisa-brands`, oldest first, `-2` on a clash, `tenant` for a name with
+  no letters or digits). A code nobody shared was left exactly as it was. Safe
+  because a shared code identified nobody, and nothing in the fleet sends
+  `X-Tenant-Code`: integrations send `X-Tenant-Id`.
+- **`X-Tenant-Code` matches in any letter case.**
+- There is no API to change a tenant's code. Pinned by `TenantServiceTest`,
+  `TenantControllerSecurityTest` and `TenantCodeMigrationIT`.
 
 ## Registration is a property of the PHONE (V40)
 

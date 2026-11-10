@@ -82,7 +82,7 @@ public class TenantContext {
         }
         String codeHeader = request.getHeader("X-Tenant-Code");
         if (codeHeader != null && !codeHeader.isBlank()) {
-            java.util.List<Tenant> matches = tenants.findAllByCode(codeHeader.trim());
+            java.util.List<Tenant> matches = tenants.findAllByCodeIgnoreCase(codeHeader.trim());
             if (matches.isEmpty()) throw LoyaltyException.notFound("tenant");
             if (matches.size() > 1) throw LoyaltyException.badRequest("AMBIGUOUS_TENANT",
                     "Multiple tenants share code '" + codeHeader.trim() + "'. Use X-Tenant-Id instead.");

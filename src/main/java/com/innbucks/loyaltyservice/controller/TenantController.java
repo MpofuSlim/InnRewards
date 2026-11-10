@@ -104,32 +104,52 @@ public class TenantController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation failure (missing id, blank code/name, or duplicate code)",
+                    description = "Validation failure: a missing id or name, or a code that is not 2 to 50 " +
+                                  "lowercase letters, digits and hyphens. The code is sent lower-cased, so " +
+                                  "`Simbisa-Brands` is accepted as `simbisa-brands`.",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = {
+                                    @ExampleObject(name = "Missing name", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "code: must not be blank",
+                                      "message": "Validation failed",
+                                      "data": { "name": "must not be blank" }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Bad code", value = """
+                                    {
+                                      "code": "BAD_TENANT_CODE",
+                                      "message": "Use 2 to 50 lowercase letters, digits and hyphens for the code, e.g. simbisa-brands.",
                                       "data": null
                                     }
                                     """)
+                            }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "A tenant with this name already exists",
+                    description = "A tenant with this name, or with this code (letter case ignored), already exists",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Duplicate name", value = """
+                            examples = {
+                                    @ExampleObject(name = "Duplicate name", value = """
                                     {
                                       "code": "TENANT_NAME_TAKEN",
-                                      "message": "A tenant with that name already exists.",
+                                      "message": "A tenant named \\"Simbisa Brands\\" already exists.",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Duplicate code", value = """
+                                    {
+                                      "code": "TENANT_CODE_TAKEN",
+                                      "message": "A tenant with the code \\"simbisa-brands\\" already exists. Choose another code.",
                                       "data": null
                                     }
                                     """)
+                            }
                     )
             )
     })
@@ -219,8 +239,8 @@ public class TenantController {
                                       "data": [
                                         {
                                           "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                          "code": "ZW",
-                                          "name": "Simbisa ZW",
+                                          "code": "simbisa-brands",
+                                          "name": "Simbisa Brands",
                                           "status": "ACTIVE"
                                         }
                                       ]

@@ -11,6 +11,7 @@ import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -62,15 +63,29 @@ public class TenantService {
             throw LoyaltyException.conflict("TENANT_NAME_TAKEN",
                     "A tenant named \"" + name + "\" already exists.");
         }
+        String code = normalizeCode(req.code());
+        // A tenant code is a short unique name, sent as X-Tenant-Code in place of
+        // the id. It is not the country: the portal filled it with "ZW", and ten
+        // tenants sharing one code made the code useless (AMBIGUOUS_TENANT).
+        // uq_tenants_code_lower (V64) backs this check against a concurrent create.
+        if (tenants.existsByCodeIgnoreCase(code)) {
+            throw LoyaltyException.conflict("TENANT_CODE_TAKEN",
+                    "A tenant with the code \"" + code + "\" already exists. Choose another code.");
+        }
         Tenant t = new Tenant();
-        t.setCode(req.code());
+        t.setCode(code);
         t.setName(name);
         t.setOwnerEmail(creatorEmail);
         // The business creating the program (null for a SUPER_ADMIN, or a
         // caller with no loyalty organization). Its owners and admins are
         // members without a tenant_members row — see TenantContext.
         t.setOrganizationId(CallerDetails.currentOrganizationId());
-        tenants.save(t);
+        try {
+            tenants.saveAndFlush(t);
+        } catch (DataIntegrityViolationException e) {
+            throw LoyaltyException.conflict("TENANT_CODE_TAKEN",
+                    "A tenant with the code \"" + code + "\" already exists. Choose another code.");
+        }
         // Attach the supplied user as the tenant's first member so they can
         // immediately pass this tenant's id as X-Tenant-Id.
         addMember(t.getId(), req.id());
@@ -94,6 +109,25 @@ public class TenantService {
             }
         });
         return toResponse(t);
+    }
+
+    /** Lowercase letters, digits and single hyphens, e.g. {@code simbisa-brands}. */
+    private static final java.util.regex.Pattern CODE_SHAPE =
+            java.util.regex.Pattern.compile("[a-z0-9]+(-[a-z0-9]+)*");
+
+    /**
+     * Trims and lower-cases a requested tenant code, then checks its shape:
+     * 2 to 50 characters of lowercase letters, digits and single hyphens.
+     * Lower-casing (rather than refusing upper case) keeps an old client that
+     * sends "MWOS" working; anything else is a 400 the admin can act on.
+     */
+    static String normalizeCode(String raw) {
+        String code = raw == null ? "" : raw.strip().toLowerCase(java.util.Locale.ROOT);
+        if (code.length() < 2 || code.length() > 50 || !CODE_SHAPE.matcher(code).matches()) {
+            throw LoyaltyException.badRequest("BAD_TENANT_CODE",
+                    "Use 2 to 50 lowercase letters, digits and hyphens for the code, e.g. simbisa-brands.");
+        }
+        return code;
     }
 
     @Transactional(readOnly = true)

@@ -56,7 +56,7 @@ class TenantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(jsonPath("$.data.code").value(code));
 
         // A member row keyed on the supplied userId now exists (email left null).
-        UUID created = tenantRepository.findAllByCode(code).get(0).getId();
+        UUID created = tenantRepository.findAllByCodeIgnoreCase(code).get(0).getId();
         assertThat(tenantMemberRepository.existsByTenantIdAndUserId(created, userId)).isTrue();
         List<TenantMember> rows = tenantMemberRepository.findByTenantId(created);
         assertThat(rows).hasSize(1);
@@ -111,6 +111,58 @@ class TenantControllerSecurityTest extends ControllerSecurityTestBase {
                         .contentType(MediaType.APPLICATION_JSON).content(dup))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("TENANT_NAME_TAKEN"));
+    }
+
+    @Test
+    void create_lowerCasesTheCode_andRefusesTheSameCodeInAnyCase_409() throws Exception {
+        String superAdmin = TestJwtFactory.superAdmin(jwtSecret);
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String first = """
+                {"id":"%s","code":"Brand-%s","name":"Brand One %s"}
+                """.formatted(UUID.randomUUID(), suffix, suffix);
+        mockMvc.perform(post("/loyalty/tenants").header("Authorization", bearer(superAdmin))
+                        .contentType(MediaType.APPLICATION_JSON).content(first))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.code").value("brand-" + suffix));
+
+        // Another tenant, another name, the same code in other letters: refused.
+        String dup = """
+                {"id":"%s","code":"BRAND-%s","name":"Brand Two %s"}
+                """.formatted(UUID.randomUUID(), suffix.toUpperCase(), suffix);
+        mockMvc.perform(post("/loyalty/tenants").header("Authorization", bearer(superAdmin))
+                        .contentType(MediaType.APPLICATION_JSON).content(dup))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TENANT_CODE_TAKEN"));
+    }
+
+    @Test
+    void create_withACodeThatIsNotASlug_is400() throws Exception {
+        String superAdmin = TestJwtFactory.superAdmin(jwtSecret);
+        String body = """
+                {"id":"%s","code":"simbisa brands","name":"Slug Test %s"}
+                """.formatted(UUID.randomUUID(), UUID.randomUUID());
+        mockMvc.perform(post("/loyalty/tenants").header("Authorization", bearer(superAdmin))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_TENANT_CODE"));
+    }
+
+    @Test
+    void xTenantCode_findsTheTenant_inAnyLetterCase() throws Exception {
+        String superAdmin = TestJwtFactory.superAdmin(jwtSecret);
+        String code = "lookup-" + UUID.randomUUID().toString().substring(0, 8);
+        String body = """
+                {"id":"%s","code":"%s","name":"Lookup %s"}
+                """.formatted(UUID.randomUUID(), code, code);
+        mockMvc.perform(post("/loyalty/tenants").header("Authorization", bearer(superAdmin))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated());
+        when(shopService.list(any(), any(), any())).thenReturn(Page.empty());
+
+        mockMvc.perform(get("/loyalty/shops")
+                        .header("Authorization", bearer(superAdmin))
+                        .header("X-Tenant-Code", code.toUpperCase()))
+                .andExpect(status().isOk());
     }
 
     // --- Dual-mode membership check --------------------------------------------

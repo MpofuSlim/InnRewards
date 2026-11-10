@@ -9,7 +9,11 @@ import java.util.List;
 import java.util.UUID;
 
 public interface TenantRepository extends JpaRepository<Tenant, UUID> {
-    List<Tenant> findAllByCode(String code);
+    /** Tenants whose code matches, letter case ignored. V64 makes codes unique by lower(code), so at most one. */
+    List<Tenant> findAllByCodeIgnoreCase(String code);
+
+    /** Case-insensitive existence check — the guard against duplicate tenant codes (V64). */
+    boolean existsByCodeIgnoreCase(String code);
 
     /** Case-insensitive existence check — the guard against duplicate tenant names. */
     boolean existsByNameIgnoreCase(String name);

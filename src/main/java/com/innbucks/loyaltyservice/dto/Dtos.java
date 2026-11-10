@@ -29,7 +29,9 @@ public class Dtos {
                                   "the tenant is created AND this user is added as a member in one call — no " +
                                   "separate join step is needed.")
             @NotNull UUID id,
-            @Schema(example = "innbucks", description = "Short unique code for the tenant (URL-safe, no spaces).")
+            @Schema(example = "simbisa-brands", description = "Short unique name for the tenant, sent as X-Tenant-Code in " +
+                    "place of the id: 2 to 50 lowercase letters, digits and hyphens. Not the country: every tenant " +
+                    "on a cell is in that cell's country. Lower-cased on the way in; unique, letter case ignored.")
             @NotBlank String code,
             @Schema(example = "Innbucks Financial Services")
             @NotBlank @Size(max = 200) String name

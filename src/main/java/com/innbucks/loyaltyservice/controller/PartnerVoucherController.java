@@ -186,8 +186,9 @@ public class PartnerVoucherController {
     @PostMapping("/redeem")
     @Operation(summary = "Redeem some or all of a voucher on the merchant's platform",
             description = """
-                    Takes `amount` off the voucher's balance (all of it when omitted; never more than is left). \
-                    A 200 is final: credit the customer then. The amount is then paid to the merchant from \
+                    Takes `amount` off the voucher's balance (all of it when omitted). An `amount` above the \
+                    balance is refused with `INSUFFICIENT_VOUCHER_BALANCE`: nothing is spent, and the balance \
+                    is in `data.remainingBalance` so you can retry for it. A 200 is final: credit the customer then. The amount is then paid to the merchant from \
                     holding; `settlement` says when. `reference` is the idempotency key: a re-send returns the \
                     original use (`replayed: true`) and never spends twice.
 
@@ -206,7 +207,8 @@ public class PartnerVoucherController {
                                     @ExampleObject(name = "Field errors", value = VALIDATION_400),
                                     @ExampleObject(name = "Mistyped code", value = MISTYPED_400),
                                     @ExampleObject(name = "Expired", value = EXPIRED_400),
-                                    @ExampleObject(name = "Part of a single-use voucher", value = PARTIAL_USE_400)})),
+                                    @ExampleObject(name = "Part of a single-use voucher", value = PARTIAL_USE_400),
+                                    @ExampleObject(name = "More than the balance", value = INSUFFICIENT_BALANCE_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),

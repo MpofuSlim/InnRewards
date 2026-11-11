@@ -148,6 +148,36 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
+    void aRedeemAboveTheBalance_isAlwaysRefused_forAPartner() throws Exception {
+        String phone = newPhone();
+        Call issued = partner("generate", cashSale("MWOS-OVER-" + UUID.randomUUID(), phone, "20.00"));
+        assertThat(issued.status()).isEqualTo(201);
+        String code = issued.body().path("data").path("voucher").path("code").asText();
+
+        // More than the balance: refused, nothing spent, the balance named.
+        Call over = partner("redeem", redeem(code, "25.00", "BET-OVER-1", phone));
+        assertThat(over.status()).isEqualTo(400);
+        assertThat(over.body().path("code").asText()).isEqualTo("INSUFFICIENT_VOUCHER_BALANCE");
+        assertThat(over.body().path("message").asText()).isEqualTo("This voucher has only USD 20.00 left.");
+        assertThat(over.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("20.00");
+        assertThat(over.body().path("data").path("currency").asText()).isEqualTo("USD");
+        Call balance = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-1", "endUserPhone", phone));
+        assertThat(balance.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("20.00");
+
+        // Spend part, then ask for more than is left: refused again, naming the new balance.
+        assertThat(partner("redeem", redeem(code, "15.00", "BET-OVER-2", phone)).status()).isEqualTo(200);
+        Call again = partner("redeem", redeem(code, "6.00", "BET-OVER-3", phone));
+        assertThat(again.body().path("code").asText()).isEqualTo("INSUFFICIENT_VOUCHER_BALANCE");
+        assertThat(again.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("5.00");
+
+        // Exactly the balance is accepted.
+        Call rest = partner("redeem", redeem(code, "5.00", "BET-OVER-4", phone));
+        assertThat(rest.status()).isEqualTo(200);
+        assertThat(rest.body().path("data").path("status").asText()).isEqualTo("REDEEMED");
+    }
+
+    @Test
     void validityDays_setsTheVouchersExpiry_isBounded_andIsPartOfTheRequest() throws Exception {
         String phone = newPhone();
         String reference = "MWOS-VAL-" + UUID.randomUUID();

@@ -155,7 +155,8 @@ public class PartnerVoucherService {
         Linked linked = resolve(partner, req.merchant());
         Sale sale = validate(linked, req);
 
-        if (!voucherService.wouldExpire(linked.merchant().getTenantId(), linked.merchant())) {
+        if (sale.validityDays() == null
+                && !voucherService.wouldExpire(linked.merchant().getTenantId(), linked.merchant())) {
             // A held voucher that never expired would hold money for ever.
             throw new LoyaltyException(HttpStatus.SERVICE_UNAVAILABLE, "MERCHANT_NOT_READY",
                     "This merchant is not set up for vouchers yet. Nothing was recorded.");
@@ -487,7 +488,7 @@ public class PartnerVoucherService {
     record Sale(String reference, String channel, String outlet, String terminalId, String operatorRef,
                 String endUserRef, BigDecimal amount, String currency, String phone, String name, String method,
                 String approvalCode, String last4, String collectedVia, String collectionRef, String payerPhone,
-                String evidenceKey, String fingerprint, boolean confirmDuplicate) {}
+                String evidenceKey, String fingerprint, boolean confirmDuplicate, Integer validityDays) {}
 
     private Sale validate(Linked linked, PartnerVoucherDtos.GenerateRequest req) {
         String channel = req.channel().strip().toUpperCase(Locale.ROOT);
@@ -584,13 +585,23 @@ public class PartnerVoucherService {
             default -> { }
         }
 
+        Integer validityDays = req.validityDays();
+        if (validityDays != null
+                && (validityDays < props.minValidityDays() || validityDays > props.maxValidityDays())) {
+            throw validation("validityDays",
+                    "must be between " + props.minValidityDays() + " and " + props.maxValidityDays() + " days");
+        }
+
         String reference = req.partnerReference().strip();
+        // The validity joins the fingerprint only when sent, so an order made
+        // before V65 (or without it) keeps the fingerprint it was stored with.
         String fingerprint = sha256(String.join("|", channel, nz(outlet), nz(terminalId), amount.toPlainString(),
-                currency, phone, method, nz(approvalCode), nz(collectionRef)));
+                currency, phone, method, nz(approvalCode), nz(collectionRef))
+                + (validityDays != null ? "|validity=" + validityDays : ""));
         return new Sale(reference, channel, outlet, terminalId, blankToNull(req.operatorRef()),
                 blankToNull(req.endUserRef()), amount, currency, phone, name, method, approvalCode, last4,
                 collectedVia, collectionRef, blankToNull(f.payerPhone()), evidenceKey, fingerprint,
-                Boolean.TRUE.equals(req.confirmDuplicate()));
+                Boolean.TRUE.equals(req.confirmDuplicate()), validityDays);
     }
 
     private static boolean merchantAccepts(VoucherPartnerMerchant link, String method) {
@@ -665,6 +676,7 @@ public class PartnerVoucherService {
         o.setTerminalId(sale.terminalId());
         o.setOperatorRef(sale.operatorRef());
         o.setEndUserRef(sale.endUserRef());
+        o.setValidityDays(sale.validityDays());
         o.setFundingMethod(sale.method());
         o.setFundingStatus(FundingStatus.NOT_STARTED);
         o.setFundingEvidenceKey(sale.evidenceKey());

@@ -454,6 +454,8 @@ loyalty:
     duplicate-window: ${LOYALTY_VOUCHER_PARTNER_DUPLICATE_WINDOW:PT2M}
     code-payment-ttl: ${LOYALTY_VOUCHER_PARTNER_CODE_PAYMENT_TTL:PT10M}
     simulated-delay: ${LOYALTY_VOUCHER_PARTNER_SIMULATED_DELAY:PT20S}
+    min-validity-days: ${LOYALTY_VOUCHER_PARTNER_MIN_VALIDITY_DAYS:1}
+    max-validity-days: ${LOYALTY_VOUCHER_PARTNER_MAX_VALIDITY_DAYS:365}
   qr:
     secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
     ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}

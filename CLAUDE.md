@@ -798,7 +798,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V64**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V65**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1703,7 +1703,8 @@ path back.**
   `EffectiveFees.resolveVoucherValidityDays` — one home, same time-valid +
   merchant-first filters as the fee sides. Resolved per ISSUE, so a rule
   change applies to the next voucher, never retroactively. There is no
-  per-issue validity override.
+  per-issue validity override, except a partner generate's `validityDays`
+  (V65, see "Partner vouchers").
 - **Currency is per issue, allowlist-validated, fail closed.** Absent inherits
   the merchant's currency; anything outside `SupportedCurrencies` refuses
   (`UNSUPPORTED_CURRENCY`), and a supported non-USD currency with no in-force
@@ -3188,7 +3189,18 @@ without going through the partner flow.
   another MWOS account while the link binds redemption to the holder's phone.
   Never log a generate or inquire result.
 - A merchant whose vouchers would never expire is `503 MERCHANT_NOT_READY`:
-  held money must have an end.
+  held money must have an end. A generate that sends `validityDays` is exempt,
+  because it sets the end itself.
+- **The partner may set the validity per sale (owner decision, 2026-11-11):**
+  optional `validityDays` on generate, from issue, between
+  `min-validity-days` and `max-validity-days` (1 and 365 by default;
+  `400 Validation failed` with `data.validityDays` outside them). Absent = the
+  merchant's configured validity, as before. It is snapshotted on the order
+  (`voucher_purchase_orders.validity_days`, V65), because an order paid later
+  is issued by the reconciler, and applied in `VoucherService.issueFromOrder`
+  before `finishIssue`, so the customer's message carries the right date. It
+  joins the idempotency fingerprint only when sent, so orders made without it
+  keep their stored fingerprint.
 
 ### Redeem and settlement
 

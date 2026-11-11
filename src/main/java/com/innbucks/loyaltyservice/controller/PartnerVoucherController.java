@@ -70,7 +70,9 @@ public class PartnerVoucherController {
                     it (`voucher.code`) for the till to print on the slip; an ONLINE sale's never does. \
                     `partnerReference` is the idempotency key: the same reference with the same content returns \
                     the order as it now stands (`replayed: true`), and with different content is \
-                    `422 IDEMPOTENCY_MISMATCH`. On staging the funding is simulated (`funding.simulated: true`); \
+                    `422 IDEMPOTENCY_MISMATCH`. `validityDays` (optional, 1 to 365 by default) sets how many \
+                    days the voucher stays valid from issue; without it the merchant's standard validity \
+                    applies. On staging the funding is simulated (`funding.simulated: true`); \
                     a reference starting with SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- or SIMDOWN- asks for a refusal, a \
                     slow confirmation, a slow refusal, or an unreachable provider.
 
@@ -91,6 +93,7 @@ public class PartnerVoucherController {
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Field errors", value = VALIDATION_400),
+                                    @ExampleObject(name = "Validity out of range", value = VALIDITY_400),
                                     @ExampleObject(name = "Payment method not available", value = FUNDING_METHOD_400),
                                     @ExampleObject(name = "Bad phone", value = BAD_PHONE_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED: one answer for every authentication failure",

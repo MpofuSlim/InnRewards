@@ -192,6 +192,13 @@ public class VoucherPurchaseOrder {
     @Column(name = "end_user_ref", length = 100)
     private String endUserRef;
 
+    /**
+     * Partner orders only (V65): the validity the partner asked for, in days
+     * from issue. NULL = the merchant's configured validity.
+     */
+    @Column(name = "validity_days")
+    private Integer validityDays;
+
     /** How the customer paid: CASH, CARD_SWIPE, MERCHANT_COLLECTED, INNBUCKS_CODE, … */
     @Column(name = "funding_method", length = 24)
     private String fundingMethod;

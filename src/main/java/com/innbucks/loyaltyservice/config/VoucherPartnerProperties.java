@@ -34,6 +34,8 @@ import java.util.stream.Collectors;
  * @param duplicateWindow       same terminal, phone and amount within this is a possible double sale
  * @param codePaymentTtl        how long an InnBucks payment code stays payable
  * @param simulatedDelay        SIMULATED only: how long a "slow" payment takes to resolve
+ * @param minValidityDays       shortest validity a generate may ask for, in days
+ * @param maxValidityDays       longest validity a generate may ask for, in days
  */
 @ConfigurationProperties("loyalty.voucher-partner")
 public record VoucherPartnerProperties(Boolean enabled,
@@ -48,7 +50,9 @@ public record VoucherPartnerProperties(Boolean enabled,
                                        String currencies,
                                        Duration duplicateWindow,
                                        Duration codePaymentTtl,
-                                       Duration simulatedDelay) {
+                                       Duration simulatedDelay,
+                                       Integer minValidityDays,
+                                       Integer maxValidityDays) {
 
     public static final String FUNDING_NONE = "NONE";
     public static final String FUNDING_SIMULATED = "SIMULATED";
@@ -67,6 +71,8 @@ public record VoucherPartnerProperties(Boolean enabled,
         duplicateWindow = duplicateWindow == null ? Duration.ofMinutes(2) : duplicateWindow;
         codePaymentTtl = codePaymentTtl == null ? Duration.ofMinutes(10) : codePaymentTtl;
         simulatedDelay = simulatedDelay == null ? Duration.ofSeconds(20) : simulatedDelay;
+        minValidityDays = minValidityDays == null ? 1 : minValidityDays;
+        maxValidityDays = maxValidityDays == null ? 365 : maxValidityDays;
         if (!FUNDING_NONE.equals(funding) && !FUNDING_SIMULATED.equals(funding)) {
             throw new IllegalArgumentException(
                     "loyalty.voucher-partner.funding must be NONE or SIMULATED (was " + funding + ")");
@@ -74,6 +80,10 @@ public record VoucherPartnerProperties(Boolean enabled,
         if (minValue.signum() <= 0 || maxValue.compareTo(minValue) < 0) {
             throw new IllegalArgumentException(
                     "loyalty.voucher-partner.min-value must be positive and not above max-value");
+        }
+        if (minValidityDays < 1 || maxValidityDays < minValidityDays) {
+            throw new IllegalArgumentException(
+                    "loyalty.voucher-partner.min-validity-days must be at least 1 and not above max-validity-days");
         }
         if (maxLifetime.isNegative() || maxLifetime.isZero() || maxClockSkew.isNegative()) {
             throw new IllegalArgumentException(
@@ -84,7 +94,7 @@ public record VoucherPartnerProperties(Boolean enabled,
     /** Defaults everywhere: off, no funding. */
     public static VoucherPartnerProperties defaults() {
         return new VoucherPartnerProperties(null, null, null, null, null, null, null, null, null, null, null,
-                null, null);
+                null, null, null, null);
     }
 
     public boolean simulatedFunding() {

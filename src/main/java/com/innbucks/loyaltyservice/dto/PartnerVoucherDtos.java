@@ -43,7 +43,11 @@ public final class PartnerVoucherDtos {
             @Schema(example = "USD") @NotBlank @Size(max = 8) String currency,
             @NotNull @Valid Customer customer,
             @NotNull @Valid Funding funding,
-            Boolean confirmDuplicate) {
+            Boolean confirmDuplicate,
+            @Schema(example = "90", description = """
+                    Optional. How many days the voucher stays valid, counted from when it is issued. \
+                    1 to 365 by default. Leave it out for the merchant's standard validity.""")
+            Integer validityDays) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

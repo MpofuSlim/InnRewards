@@ -102,6 +102,13 @@ final class PartnerVoucherSwaggerExamples {
               "data": { "customer.phone": "must not be blank" }
             }""";
 
+    static final String VALIDITY_400 = """
+            {
+              "code": "400 BAD_REQUEST",
+              "message": "Validation failed",
+              "data": { "validityDays": "must be between 1 and 365 days" }
+            }""";
+
     static final String FUNDING_METHOD_400 = """
             {
               "code": "FUNDING_METHOD_NOT_ALLOWED",

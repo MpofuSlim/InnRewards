@@ -106,6 +106,48 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
     // ------------------------------------------------------------------ flows
 
     @Test
+    void aSingleUseVoucher_refusesPartOfItsValue_andIsSpentWholeInOneGo() throws Exception {
+        String phone = newPhone();
+        String reference = "MWOS-ONE-" + UUID.randomUUID();
+        Map<String, Object> sale = cashSale(reference, phone, "20.00");
+        sale.put("usage", "single");
+
+        Call issued = partner("generate", sale);
+        assertThat(issued.status()).isEqualTo(201);
+        JsonNode voucherView = issued.body().path("data").path("voucher");
+        assertThat(voucherView.path("usage").asText()).isEqualTo("SINGLE");
+        String code = voucherView.path("code").asText();
+        assertThat(voucherRepository.findById(UUID.fromString(voucherView.path("voucherId").asText()))
+                .orElseThrow().isSingleRedemption()).isTrue();
+
+        // The same reference without the usage is a different request.
+        assertThat(partner("generate", cashSale(reference, phone, "20.00")).body().path("code").asText())
+                .isEqualTo("IDEMPOTENCY_MISMATCH");
+
+        // Part of it is refused, and nothing is spent.
+        Call part = partner("redeem", redeem(code, "15.00", "BET-ONE-1", phone));
+        assertThat(part.status()).isEqualTo(400);
+        assertThat(part.body().path("code").asText()).isEqualTo("PARTIAL_USE_NOT_ALLOWED");
+        Call balance = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-1", "endUserPhone", phone));
+        assertThat(balance.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("20.00");
+        assertThat(balance.body().path("data").path("usage").asText()).isEqualTo("SINGLE");
+
+        // The whole value in one go is accepted.
+        Call whole = partner("redeem", redeem(code, "20.00", "BET-ONE-2", phone));
+        assertThat(whole.status()).isEqualTo(200);
+        assertThat(whole.body().path("data").path("status").asText()).isEqualTo("REDEEMED");
+        assertThat(whole.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("0");
+
+        // A usage that is neither SINGLE nor MULTIPLE is a field error.
+        Map<String, Object> bad = cashSale("MWOS-ONE-" + UUID.randomUUID(), newPhone(), "18.00");
+        bad.put("usage", "TWICE");
+        Call refused = partner("generate", bad);
+        assertThat(refused.status()).isEqualTo(400);
+        assertThat(refused.body().path("data").path("usage").asText()).isEqualTo("must be SINGLE or MULTIPLE");
+    }
+
+    @Test
     void validityDays_setsTheVouchersExpiry_isBounded_andIsPartOfTheRequest() throws Exception {
         String phone = newPhone();
         String reference = "MWOS-VAL-" + UUID.randomUUID();

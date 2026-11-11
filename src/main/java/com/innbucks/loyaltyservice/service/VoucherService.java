@@ -280,6 +280,8 @@ public class VoucherService {
         if (order.getValidityDays() != null) {
             v.setExpiresAt(v.getIssuedAt().plus(order.getValidityDays(), ChronoUnit.DAYS));
         }
+        // ... and whether it is spent in one go (V66).
+        v.setSingleRedemption(order.isSingleRedemption());
         return finishIssue(v);
     }
 
@@ -1214,6 +1216,16 @@ public class VoucherService {
         // a caller entitled to redeem here.
         requireMayRedeemAt(tenantId, merchantId, staffCaller);
 
+        // A SINGLE-use voucher (V66) is spent in full in one redemption. Asking
+        // for less is refused, never applied, so its remaining value is never
+        // forfeited (owner decision, 2026-11-11). No amount, or one at or above
+        // the balance, uses it all, as for any voucher.
+        if (v.isSingleRedemption() && req.amount() != null && v.getRemainingBalance() != null
+                && req.amount().compareTo(v.getRemainingBalance()) < 0) {
+            throw LoyaltyException.badRequest(PARTIAL_USE_NOT_ALLOWED,
+                    "This voucher must be used for its full value in one go.");
+        }
+
         // The HOLDER's account state, resolved from the voucher — see
         // holderAccount for why this must not come from req.userId(), which is
         // recorded as a claim and nothing more. Empty for bulk stock, which has
@@ -1341,6 +1353,9 @@ public class VoucherService {
 
     /** Redeem refusal: the reference already names a successful use of ANOTHER voucher. */
     public static final String DUPLICATE_REFERENCE = "DUPLICATE_REFERENCE";
+
+    /** Refusal code for spending part of a SINGLE-use voucher (V66). */
+    public static final String PARTIAL_USE_NOT_ALLOWED = "PARTIAL_USE_NOT_ALLOWED";
 
     /**
      * A partner re-sending a redeem with a reference it already used must be

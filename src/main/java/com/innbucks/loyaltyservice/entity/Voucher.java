@@ -221,6 +221,14 @@ public class Voucher {
     @Column(name = "partner_id")
     private UUID partnerId;
 
+    /**
+     * V66: spent in full in one redemption. A redemption asking for less than
+     * the remaining balance is refused (PARTIAL_USE_NOT_ALLOWED); none is ever
+     * spent in part. Set only on partner vouchers today.
+     */
+    @Column(name = "single_redemption", nullable = false)
+    private boolean singleRedemption;
+
     // Single-hop p2p transfer (V34). A voucher may change hands exactly once:
     // issued -> transferred -> redeemed. `transferredAt == null` IS the
     // "may still be transferred" test — see VoucherService.transfer.

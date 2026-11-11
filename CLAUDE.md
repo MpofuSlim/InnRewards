@@ -798,7 +798,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V65**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V66**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -3201,6 +3201,17 @@ without going through the partner flow.
   before `finishIssue`, so the customer's message carries the right date. It
   joins the idempotency fingerprint only when sent, so orders made without it
   keep their stored fingerprint.
+- **A partner voucher may be SINGLE use (V66, owner decision 2026-11-11):**
+  optional `usage` on generate, `MULTIPLE` (default, today's balance
+  voucher) or `SINGLE`. A SINGLE voucher (`vouchers.single_redemption`, copied
+  from the order in `issueFromOrder`) must be redeemed for its full value in
+  one go: a redemption asking for less than the remaining balance is
+  `400 PARTIAL_USE_NOT_ALLOWED` and spends nothing (checked in `doRedeem` right
+  after `requireMayRedeemAt`). **Refuse, never forfeit**: spending part and
+  dropping the rest would leave held customer money behind on a dead voucher.
+  This is not the retired `MULTI_USE` type (face value per use); don't map
+  `usage` onto `voucher_type`. Inquire and generate return `usage`. It joins the
+  fingerprint only when SINGLE.
 
 ### Redeem and settlement
 

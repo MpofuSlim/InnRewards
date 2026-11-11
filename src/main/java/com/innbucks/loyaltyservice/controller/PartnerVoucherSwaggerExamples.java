@@ -46,7 +46,8 @@ final class PartnerVoucherSwaggerExamples {
                   "issuedAt": "2026-10-23T09:14:05Z",
                   "expiresAt": "2027-10-23T09:14:05Z",
                   "holderPhone": "****4567",
-                  "code": "9087876598764566"
+                  "code": "9087876598764566",
+                  "usage": "MULTIPLE"
                 },
                 "replayed": false
               }
@@ -225,7 +226,8 @@ final class PartnerVoucherSwaggerExamples {
                 "value": 20.00,
                 "remainingBalance": 15.00,
                 "currency": "USD",
-                "expiresAt": "2027-10-23T09:14:05Z"
+                "expiresAt": "2027-10-23T09:14:05Z",
+                "usage": "MULTIPLE"
               }
             }""";
 
@@ -300,6 +302,13 @@ final class PartnerVoucherSwaggerExamples {
                 "settlement": { "status": "SETTLED", "transferReference": "SIM-SETTLE-b7e1f3a2-9c4d-4e6f-8a0b-1c2d3e4f5a6b",
                                 "settledAt": "2026-10-23T10:02:11Z" }
               }
+            }""";
+
+    static final String PARTIAL_USE_400 = """
+            {
+              "code": "PARTIAL_USE_NOT_ALLOWED",
+              "message": "This voucher must be used for its full value in one go.",
+              "data": null
             }""";
 
     static final String EXPIRED_400 = """

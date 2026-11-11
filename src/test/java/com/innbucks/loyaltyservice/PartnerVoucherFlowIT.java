@@ -130,8 +130,11 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         Call standard = partner("generate", cashSale("MWOS-VAL-" + UUID.randomUUID(), newPhone(), "16.00"));
         Voucher plain = voucherRepository.findById(UUID.fromString(
                 standard.body().path("data").path("voucher").path("voucherId").asText())).orElseThrow();
+        // The rule path takes its own Instant.now() just after issuedAt, so it is
+        // a few microseconds short of 365 days; only the partner's own validity
+        // is counted from issuedAt exactly.
         assertThat(java.time.Duration.between(plain.getIssuedAt(), plain.getExpiresAt()))
-                .isEqualTo(java.time.Duration.ofDays(365));
+                .isCloseTo(java.time.Duration.ofDays(365), java.time.Duration.ofSeconds(1));
 
         for (int bad : new int[]{0, -5, 366}) {
             Map<String, Object> outOfRange = cashSale("MWOS-VAL-" + UUID.randomUUID(), newPhone(), "17.00");

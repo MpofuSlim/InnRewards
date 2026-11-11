@@ -276,6 +276,10 @@ public class VoucherService {
         v.setIssuerEmail(order.getIssuerEmail());
         // A partner order's voucher is redeemable through that partner only (V62).
         v.setPartnerId(order.getPartnerId());
+        // The partner may have asked for its own validity (V65), counted from issue.
+        if (order.getValidityDays() != null) {
+            v.setExpiresAt(v.getIssuedAt().plus(order.getValidityDays(), ChronoUnit.DAYS));
+        }
         return finishIssue(v);
     }
 

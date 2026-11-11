@@ -106,6 +106,47 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
     // ------------------------------------------------------------------ flows
 
     @Test
+    void validityDays_setsTheVouchersExpiry_isBounded_andIsPartOfTheRequest() throws Exception {
+        String phone = newPhone();
+        String reference = "MWOS-VAL-" + UUID.randomUUID();
+        Map<String, Object> sale = cashSale(reference, phone, "15.00");
+        sale.put("validityDays", 30);
+
+        Call issued = partner("generate", sale);
+        assertThat(issued.status()).isEqualTo(201);
+        Voucher voucher = voucherRepository.findById(UUID.fromString(
+                issued.body().path("data").path("voucher").path("voucherId").asText())).orElseThrow();
+        assertThat(java.time.Duration.between(voucher.getIssuedAt(), voucher.getExpiresAt()))
+                .isEqualTo(java.time.Duration.ofDays(30));
+        assertThat(issued.body().path("data").path("voucher").path("expiresAt").asText())
+                .isEqualTo(voucher.getExpiresAt().toString());
+
+        // The same reference asking for another validity is a different request.
+        Map<String, Object> changed = cashSale(reference, phone, "15.00");
+        changed.put("validityDays", 60);
+        assertThat(partner("generate", changed).body().path("code").asText()).isEqualTo("IDEMPOTENCY_MISMATCH");
+
+        // Without it, the merchant's own validity applies (the 365-day default here).
+        Call standard = partner("generate", cashSale("MWOS-VAL-" + UUID.randomUUID(), newPhone(), "16.00"));
+        Voucher plain = voucherRepository.findById(UUID.fromString(
+                standard.body().path("data").path("voucher").path("voucherId").asText())).orElseThrow();
+        // The rule path takes its own Instant.now() just after issuedAt, so it is
+        // a few microseconds short of 365 days; only the partner's own validity
+        // is counted from issuedAt exactly.
+        assertThat(java.time.Duration.between(plain.getIssuedAt(), plain.getExpiresAt()))
+                .isCloseTo(java.time.Duration.ofDays(365), java.time.Duration.ofSeconds(1));
+
+        for (int bad : new int[]{0, -5, 366}) {
+            Map<String, Object> outOfRange = cashSale("MWOS-VAL-" + UUID.randomUUID(), newPhone(), "17.00");
+            outOfRange.put("validityDays", bad);
+            Call refused = partner("generate", outOfRange);
+            assertThat(refused.status()).as("validityDays " + bad).isEqualTo(400);
+            assertThat(refused.body().path("data").path("validityDays").asText())
+                    .isEqualTo("must be between 1 and 365 days");
+        }
+    }
+
+    @Test
     void aPosCashSale_issuesAVoucher_whoseCodeTheTillPrints_andItRedeemsInSettledSlices() throws Exception {
         String phone = newPhone();
         String reference = "MWOS-POS-" + UUID.randomUUID();

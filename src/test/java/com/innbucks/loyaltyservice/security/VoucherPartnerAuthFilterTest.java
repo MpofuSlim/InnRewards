@@ -27,7 +27,7 @@ class VoucherPartnerAuthFilterTest {
 
     private VoucherPartnerAuthFilter filter(boolean enabled) {
         VoucherPartnerProperties props = new VoucherPartnerProperties(enabled, "aud", null, null, null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
         return new VoucherPartnerAuthFilter(props, verifier, new LoyaltyMetrics(registry));
     }
 

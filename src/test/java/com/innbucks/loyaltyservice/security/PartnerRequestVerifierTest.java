@@ -81,7 +81,7 @@ class PartnerRequestVerifierTest {
 
     private PartnerRequestVerifier verifier(Clock clock) {
         VoucherPartnerProperties props = new VoucherPartnerProperties(true, AUD, null, null, null, null, null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null, null);
         return new PartnerRequestVerifier(keys, partners, props, jtiStore, clock);
     }
 

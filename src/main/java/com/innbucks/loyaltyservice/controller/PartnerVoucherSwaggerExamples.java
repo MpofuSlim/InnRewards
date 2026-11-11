@@ -311,6 +311,13 @@ final class PartnerVoucherSwaggerExamples {
               "data": null
             }""";
 
+    static final String INSUFFICIENT_BALANCE_400 = """
+            {
+              "code": "INSUFFICIENT_VOUCHER_BALANCE",
+              "message": "This voucher has only USD 3.00 left.",
+              "data": { "remainingBalance": 3.00, "currency": "USD" }
+            }""";
+
     static final String EXPIRED_400 = """
             {
               "code": "EXPIRED",

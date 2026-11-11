@@ -103,12 +103,7 @@ public final class PartnerVoucherDtos {
             @Schema(example = "MWOS-ACC-998877") @NotBlank @Size(max = 100) String endUserRef,
             @Schema(example = "+263771234567") @Size(max = 32) String endUserPhone,
             @Schema(example = "ONLINE", allowableValues = {"POS", "ONLINE"}) String channel,
-            @Size(max = 64) String terminalId,
-            @Schema(example = "false", description = """
-                    Optional, default false. When the amount is more than the voucher's balance: \
-                    false refuses the redeem (INSUFFICIENT_VOUCHER_BALANCE, nothing spent, the balance \
-                    in data.remainingBalance); true deducts what is left and returns that amount.""")
-            Boolean allowPartial) {
+            @Size(max = 64) String terminalId) {
     }
 
     // ------------------------------------------------------------ responses

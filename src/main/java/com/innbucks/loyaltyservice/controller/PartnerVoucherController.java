@@ -187,9 +187,8 @@ public class PartnerVoucherController {
     @Operation(summary = "Redeem some or all of a voucher on the merchant's platform",
             description = """
                     Takes `amount` off the voucher's balance (all of it when omitted). An `amount` above the \
-                    balance is refused with `INSUFFICIENT_VOUCHER_BALANCE` (nothing spent, the balance in \
-                    `data.remainingBalance`) unless `allowPartial` is true, which takes what is left and returns \
-                    that amount in `value`. A 200 is final: credit the customer then. The amount is then paid to the merchant from \
+                    balance is refused with `INSUFFICIENT_VOUCHER_BALANCE`: nothing is spent, and the balance \
+                    is in `data.remainingBalance` so you can retry for it. A 200 is final: credit the customer then. The amount is then paid to the merchant from \
                     holding; `settlement` says when. `reference` is the idempotency key: a re-send returns the \
                     original use (`replayed: true`) and never spends twice.
 

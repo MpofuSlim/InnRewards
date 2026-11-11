@@ -919,13 +919,10 @@ public class VoucherService {
      * @param bindToHolderPhone when true, {@code endUserPhone} must be the
      *        voucher's holder phone, so a leaked code is useless to anyone else
      * @param currency          when not null, must be the voucher's currency
-     * @param allowPartial      when false, an amount above the remaining balance
-     *        is refused ({@link #INSUFFICIENT_VOUCHER_BALANCE}) instead of being
-     *        cut down to the balance
      */
     public record PartnerRedeemScope(UUID partnerId, String endUserRef, String endUserPhone,
                                      String channel, String terminalId, boolean bindToHolderPhone,
-                                     String currency, boolean allowPartial) {}
+                                     String currency) {}
 
     /** {@link #redeemIdempotent} for the partner API: one retry after a reference race. */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
@@ -1229,14 +1226,14 @@ public class VoucherService {
                     "This voucher must be used for its full value in one go.");
         }
 
-        // A partner redeem asking for MORE than the balance is refused unless the
-        // partner said it can take a part (allowPartial). Through the partner API
-        // the caller is often an unattended system (a betting wallet top-up) that
-        // reads responseCode only; a 2xx deducting less than it asked for would
-        // be paid out in full and the difference lost (owner decision,
-        // 2026-11-11). Nothing is spent; the balance is returned so the caller
-        // can retry for it. Tills and the customer app keep taking what is left.
-        if (partner != null && !partner.allowPartial() && req.amount() != null
+        // A partner redeem asking for MORE than the balance is always refused
+        // (owner decision, 2026-11-11). Through the partner API the caller is
+        // often an unattended system (a betting wallet top-up) that reads the
+        // response code only; a success deducting less than it asked for would
+        // be paid out in full and the difference lost. Nothing is spent; the
+        // balance is returned so the caller can retry for it. Tills and the
+        // customer app keep taking what is left.
+        if (partner != null && req.amount() != null
                 && v.getRemainingBalance() != null && req.amount().compareTo(v.getRemainingBalance()) > 0) {
             BigDecimal left = v.getRemainingBalance().setScale(2, java.math.RoundingMode.HALF_UP);
             throw new com.innbucks.loyaltyservice.exception.LoyaltyDataException(

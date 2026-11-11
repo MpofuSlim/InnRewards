@@ -390,7 +390,7 @@ public class PartnerVoucherService {
                 String code = required("code", req.code());
                 String endUserRef = required("endUserRef", req.endUserRef());
                 VoucherService.PartnerRedeemScope scope = scope(linked, endUserRef, req.endUserPhone(),
-                        "ONLINE", req.terminalId(), null, false);
+                        "ONLINE", req.terminalId(), null);
                 Voucher v = guard.attemptAs(guardIdentity(partner, merchantId, endUserRef),
                         () -> voucherService.inquireForPartner(linked.merchant().getTenantId(), merchantId, code, scope));
                 yield new Answer<>(HttpStatus.OK, "200 OK", "Voucher found", balanceOf(v));
@@ -430,7 +430,7 @@ public class PartnerVoucherService {
         String currency = req.currency() == null || req.currency().isBlank()
                 ? null : req.currency().strip().toUpperCase(Locale.ROOT);
         VoucherService.PartnerRedeemScope scope = scope(linked, req.endUserRef().strip(), req.endUserPhone(),
-                channel, blankToNull(req.terminalId()), currency, Boolean.TRUE.equals(req.allowPartial()));
+                channel, blankToNull(req.terminalId()), currency);
         Dtos.RedeemVoucherRequest redeem = new Dtos.RedeemVoucherRequest(merchantId, req.code(), null, null, null,
                 null, req.amount(), req.reference());
         Dtos.RedemptionResponse used = guard.attemptAs(guardIdentity(partner, merchantId, scope.endUserRef()),
@@ -793,14 +793,13 @@ public class PartnerVoucherService {
     }
 
     private VoucherService.PartnerRedeemScope scope(Linked linked, String endUserRef, String endUserPhone,
-                                                    String channel, String terminalId, String currency,
-                                                    boolean allowPartial) {
+                                                    String channel, String terminalId, String currency) {
         boolean bind = linked.link().isBindRedeemToHolder();
         if (bind && (endUserPhone == null || endUserPhone.isBlank())) {
             throw validation("endUserPhone", "is required: the verified phone on the customer's account");
         }
         return new VoucherService.PartnerRedeemScope(linked.link().getPartnerId(), endUserRef,
-                blankToNull(endUserPhone), channel, terminalId, bind, currency, allowPartial);
+                blankToNull(endUserPhone), channel, terminalId, bind, currency);
     }
 
     /** The lockout identity: one partner's one merchant's one customer account. */

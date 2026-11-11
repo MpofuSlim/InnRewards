@@ -3222,22 +3222,21 @@ without going through the partner flow.
   currency must match; a replayed `reference` with a different amount or end
   user is `422 IDEMPOTENCY_MISMATCH`. Partial uses, the balance and the per-use
   rules are V61's.
-- **A partner redeem above the balance is REFUSED, unless the partner sends
-  `allowPartial: true`** (owner decision, 2026-11-11):
+- **A partner redeem above the balance is always REFUSED** (owner decision,
+  2026-11-11):
   - The refusal is `400 INSUFFICIENT_VOUCHER_BALANCE`. Nothing is spent, and
     `data.remainingBalance` and `data.currency` let the caller retry for exactly
     that amount.
-  - With `allowPartial: true`, the redeem takes what is left, as V61 does.
+  - There is no opt-in to take a part, deliberately.
   - **Why the partner API differs from tills.** Its callers are often
     unattended systems that read the response code only. A success that
     deducted less than they asked for would be paid out in full, and the
-    difference lost. Card networks work the same way: partial approval only
-    for a terminal that says it can take one.
+    difference lost.
   - **Tills, the customer app and the public surface are unchanged.** They
     still take what is left. The check keys on the `PartnerRedeemScope`, so
     never move it into the shared path.
-  - It runs after the SINGLE check. So a SINGLE voucher asked for more than
-    its balance is refused too, unless the partner sends `allowPartial`.
+  - It runs after the SINGLE check, so a SINGLE voucher asked for more than its
+    balance is refused too.
   - A replay of an earlier use and an already spent voucher answer as before,
     because both are decided first.
 - **The holder's loyalty account gate is skipped** for a partner use: the value

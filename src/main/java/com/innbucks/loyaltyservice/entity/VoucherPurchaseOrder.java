@@ -199,6 +199,10 @@ public class VoucherPurchaseOrder {
     @Column(name = "validity_days")
     private Integer validityDays;
 
+    /** Partner orders only (V66): the voucher must be spent in full in one redemption. */
+    @Column(name = "single_redemption", nullable = false)
+    private boolean singleRedemption;
+
     /** How the customer paid: CASH, CARD_SWIPE, MERCHANT_COLLECTED, INNBUCKS_CODE, … */
     @Column(name = "funding_method", length = 24)
     private String fundingMethod;

@@ -72,7 +72,8 @@ public class PartnerVoucherController {
                     the order as it now stands (`replayed: true`), and with different content is \
                     `422 IDEMPOTENCY_MISMATCH`. `validityDays` (optional, 1 to 365 by default) sets how many \
                     days the voucher stays valid from issue; without it the merchant's standard validity \
-                    applies. On staging the funding is simulated (`funding.simulated: true`); \
+                    applies. `usage` is MULTIPLE (default: spent over several redemptions) or SINGLE (must be \
+                    redeemed for its full value in one go). On staging the funding is simulated (`funding.simulated: true`); \
                     a reference starting with SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- or SIMDOWN- asks for a refusal, a \
                     slow confirmation, a slow refusal, or an unreachable provider.
 
@@ -198,12 +199,14 @@ public class PartnerVoucherController {
             @ApiResponse(responseCode = "200", description = "Voucher redeemed (or replayed)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = REDEEM_200))),
-            @ApiResponse(responseCode = "400", description = "Invalid request, mistyped code (not counted), or expired",
+            @ApiResponse(responseCode = "400", description = "Invalid request, mistyped code (not counted), expired, "
+                    + "or less than the full value of a SINGLE-use voucher",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Field errors", value = VALIDATION_400),
                                     @ExampleObject(name = "Mistyped code", value = MISTYPED_400),
-                                    @ExampleObject(name = "Expired", value = EXPIRED_400)})),
+                                    @ExampleObject(name = "Expired", value = EXPIRED_400),
+                                    @ExampleObject(name = "Part of a single-use voucher", value = PARTIAL_USE_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),

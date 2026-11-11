@@ -488,7 +488,8 @@ public class PartnerVoucherService {
     record Sale(String reference, String channel, String outlet, String terminalId, String operatorRef,
                 String endUserRef, BigDecimal amount, String currency, String phone, String name, String method,
                 String approvalCode, String last4, String collectedVia, String collectionRef, String payerPhone,
-                String evidenceKey, String fingerprint, boolean confirmDuplicate, Integer validityDays) {}
+                String evidenceKey, String fingerprint, boolean confirmDuplicate, Integer validityDays,
+                boolean singleRedemption) {}
 
     private Sale validate(Linked linked, PartnerVoucherDtos.GenerateRequest req) {
         String channel = req.channel().strip().toUpperCase(Locale.ROOT);
@@ -592,16 +593,24 @@ public class PartnerVoucherService {
                     "must be between " + props.minValidityDays() + " and " + props.maxValidityDays() + " days");
         }
 
+        String usage = req.usage() == null || req.usage().isBlank()
+                ? "MULTIPLE" : req.usage().strip().toUpperCase(Locale.ROOT);
+        if (!usage.equals("SINGLE") && !usage.equals("MULTIPLE")) {
+            throw validation("usage", "must be SINGLE or MULTIPLE");
+        }
+        boolean singleRedemption = usage.equals("SINGLE");
+
         String reference = req.partnerReference().strip();
         // The validity joins the fingerprint only when sent, so an order made
         // before V65 (or without it) keeps the fingerprint it was stored with.
         String fingerprint = sha256(String.join("|", channel, nz(outlet), nz(terminalId), amount.toPlainString(),
                 currency, phone, method, nz(approvalCode), nz(collectionRef))
-                + (validityDays != null ? "|validity=" + validityDays : ""));
+                + (validityDays != null ? "|validity=" + validityDays : "")
+                + (singleRedemption ? "|usage=SINGLE" : ""));
         return new Sale(reference, channel, outlet, terminalId, blankToNull(req.operatorRef()),
                 blankToNull(req.endUserRef()), amount, currency, phone, name, method, approvalCode, last4,
                 collectedVia, collectionRef, blankToNull(f.payerPhone()), evidenceKey, fingerprint,
-                Boolean.TRUE.equals(req.confirmDuplicate()), validityDays);
+                Boolean.TRUE.equals(req.confirmDuplicate()), validityDays, singleRedemption);
     }
 
     private static boolean merchantAccepts(VoucherPartnerMerchant link, String method) {
@@ -677,6 +686,7 @@ public class PartnerVoucherService {
         o.setOperatorRef(sale.operatorRef());
         o.setEndUserRef(sale.endUserRef());
         o.setValidityDays(sale.validityDays());
+        o.setSingleRedemption(sale.singleRedemption());
         o.setFundingMethod(sale.method());
         o.setFundingStatus(FundingStatus.NOT_STARTED);
         o.setFundingEvidenceKey(sale.evidenceKey());
@@ -716,7 +726,8 @@ public class PartnerVoucherService {
                 : readTx.execute(s -> vouchers.findById(o.getVoucherId()).map(v ->
                         new PartnerVoucherDtos.VoucherView(v.getId(), v.getStatus().name(), money2(v.getValue()),
                                 money2(v.getRemainingBalance()), v.getCurrency(), v.getIssuedAt(), v.getExpiresAt(),
-                                MsisdnMasking.mask(v.getAssigneePhone()), printed ? v.getCode() : null))
+                                MsisdnMasking.mask(v.getAssigneePhone()), printed ? v.getCode() : null,
+                                usageOf(v)))
                         .orElse(null));
         String fundingStatus = o.getFundingStatus() == null ? null : switch (o.getFundingStatus()) {
             case NOT_STARTED, AWAITING -> "PENDING";
@@ -750,7 +761,11 @@ public class PartnerVoucherService {
                 && (v.getExpiresAt() == null || v.getExpiresAt().isAfter(clock.instant()))
                 && v.getRemainingBalance() != null && v.getRemainingBalance().signum() > 0;
         return new PartnerVoucherDtos.VoucherBalanceView(v.getId(), v.getStatus().name(), live, money2(v.getValue()),
-                money2(v.getRemainingBalance()), v.getCurrency(), v.getExpiresAt());
+                money2(v.getRemainingBalance()), v.getCurrency(), v.getExpiresAt(), usageOf(v));
+    }
+
+    private static String usageOf(Voucher v) {
+        return v.isSingleRedemption() ? "SINGLE" : "MULTIPLE";
     }
 
     private VoucherRedemption findRedemption(VoucherPartner partner, UUID merchantId, String reference) {

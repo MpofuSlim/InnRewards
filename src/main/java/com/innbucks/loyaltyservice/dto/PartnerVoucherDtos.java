@@ -47,7 +47,12 @@ public final class PartnerVoucherDtos {
             @Schema(example = "90", description = """
                     Optional. How many days the voucher stays valid, counted from when it is issued. \
                     1 to 365 by default. Leave it out for the merchant's standard validity.""")
-            Integer validityDays) {
+            Integer validityDays,
+            @Schema(example = "SINGLE", allowableValues = {"SINGLE", "MULTIPLE"}, description = """
+                    Optional. MULTIPLE (the default): the voucher can be spent over several redemptions \
+                    until its balance is used up. SINGLE: it must be redeemed for its full value in one \
+                    redemption; a smaller amount is refused with 400 PARTIAL_USE_NOT_ALLOWED.""")
+            String usage) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -122,11 +127,14 @@ public final class PartnerVoucherDtos {
                                       customer's slip; null for an ONLINE sale. 16 digits, raw: print it in \
                                       groups of four (9087-8765-9876-4566). Keep it a string. It spends the \
                                       voucher, so never log it.""")
-                              String code) {
+                              String code,
+                              @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"}) String usage) {
     }
 
     public record VoucherBalanceView(UUID voucherId, String status, boolean redeemable, BigDecimal value,
-                                     BigDecimal remainingBalance, String currency, Instant expiresAt) {
+                                     BigDecimal remainingBalance, String currency, Instant expiresAt,
+                                     @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"})
+                                     String usage) {
     }
 
     public record RedeemResult(UUID redemptionId, UUID voucherId, String status, BigDecimal value,

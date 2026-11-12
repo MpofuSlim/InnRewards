@@ -60,14 +60,12 @@ public class RuleController {
                           "**Earning floor** — `minTransactionAmount` is the amount a transaction must reach " +
                           "before it earns anything: spend below it and the transaction still completes but " +
                           "awards ZERO points. A merchant rule that omits it inherits the global rule's floor.\n\n" +
-                          "**Fee schedules** — `feeIssued` / `feeRedeemed` are the per-voucher fees the merchant " +
-                          "is billed. Set on a GLOBAL rule they are the tenant STANDARD every merchant inherits; " +
-                          "set on a merchant rule they override the standard for that merchant only. Each side " +
-                          "resolves independently in this order: **merchant rule → the merchant record's own " +
-                          "fee (only when it was set explicitly at onboarding) → global rule → no fee**.\n\n" +
-                          "**A zero fee is allowed on either side** (FIXED 0 or PERCENTAGE 0). On a global rule " +
-                          "it makes every merchant under the tenant free to issue or redeem, so the console " +
-                          "must warn before saving one. Omit `feeIssued` to inherit rather than to zero it. " +
+                          "**Fees are set by InnBucks, not here.** `feeIssued` / `feeRedeemed` are what the " +
+                          "merchant pays InnBucks, so only `loyalty-fees:manage` holders and SUPER_ADMIN may send " +
+                          "them; anyone else gets `403 FEES_PLATFORM_ONLY`. Leave them out. InnBucks sets a " +
+                          "tenant's default and a merchant's own fees through `/loyalty/fees`, and those beat any " +
+                          "fee on a rule. A fee on a rule only applies while InnBucks has set neither: merchant " +
+                          "rule → the merchant record's own fee → global rule → no fee. " +
                           "`GET /loyalty/merchants/fee-audit` lists every merchant issuing for free.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -139,7 +137,7 @@ public class RuleController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "The tenant standard (no merchantId) is written by the tenant's merchant admin or a tenant-level role; a SHOP_ADMIN is refused (GLOBAL_RULE_ROLE). A merchant rule needs a merchant the caller administers (NOT_MERCHANT_OWNER).",
+                    description = "The tenant standard (no merchantId) is written by the tenant's merchant admin or a tenant-level role; a SHOP_ADMIN is refused (GLOBAL_RULE_ROLE). A merchant rule needs a merchant the caller administers (NOT_MERCHANT_OWNER). Fees on a rule need loyalty-fees:manage or SUPER_ADMIN (FEES_PLATFORM_ONLY).",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -155,6 +153,13 @@ public class RuleController {
                                             {
                                               "code": "NOT_MERCHANT_OWNER",
                                               "message": "You can only act on merchants you administer.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Fees sent by a merchant", value = """
+                                            {
+                                              "code": "FEES_PLATFORM_ONLY",
+                                              "message": "Fees are set by InnBucks. Leave the fee fields out and InnBucks will set this merchant's fees.",
                                               "data": null
                                             }
                                             """)

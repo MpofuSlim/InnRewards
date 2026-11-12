@@ -35,10 +35,10 @@ class MerchantOrganizationOwnershipSecurityTest extends ControllerSecurityTestBa
 
     @Autowired MerchantRepository merchantRepository;
 
-    /** Waived so the zero-issue-fee guard is not what the test exercises. */
+    /** No fee fields: fees are InnBucks' to set (V67), and a merchant admin sends none. */
     private static String merchantBody(String name) {
         return """
-                {"name":"%s","waiveFees":true,"waiveFeesReason":"ownership test"}
+                {"name":"%s"}
                 """.formatted(name);
     }
 
@@ -131,7 +131,7 @@ class MerchantOrganizationOwnershipSecurityTest extends ControllerSecurityTestBa
     void namingAnotherBusiness_isRefused_ratherThanSilentlyIgnored() throws Exception {
         UUID tenant = tenantOwnedBy(ACME);
         String body = """
-                {"name":"Rival Brand %s","waiveFees":true,"waiveFeesReason":"t","organizationId":"%s"}
+                {"name":"Rival Brand %s","organizationId":"%s"}
                 """.formatted(UUID.randomUUID(), RIVAL);
 
         mockMvc.perform(post("/loyalty/merchants")
@@ -147,7 +147,7 @@ class MerchantOrganizationOwnershipSecurityTest extends ControllerSecurityTestBa
     void superAdmin_onboardsAMerchantForANamedBusiness() throws Exception {
         UUID tenant = tenantOwnedBy(null);
         String body = """
-                {"name":"On Behalf %s","waiveFees":true,"waiveFeesReason":"t","organizationId":"%s"}
+                {"name":"On Behalf %s","organizationId":"%s"}
                 """.formatted(UUID.randomUUID(), RIVAL);
 
         mockMvc.perform(post("/loyalty/merchants")

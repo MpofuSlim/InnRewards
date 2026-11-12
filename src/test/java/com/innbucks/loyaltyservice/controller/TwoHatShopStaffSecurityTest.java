@@ -69,7 +69,7 @@ class TwoHatShopStaffSecurityTest extends ControllerSecurityTestBase {
 
     private static String merchantBody(String name) {
         return """
-                {"name":"%s","waiveFees":true,"waiveFeesReason":"two-hat test"}
+                {"name":"%s"}
                 """.formatted(name);
     }
 

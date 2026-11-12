@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.FeesPermissions;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -40,6 +41,17 @@ public class MerchantService {
 
     private final com.innbucks.loyaltyservice.config.SupportedCurrencies supportedCurrencies;
 
+    // V67: InnBucks' own fee schedules, which beat the legacy rule and
+    // merchant-record fees (EffectiveFees). Setter-injected so the unit tests
+    // that build this class by hand need no change: they price with NONE, the
+    // legacy resolution they pin. Spring always injects the real source.
+    private PlatformFeeBookSource feeBooks = PlatformFeeBookSource.NONE;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFeeBooks(PlatformFeeBookSource feeBooks) {
+        this.feeBooks = feeBooks;
+    }
+
     public MerchantService(MerchantRepository merchants,
                            com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository rules,
                            com.innbucks.loyaltyservice.config.LoyaltyProperties props,
@@ -51,6 +63,7 @@ public class MerchantService {
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
+        requireFeeAuthorityFor(req);
         // Duplicate-name guard: a tenant can't have two merchants with the same
         // name (case-insensitive). Trim first so " Cafe" and "Cafe" collide.
         String name = req.name() == null ? "" : req.name().trim();
@@ -139,6 +152,42 @@ public class MerchantService {
         m.setFeeRedeemedType(f.type());
         m.setFeeRedeemedFixed(nz(f.fixed()));
         m.setFeeRedeemedPercentage(nz(f.percentage()));
+    }
+
+    /**
+     * Fees are InnBucks' to set (V67, owner decision 2026-11-12): a caller
+     * without {@code loyalty-fees:manage} may not onboard a merchant with fees
+     * of its own choosing, nor waive them. Refused, never silently dropped, so
+     * a client never believes it set a fee that was not saved.
+     *
+     * <p>The merchant record's onboarding default (no fee model, or FIXED 0) is
+     * not a choice: it means "not configured", which is how the record has
+     * always read it. So a form that always sends it keeps working. On the
+     * {@code loyaltyOverride} block any fee type is a choice, because on a rule
+     * even FIXED 0 is an explicit zero that beats the tenant standard.
+     */
+    private static void requireFeeAuthorityFor(Dtos.MerchantRequest req) {
+        if (FeesPermissions.callerMaySetFees()) {
+            return;
+        }
+        Dtos.MerchantRuleOverride o = req.loyaltyOverride();
+        boolean choosesFees = !isOnboardingDefault(req.feeIssued())
+                || !isOnboardingDefault(req.feeRedeemed())
+                || Boolean.TRUE.equals(req.waiveFees())
+                || (o != null && (hasFeeType(o.feeIssued()) || hasFeeType(o.feeRedeemed())));
+        if (choosesFees) {
+            throw LoyaltyException.forbidden(FeesPermissions.REFUSED_CODE, FeesPermissions.REFUSED_MESSAGE);
+        }
+    }
+
+    private static boolean isOnboardingDefault(Dtos.FeeModel f) {
+        return f == null || f.type() == null
+                || (f.type() == Merchant.FeeType.FIXED && nz(f.fixed()).signum() == 0
+                    && nz(f.percentage()).signum() == 0);
+    }
+
+    static boolean hasFeeType(Dtos.FeeModel f) {
+        return f != null && f.type() != null;
     }
 
     static void validate(Dtos.FeeModel f, String fieldName) {
@@ -269,11 +318,12 @@ public class MerchantService {
     public Dtos.ZeroFeeAudit auditZeroFeeMerchants(UUID tenantId) {
         List<Merchant> all = merchants.findByTenantId(tenantId);
         List<com.innbucks.loyaltyservice.entity.LoyaltyRule> tenantRules = rules.findByTenantId(tenantId);
+        PlatformFeeBook feeBook = feeBooks.forTenant(tenantId);
         Instant now = Instant.now();
         List<Dtos.ZeroFeeMerchant> free = new java.util.ArrayList<>();
         for (Merchant m : all) {
             EffectiveFees fees = EffectiveFees.resolve(m,
-                    EffectiveFees.applicable(tenantRules, m.getId(), TransactionType.PURCHASE), now);
+                    EffectiveFees.applicable(tenantRules, m.getId(), TransactionType.PURCHASE), feeBook, now);
             if (fees.issuesForFree()) {
                 free.add(new Dtos.ZeroFeeMerchant(m.getId(), m.getName(),
                         m.getStatus() == null ? null : m.getStatus().name(),

@@ -218,7 +218,7 @@ class ReadOnlyPlatformAccessSecurityTest extends ControllerSecurityTestBase {
 
         mockMvc.perform(as(post("/loyalty/merchants"), reader)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Reader brand\",\"waiveFees\":true,\"waiveFeesReason\":\"t\"}"))
+                        .content("{\"name\":\"Reader brand\"}"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(as(post("/loyalty/rules"), reader)
                         .contentType(MediaType.APPLICATION_JSON)

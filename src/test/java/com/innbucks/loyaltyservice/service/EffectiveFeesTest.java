@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.entity.FeeSchedule;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
@@ -15,8 +16,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the V29 fee-resolution precedence: merchant rule beats the merchant
- * record, which beats the tenant-wide (global) rule, which beats "no fee".
+ * Pins the fee-resolution precedence. InnBucks' own schedules come first (V67):
+ * the merchant's, else its tenant's default. Then the V29 legacy levels:
+ * merchant rule beats the merchant record, which beats the tenant-wide
+ * (global) rule, which beats "no fee".
  *
  * <p>Pure JUnit — {@link EffectiveFees} takes the rules as a list, so no
  * repository or spring context is involved.
@@ -239,5 +242,152 @@ class EffectiveFeesTest {
     @Test
     void validity_toleratesANullRuleList() {
         assertThat(EffectiveFees.resolveVoucherValidityDays(null, NOW, 365)).isEqualTo(365);
+    }
+
+    // ── InnBucks' schedules (V67) ───────────────────────────────────────────
+
+    private static FeeSchedule schedule(UUID tenantId, UUID merchantId, String issuedFixed, String redeemedPct,
+                                        Instant at) {
+        FeeSchedule s = new FeeSchedule();
+        s.setId(UUID.randomUUID());
+        s.setTenantId(tenantId);
+        s.setMerchantId(merchantId);
+        s.setFeeIssuedType(Merchant.FeeType.FIXED);
+        s.setFeeIssuedFixed(new BigDecimal(issuedFixed));
+        s.setFeeIssuedPercentage(BigDecimal.ZERO);
+        s.setFeeRedeemedType(Merchant.FeeType.PERCENTAGE);
+        s.setFeeRedeemedFixed(BigDecimal.ZERO);
+        s.setFeeRedeemedPercentage(new BigDecimal(redeemedPct));
+        s.setSetBy("finance@innbucks.co.zw");
+        s.setCreatedAt(at);
+        return s;
+    }
+
+    private static FeeSchedule withdrawn(UUID tenantId, UUID merchantId, Instant at) {
+        FeeSchedule s = new FeeSchedule();
+        s.setId(UUID.randomUUID());
+        s.setTenantId(tenantId);
+        s.setMerchantId(merchantId);
+        s.setCleared(true);
+        s.setSetBy("finance@innbucks.co.zw");
+        s.setCreatedAt(at);
+        return s;
+    }
+
+    /** A merchant that set everything the legacy way: its own rule AND an explicit record fee. */
+    private static Merchant merchantWithLegacyFees(List<LoyaltyRule> rulesOut) {
+        Merchant m = unconfiguredMerchant();
+        m.setFeeIssuedType(Merchant.FeeType.FIXED);
+        m.setFeeIssuedFixed(new BigDecimal("0.05"));
+        m.setFeeIssuedPercentage(BigDecimal.ZERO);
+        rulesOut.add(withRedeemedFee(withIssuedFee(rule(MERCHANT_ID), Merchant.FeeType.FIXED, "0.01", "0"),
+                Merchant.FeeType.FIXED, "0.01", "0"));
+        rulesOut.add(withIssuedFee(rule(null), Merchant.FeeType.FIXED, "0.02", "0"));
+        return m;
+    }
+
+    @Test
+    void schedules_theMerchantsOwnScheduleBeatsEverything() {
+        java.util.List<LoyaltyRule> rules = new java.util.ArrayList<>();
+        Merchant m = merchantWithLegacyFees(rules);
+        PlatformFeeBook book = PlatformFeeBook.of(List.of(
+                schedule(m.getTenantId(), null, "0.40", "2", NOW.minusSeconds(120)),
+                schedule(m.getTenantId(), m.getId(), "0.30", "1", NOW.minusSeconds(60))));
+
+        EffectiveFees fees = EffectiveFees.resolve(m, rules, book, NOW);
+
+        assertThat(fees.issued().source()).isEqualTo(EffectiveFees.Source.MERCHANT_SCHEDULE);
+        assertThat(fees.redeemed().source()).isEqualTo(EffectiveFees.Source.MERCHANT_SCHEDULE);
+        assertThat(fees.feeForIssued(voucher("100"))).isEqualByComparingTo("0.30");
+        assertThat(fees.feeForRedeemed(voucher("100"))).isEqualByComparingTo("1.00");
+    }
+
+    @Test
+    void schedules_theTenantDefaultBeatsEveryLegacyLevel() {
+        java.util.List<LoyaltyRule> rules = new java.util.ArrayList<>();
+        Merchant m = merchantWithLegacyFees(rules);
+        PlatformFeeBook book = PlatformFeeBook.of(List.of(
+                schedule(m.getTenantId(), null, "0.40", "2", NOW.minusSeconds(60))));
+
+        EffectiveFees fees = EffectiveFees.resolve(m, rules, book, NOW);
+
+        // Both sides come from the one schedule, even the side the merchant's own
+        // rule set: a merchant cannot keep a fee InnBucks has replaced.
+        assertThat(fees.issued().source()).isEqualTo(EffectiveFees.Source.TENANT_SCHEDULE);
+        assertThat(fees.redeemed().source()).isEqualTo(EffectiveFees.Source.TENANT_SCHEDULE);
+        assertThat(fees.feeForIssued(voucher("100"))).isEqualByComparingTo("0.40");
+        assertThat(fees.feeForRedeemed(voucher("100"))).isEqualByComparingTo("2.00");
+    }
+
+    @Test
+    void schedules_anotherTenantsDefaultOrAnotherMerchantsScheduleDoesNotApply() {
+        java.util.List<LoyaltyRule> rules = new java.util.ArrayList<>();
+        Merchant m = merchantWithLegacyFees(rules);
+        PlatformFeeBook book = PlatformFeeBook.of(List.of(
+                schedule(UUID.randomUUID(), null, "0.40", "2", NOW.minusSeconds(60)),
+                schedule(m.getTenantId(), UUID.randomUUID(), "0.30", "1", NOW.minusSeconds(60))));
+
+        EffectiveFees fees = EffectiveFees.resolve(m, rules, book, NOW);
+
+        assertThat(fees.issued().source()).isEqualTo(EffectiveFees.Source.MERCHANT_RULE);
+        assertThat(fees.feeForIssued(voucher("100"))).isEqualByComparingTo("0.01");
+    }
+
+    @Test
+    void schedules_aWithdrawnMerchantScheduleFallsBackToTheTenantDefault() {
+        Merchant m = unconfiguredMerchant();
+        PlatformFeeBook book = PlatformFeeBook.of(List.of(
+                schedule(m.getTenantId(), null, "0.40", "2", NOW.minusSeconds(300)),
+                schedule(m.getTenantId(), m.getId(), "0.30", "1", NOW.minusSeconds(200)),
+                withdrawn(m.getTenantId(), m.getId(), NOW.minusSeconds(100))));
+
+        EffectiveFees fees = EffectiveFees.resolve(m, List.of(), book, NOW);
+
+        assertThat(fees.issued().source()).isEqualTo(EffectiveFees.Source.TENANT_SCHEDULE);
+        assertThat(fees.feeForIssued(voucher("100"))).isEqualByComparingTo("0.40");
+    }
+
+    @Test
+    void schedules_withNothingLiveFromInnBucks_theLegacyLevelsApplyExactlyAsBefore() {
+        java.util.List<LoyaltyRule> rules = new java.util.ArrayList<>();
+        Merchant m = merchantWithLegacyFees(rules);
+        PlatformFeeBook book = PlatformFeeBook.of(List.of(
+                schedule(m.getTenantId(), null, "0.40", "2", NOW.minusSeconds(200)),
+                withdrawn(m.getTenantId(), null, NOW.minusSeconds(100))));
+
+        EffectiveFees withBook = EffectiveFees.resolve(m, rules, book, NOW);
+        EffectiveFees legacy = EffectiveFees.resolve(m, rules, NOW);
+
+        assertThat(withBook.issued()).isEqualTo(legacy.issued());
+        assertThat(withBook.redeemed()).isEqualTo(legacy.redeemed());
+        assertThat(EffectiveFees.resolve(m, rules, PlatformFeeBook.EMPTY, NOW).issued()).isEqualTo(legacy.issued());
+        assertThat(EffectiveFees.resolve(m, rules, null, NOW).issued()).isEqualTo(legacy.issued());
+    }
+
+    @Test
+    void schedules_aZeroScheduleIsInnBucksChoosingNoFee_notAFallThrough() {
+        Merchant m = unconfiguredMerchant();
+        java.util.List<LoyaltyRule> rules = List.of(withIssuedFee(rule(null), Merchant.FeeType.FIXED, "0.02", "0"));
+        PlatformFeeBook book = PlatformFeeBook.of(List.of(
+                schedule(m.getTenantId(), m.getId(), "0", "0", NOW.minusSeconds(60))));
+
+        EffectiveFees fees = EffectiveFees.resolve(m, rules, book, NOW);
+
+        assertThat(fees.issued().source()).isEqualTo(EffectiveFees.Source.MERCHANT_SCHEDULE);
+        assertThat(fees.issuesForFree()).isTrue();
+    }
+
+    @Test
+    void legacySourcesAreNamed() {
+        java.util.List<LoyaltyRule> rules = new java.util.ArrayList<>();
+        Merchant m = merchantWithLegacyFees(rules);
+        assertThat(EffectiveFees.resolve(m, rules, NOW).issued().source())
+                .isEqualTo(EffectiveFees.Source.MERCHANT_RULE);
+        assertThat(EffectiveFees.resolve(m, List.of(rules.get(1)), NOW).issued().source())
+                .isEqualTo(EffectiveFees.Source.MERCHANT_RECORD);
+        assertThat(EffectiveFees.resolve(unconfiguredMerchant(), List.of(rules.get(1)), NOW).issued().source())
+                .isEqualTo(EffectiveFees.Source.TENANT_RULE);
+        assertThat(EffectiveFees.resolve(unconfiguredMerchant(), List.of(), NOW).issued().source())
+                .isEqualTo(EffectiveFees.Source.NONE);
     }
 }

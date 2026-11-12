@@ -164,8 +164,9 @@ public class MerchantController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "The caller may not onboard merchants, has no loyalty organization, or named "
-                            + "another business without being a SUPER_ADMIN",
+                    description = "The caller may not onboard merchants, has no loyalty organization, named "
+                            + "another business without being a SUPER_ADMIN, or sent fees (InnBucks sets fees: "
+                            + "loyalty-fees:manage or SUPER_ADMIN)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -181,6 +182,13 @@ public class MerchantController {
                                     {
                                       "code": "ORGANIZATION_NOT_PERMITTED",
                                       "message": "Only a platform admin can onboard a merchant for another business. Omit organizationId to onboard it for your own.",
+                                      "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Fees sent by a merchant", value = """
+                                    {
+                                      "code": "FEES_PLATFORM_ONLY",
+                                      "message": "Fees are set by InnBucks. Leave the fee fields out and InnBucks will set this merchant's fees.",
                                       "data": null
                                     }
                                     """),

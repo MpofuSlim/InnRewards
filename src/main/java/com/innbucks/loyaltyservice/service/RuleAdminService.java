@@ -8,6 +8,7 @@ import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
+import com.innbucks.loyaltyservice.security.FeesPermissions;
 import com.innbucks.loyaltyservice.security.MerchantAuthz;
 import com.innbucks.loyaltyservice.util.HtmlSanitizer;
 import org.springframework.data.domain.Page;
@@ -64,6 +65,13 @@ public class RuleAdminService {
 
     public LoyaltyRule createRule(UUID tenantId, UUID merchantId, Dtos.RuleRequest req) {
         authorizeRuleScopeWrite(tenantId, merchantId);
+        // Fees are InnBucks' to set (V67): a merchant admin writes the brand's
+        // earn rate, floor and voucher validity, never what it pays InnBucks.
+        // Any fee type counts, FIXED 0 included: on a rule it is an explicit zero.
+        if ((MerchantService.hasFeeType(req.feeIssued()) || MerchantService.hasFeeType(req.feeRedeemed()))
+                && !FeesPermissions.callerMaySetFees()) {
+            throw LoyaltyException.forbidden(FeesPermissions.REFUSED_CODE, FeesPermissions.REFUSED_MESSAGE);
+        }
         return rules.save(build(tenantId, merchantId, req,
                 props.earnRate().maxPointsPerUnit(), props.earnRate().maxMultiplier()));
     }

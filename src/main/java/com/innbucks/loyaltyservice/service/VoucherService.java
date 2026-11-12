@@ -320,7 +320,7 @@ public class VoucherService {
         v.setRedeemableMerchantIds(null);
         v.setExpiresAt(order.getExpiresAt());
         Instant now = Instant.now();
-        v.setRemainingBalance(BigDecimal.ZERO.setScale(4));
+        v.setRemainingBalance(BigDecimal.ZERO.setScale(4, java.math.RoundingMode.UNNECESSARY));
         v.setUsesRemaining(0);
         v.setStatus(Voucher.Status.REDEEMED);
         v.setRedeemedAt(now);
@@ -331,7 +331,7 @@ public class VoucherService {
                 null, null, null, order.getAmount(), reference);
         VoucherRedemption r = recordSuccessfulUse(v, order.getMerchantId(), req, reference,
                 order.getAmount().setScale(4, java.math.RoundingMode.HALF_UP), v.getBaseValue(),
-                BigDecimal.ZERO.setScale(4), true, scope);
+                BigDecimal.ZERO.setScale(4, java.math.RoundingMode.UNNECESSARY), true, scope);
         r.setSettlementStatus(VoucherRedemption.SettlementStatus.SETTLED);
         r.setSettlementRef(paymentRef == null ? null
                 : paymentRef.length() <= 100 ? paymentRef : paymentRef.substring(0, 100));

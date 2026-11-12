@@ -63,6 +63,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -487,11 +488,8 @@ public class PartnerVoucherService {
                 if (r == null) {
                     // A payment at the redeem (V69) that has not become a use yet.
                     VoucherRedeemPayment p = readTx.execute(s -> payments.findByMerchantIdAndReference(merchantId, ref)
-                            .filter(found -> partner.getId().equals(found.getPartnerId()))
-                            .orElse(null));
-                    if (p == null) {
-                        throw LoyaltyException.notFound("redemption");
-                    }
+                                    .filter(found -> partner.getId().equals(found.getPartnerId())))
+                            .orElseThrow(() -> LoyaltyException.notFound("redemption"));
                     resolvePayment(p.getId());
                     VoucherRedeemPayment now = readTx.execute(s -> payments.findById(p.getId()).orElseThrow());
                     if (now.getRedemptionId() == null) {
@@ -542,11 +540,10 @@ public class PartnerVoucherService {
                 channel, blankToNull(req.terminalId()), currency);
 
         // A re-sent payment at the redeem answers with that payment as it now stands.
-        VoucherRedeemPayment prior = readTx.execute(s -> payments.findByMerchantIdAndReference(merchantId, reference)
-                .filter(p -> partner.getId().equals(p.getPartnerId()))
-                .orElse(null));
-        if (prior != null) {
-            return replayPayment(prior, req, currency);
+        Optional<VoucherRedeemPayment> prior = readTx.execute(s -> payments.findByMerchantIdAndReference(merchantId,
+                reference).filter(p -> partner.getId().equals(p.getPartnerId())));
+        if (prior.isPresent()) {
+            return replayPayment(prior.get(), req, currency);
         }
 
         Routed routed = guard.attemptAs(guardIdentity(partner, merchantId, scope.endUserRef()), () -> {
@@ -621,13 +618,13 @@ public class PartnerVoucherService {
         if (code == null || code.isBlank()) {
             return null;
         }
-        VoucherPurchaseOrder o = readTx.execute(s -> orders.findByReservedCode(code)
+        Optional<VoucherPurchaseOrder> unpaid = readTx.execute(s -> orders.findByReservedCode(code)
                 .filter(found -> found.isPayAtRedeem() && found.getVoucherId() == null)
-                .filter(found -> partner.getId().equals(found.getPartnerId()))
-                .orElse(null));
-        if (o == null) {
+                .filter(found -> partner.getId().equals(found.getPartnerId())));
+        if (unpaid.isEmpty()) {
             return null;
         }
+        VoucherPurchaseOrder o = unpaid.get();
         if (!o.getMerchantId().equals(linked.merchant().getId())) {
             throw VoucherService.notRedeemableHere();
         }
@@ -774,14 +771,13 @@ public class PartnerVoucherService {
 
     /** Sends a claimed payment, once, with no transaction open, then records what it can. */
     void executePayment(UUID paymentId) {
-        FundingLeg leg = readTx.execute(s -> payments.findById(paymentId)
+        Optional<FundingLeg> leg = readTx.execute(s -> payments.findById(paymentId)
                 .filter(p -> p.getStatus() == VoucherRedeemPayment.Status.PENDING)
-                .map(this::legOf)
-                .orElse(null));
-        if (leg != null) {
+                .map(this::legOf));
+        if (leg.isPresent()) {
             FundingOutcome outcome;
             try {
-                outcome = provider.fund(leg);
+                outcome = provider.fund(leg.get());
             } catch (RuntimeException unknown) {
                 log.warn("Payment at redeem failed with no outcome paymentId={}; the reconciler will ask for its "
                         + "status", paymentId, unknown);
@@ -794,14 +790,13 @@ public class PartnerVoucherService {
 
     /** Asks the provider where an open payment stands, and records the voucher once it has confirmed. Never sends. */
     public void resolvePayment(UUID paymentId) {
-        FundingLeg leg = readTx.execute(s -> payments.findById(paymentId)
+        Optional<FundingLeg> leg = readTx.execute(s -> payments.findById(paymentId)
                 .filter(p -> p.getStatus() == VoucherRedeemPayment.Status.PENDING)
-                .map(this::legOf)
-                .orElse(null));
-        if (leg != null) {
+                .map(this::legOf));
+        if (leg.isPresent()) {
             FundingOutcome outcome;
             try {
-                outcome = provider.status(leg);
+                outcome = provider.status(leg.get());
             } catch (RuntimeException unreadable) {
                 log.warn("Payment at redeem status unreadable paymentId={}", paymentId, unreadable);
                 outcome = FundingOutcome.pending();
@@ -903,7 +898,7 @@ public class PartnerVoucherService {
                                                                  PartnerVoucherDtos.RedeemRequest req,
                                                                  String currency) {
         String code = readTx.execute(s -> orders.findById(prior.getOrderId())
-                .map(VoucherPurchaseOrder::getReservedCode).orElse(null));
+                .map(VoucherPurchaseOrder::getReservedCode)).orElse(null);
         if (code == null || !code.equals(VoucherCodes.normalize(req.code()))) {
             throw LoyaltyException.conflict(VoucherService.DUPLICATE_REFERENCE,
                     "This reference was already used for another voucher redemption.");

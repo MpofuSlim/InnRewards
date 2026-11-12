@@ -3260,9 +3260,9 @@ without going through the partner flow.
   path. `toResult` sets `voucher.code` only for an order whose channel is POS,
   on generate, its replay and inquire by `PARTNER_REFERENCE`, so a slip that
   failed to print can be printed again. The code is raw, like every machine
-  surface; the POS prints it hyphen-grouped. A slip cannot spend the voucher on
-  another MWOS account while the link binds redemption to the holder's phone.
-  Never log a generate or inquire result.
+  surface; the POS prints it hyphen-grouped. By default the code works like
+  cash (next section): whoever holds the slip can spend it. Never log a generate
+  or inquire result.
 - A merchant whose vouchers would never expire is `503 MERCHANT_NOT_READY`:
   held money must have an end. A generate that sends `validityDays` is exempt,
   because it sets the end itself.
@@ -3293,8 +3293,12 @@ without going through the partner flow.
 
 - **`VoucherService.redeemForPartnerIdempotent`** with a `PartnerRedeemScope`:
   only that partner's vouchers (anything else is the counted 404, before the
-  signature check); the holder's phone must match `endUserPhone` when the link
-  binds redemption to the holder (`403 NOT_VOUCHER_OWNER`, counted); the
+  signature check); the holder's phone must match `endUserPhone` only when the
+  link binds redemption to the holder (`403 NOT_VOUCHER_OWNER`, counted). **The
+  default is not to (owner decision, 2026-11-12; V68 switched every existing
+  link off): a partner voucher code works like cash**, as the partner guide
+  says ("possession of the code is sufficient"). A SUPER_ADMIN can still turn
+  `bindRedeemToHolder` on for one merchant. The
   currency must match; a replayed `reference` with a different amount or end
   user is `422 IDEMPOTENCY_MISMATCH`. Partial uses, the balance and the per-use
   rules are V61's.

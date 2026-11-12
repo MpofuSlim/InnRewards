@@ -65,3 +65,8 @@ ALTER TABLE voucher_purchase_orders ADD COLUMN redeemable_merchant_ids TEXT;
 ALTER TABLE voucher_purchase_orders DROP CONSTRAINT chk_vpo_channel;
 ALTER TABLE voucher_purchase_orders ADD CONSTRAINT chk_vpo_channel
     CHECK (channel IS NULL OR channel IN ('POS', 'ONLINE', 'APP'));
+
+-- A partner voucher code works like cash: a redemption need not carry the phone
+-- it was sold to (owner decision, 2026-11-12). A link may still ask for it.
+ALTER TABLE voucher_partner_merchants ALTER COLUMN bind_redeem_to_holder SET DEFAULT FALSE;
+UPDATE voucher_partner_merchants SET bind_redeem_to_holder = FALSE WHERE bind_redeem_to_holder;

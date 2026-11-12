@@ -50,7 +50,7 @@ public class VoucherPartnerAdminController {
                 "merchants": [
                   { "merchantCode": "MWOS", "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                     "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "status": "ACTIVE",
-                    "requireTerminal": false, "bindRedeemToHolder": true,
+                    "requireTerminal": false, "bindRedeemToHolder": false,
                     "fundingMethods": ["CASH", "CARD_SWIPE", "MERCHANT_COLLECTED", "INNBUCKS_CODE"],
                     "maxValue": 500.00, "perPhoneDailyCount": 10, "perPhoneDailyValue": 1000.00 }
                 ]

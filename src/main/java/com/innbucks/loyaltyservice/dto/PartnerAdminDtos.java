@@ -41,6 +41,8 @@ public final class PartnerAdminDtos {
             @Schema(example = "MWOS", description = "What the partner sends as `merchant`.")
             @NotBlank @Size(max = 32) String merchantCode,
             Boolean requireTerminal,
+            @Schema(example = "false", description = "Optional, default false: the voucher code works like "
+                    + "cash, whoever presents it. true: a redeem must carry the phone the voucher was sold to.")
             Boolean bindRedeemToHolder,
             @Schema(example = "[\"CASH\", \"CARD_SWIPE\", \"MERCHANT_COLLECTED\", \"INNBUCKS_CODE\"]")
             List<String> fundingMethods,

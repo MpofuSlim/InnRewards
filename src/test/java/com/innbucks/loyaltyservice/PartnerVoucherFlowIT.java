@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 /**
  * The partner voucher API (V62) end to end, the way the InnBucks middleware will
@@ -100,7 +101,8 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
                 "kid", kid, "alg", "ES256", "publicKeyPem", PartnerJws.pem(keys.getPublic())), 200);
         JsonNode linked = admin(post("/loyalty/admin/voucher-partners/" + partnerId + "/merchants"), Map.of(
                 "merchantId", merchantId.toString(), "merchantCode", "MWOS"), 200);
-        assertThat(linked.path("data").path("merchants").get(0).path("bindRedeemToHolder").asBoolean()).isTrue();
+        // By default the code works like cash: no phone has to match (owner decision, 2026-11-12).
+        assertThat(linked.path("data").path("merchants").get(0).path("bindRedeemToHolder").asBoolean()).isFalse();
     }
 
     // ------------------------------------------------------------------ flows
@@ -274,10 +276,26 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(byCode.body().path("data").path("redeemable").asBoolean()).isTrue();
         assertThat(byCode.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("20.00");
 
+        // The code works like cash: another phone, or none, reads it too.
+        Call anotherPhone = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-2", "endUserPhone", newPhone()));
+        assertThat(anotherPhone.status()).isEqualTo(200);
+        Call noPhone = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-2"));
+        assertThat(noPhone.status()).isEqualTo(200);
+
+        // A merchant that ties redemption to the holder refuses any other phone, and a missing one.
+        admin(put("/loyalty/admin/voucher-partners/" + partnerId + "/merchants/MWOS"),
+                Map.of("bindRedeemToHolder", true), 200);
         Call notTheHolder = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
                 "endUserRef", "MWOS-ACC-2", "endUserPhone", newPhone()));
         assertThat(notTheHolder.status()).isEqualTo(403);
         assertThat(notTheHolder.code()).isEqualTo("NOT_VOUCHER_OWNER");
+        Call phoneMissing = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-2"));
+        assertThat(phoneMissing.status()).isEqualTo(400);
+        admin(put("/loyalty/admin/voucher-partners/" + partnerId + "/merchants/MWOS"),
+                Map.of("bindRedeemToHolder", false), 200);
 
         Call first = partner("redeem", redeem(code, "5.00", "BET-1", phone));
         assertThat(first.status()).isEqualTo(200);

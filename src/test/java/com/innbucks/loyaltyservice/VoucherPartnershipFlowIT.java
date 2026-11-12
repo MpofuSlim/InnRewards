@@ -51,8 +51,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 /**
  * Tenant-to-tenant partnerships (V68) end to end: MWOS and Bola Bet, two
  * programs with no login of their own, become partners through a SUPER_ADMIN
- * acting for each; the InnBucks middleware then sells a {@code generic} MWOS
- * voucher, which works at Bola Bet too, and spends it there, through real
+ * acting for each; the InnBucks middleware then sells an MWOS voucher with
+ * {@code redeemableAt} "ANY", which works at Bola Bet too, and spends it there, through real
  * ES256 requests, the real filter chain, the services and Postgres. Bola Bet is
  * the one paid and billed for that use.
  */
@@ -130,7 +130,7 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         partners();
         String phone = newPhone();
 
-        Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), phone, "20.00", true));
+        Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), phone, "20.00", "ANY"));
         assertThat(sold.status()).as(sold.body().toString()).isEqualTo(201);
         JsonNode view = sold.body().path("data").path("voucher");
         // The stranger is served by the same partner but is no partner of MWOS.
@@ -176,7 +176,7 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
-    void aVoucherThatIsNotGeneric_isUnknownAtAnyOtherMerchant() throws Exception {
+    void withoutRedeemableAt_aVoucherIsUnknownAtAnyOtherMerchant() throws Exception {
         partners();
         String phone = newPhone();
         Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), phone, "20.00"));
@@ -190,14 +190,14 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         Call seen = partner("inquire", Map.of("merchant", bolaCode, "by", "CODE", "code", code,
                 "endUserRef", "BOLA-ACC-1", "endUserPhone", phone));
         assertThat(seen.status()).isEqualTo(404);
-        // false said out loud is the same as leaving it out.
-        Map<String, Object> explicit = sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", false);
+        // Naming only the issuer is the same as leaving it out.
+        Map<String, Object> explicit = sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", mwosCode);
         assertThat(partner("generate", explicit).body().path("data").path("voucher").path("redeemableAt"))
                 .hasSize(1);
     }
 
     @Test
-    void generic_coversSisterMerchantsAndPartnersThisPartnerServes_only() throws Exception {
+    void any_coversSisterMerchantsAndPartnersThisPartnerServes_only() throws Exception {
         // A sister merchant of MWOS, served by the same partner: in, with no partnership needed.
         UUID mwosSister = merchant(mwosTenant, "MWOS Bulawayo", "0.05", "0.25");
         String sisterCode = "SIS" + mwosCode;
@@ -214,7 +214,7 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         superAdmin(post("/loyalty/partnerships/" + invited.path("data").path("id").asText() + "/accept"), bolaTenant,
                 Map.of("merchantIds", List.of(bola.toString(), bolaElsewhere.toString())), 200);
 
-        Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true));
+        Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"));
         assertThat(sold.status()).as(sold.body().toString()).isEqualTo(201);
         assertThat(sold.body().path("data").path("voucher").path("redeemableAt"))
                 .extracting(n -> n.path("merchant").asText())
@@ -222,8 +222,8 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
-    void generic_withNoPartnerships_worksAtTheIssuerOnly() throws Exception {
-        Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true));
+    void any_withNoPartnerships_worksAtTheIssuerOnly() throws Exception {
+        Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"));
         assertThat(sold.status()).as(sold.body().toString()).isEqualTo(201);
         assertThat(sold.body().path("data").path("voucher").path("redeemableAt")).hasSize(1);
         Voucher stored = voucherRepository.findById(UUID.fromString(
@@ -232,10 +232,43 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
+    void namedMerchants_areChecked_andEveryRefusedCodeIsNamed_andNothingIsRecorded() throws Exception {
+        partners();
+        String reference = "MWOS-" + UUID.randomUUID();
+        Call refused = partner("generate", sale(mwosCode, reference, newPhone(), "20.00",
+                bolaCode, strangerCode, "NOSUCHCODE"));
+        assertThat(refused.status()).isEqualTo(400);
+        assertThat(refused.code()).isEqualTo("MERCHANT_NOT_A_PARTNER");
+        assertThat(refused.body().path("data").path("merchants")).extracting(JsonNode::asText)
+                .containsExactly(strangerCode, "NOSUCHCODE");
+
+        // Nothing was recorded: the same reference naming a partner goes through.
+        Call sold = partner("generate", sale(mwosCode, reference, newPhone(), "20.00", bolaCode.toLowerCase(),
+                mwosCode));
+        assertThat(sold.status()).as(sold.body().toString()).isEqualTo(201);
+        assertThat(sold.body().path("data").path("voucher").path("redeemableAt"))
+                .extracting(n -> n.path("merchant").asText()).containsExactly(mwosCode, bolaCode);
+    }
+
+    @Test
+    void any_cannotBeCombinedWithCodes_norBeAMerchantCode() throws Exception {
+        Call mixed = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00",
+                "ANY", bolaCode));
+        assertThat(mixed.status()).isEqualTo(400);
+        assertThat(mixed.body().path("data").path("redeemableAt").asText())
+                .isEqualTo("ANY cannot be combined with merchant codes");
+
+        UUID another = merchant(mwosTenant, "MWOS Any", "0.05", "0.25");
+        JsonNode bad = superAdmin(post("/loyalty/admin/voucher-partners/" + partnerId + "/merchants"), null,
+                Map.of("merchantId", another.toString(), "merchantCode", "any"), 400);
+        assertThat(bad.path("code").asText()).isEqualTo("BAD_MERCHANT_CODE");
+    }
+
+    @Test
     void aSuspendedPartnership_stopsUseAndSales_untilReinstated() throws Exception {
         String partnership = partners();
         String phone = newPhone();
-        String code = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), phone, "20.00", true))
+        String code = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), phone, "20.00", "ANY"))
                 .body().path("data").path("voucher").path("code").asText();
 
         superAdmin(post("/loyalty/admin/partnerships/" + partnership + "/suspend"), null,
@@ -244,9 +277,11 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         Call stopped = partner("redeem", redeem(bolaCode, code, "5.00", "BOLA-USE-3", phone));
         assertThat(stopped.status()).isEqualTo(409);
         assertThat(stopped.code()).isEqualTo("PARTNERSHIP_SUSPENDED");
-        // A generic voucher sold meanwhile does not include Bola Bet.
-        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true))
+        // An ANY voucher sold meanwhile does not include Bola Bet, and naming it is refused.
+        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"))
                 .body().path("data").path("voucher").path("redeemableAt")).hasSize(1);
+        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", bolaCode))
+                .code()).isEqualTo("MERCHANT_NOT_A_PARTNER");
         // The issuer still takes its own voucher.
         assertThat(partner("redeem", redeem(mwosCode, code, "5.00", "MWOS-USE-3", phone)).status()).isEqualTo(200);
 
@@ -259,13 +294,13 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         String partnership = partners();
         String phone = newPhone();
         String reference = "MWOS-" + UUID.randomUUID();
-        Map<String, Object> request = sale(mwosCode, reference, phone, "20.00", true);
+        Map<String, Object> request = sale(mwosCode, reference, phone, "20.00", "ANY");
         String code = partner("generate", request).body().path("data").path("voucher").path("code").asText();
 
         superAdmin(post("/loyalty/partnerships/" + partnership + "/end"), bolaTenant, null, 200);
 
         assertThat(partner("redeem", redeem(bolaCode, code, "5.00", "BOLA-USE-5", phone)).status()).isEqualTo(200);
-        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true))
+        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"))
                 .body().path("data").path("voucher").path("redeemableAt")).hasSize(1);
         Call replay = partner("generate", request);
         assertThat(replay.status()).isEqualTo(200);
@@ -275,11 +310,11 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
-    void theSameReference_withAndWithoutGeneric_isADifferentRequest() throws Exception {
+    void theSameReference_withAnotherRedeemableAt_isADifferentRequest() throws Exception {
         partners();
         String reference = "MWOS-" + UUID.randomUUID();
         String phone = newPhone();
-        assertThat(partner("generate", sale(mwosCode, reference, phone, "20.00", true)).status()).isEqualTo(201);
+        assertThat(partner("generate", sale(mwosCode, reference, phone, "20.00", "ANY")).status()).isEqualTo(201);
         assertThat(partner("generate", sale(mwosCode, reference, phone, "20.00")).code())
                 .isEqualTo("IDEMPOTENCY_MISMATCH");
     }
@@ -313,8 +348,8 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
                 .isEqualTo("NOT_INVITED_TENANT");
         // A tenant not in it does not see it.
         superAdmin(post("/loyalty/partnerships/" + id + "/end"), strangerTenant, null, 404);
-        // Until it is accepted, a generic voucher does not include the other side.
-        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true))
+        // Until it is accepted, an ANY voucher does not include the other side.
+        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"))
                 .body().path("data").path("voucher").path("redeemableAt")).hasSize(1);
 
         JsonNode accepted = superAdmin(post("/loyalty/partnerships/" + id + "/accept"), bolaTenant,
@@ -330,15 +365,15 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         assertThat(superAdmin(get("/loyalty/partnerships"), bolaTenant, null, 200).path("data")).hasSize(1);
         assertThat(superAdmin(get("/loyalty/partnerships"), strangerTenant, null, 200).path("data")).isEmpty();
 
-        // Accepted, a generic voucher includes Bola Bet.
-        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true))
+        // Accepted, an ANY voucher includes Bola Bet.
+        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"))
                 .body().path("data").path("voucher").path("redeemableAt")).hasSize(2);
 
         // Bola Bet takes its merchant out: new MWOS vouchers no longer include it.
         UUID bolaTwo = merchant(bolaTenant, "Bola Bet Two", "0.07", "0.10");
         superAdmin(put("/loyalty/partnerships/" + id + "/merchants"), bolaTenant,
                 Map.of("merchantIds", List.of(bolaTwo.toString())), 200);
-        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", true))
+        assertThat(partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", "ANY"))
                 .body().path("data").path("voucher").path("redeemableAt")).hasSize(1);
     }
 
@@ -419,12 +454,8 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         }
     }
 
-    private Map<String, Object> sale(String merchantCode, String reference, String phone, String amount) {
-        return sale(merchantCode, reference, phone, amount, null);
-    }
-
     private Map<String, Object> sale(String merchantCode, String reference, String phone, String amount,
-                                     Boolean generic) {
+                                     String... redeemableAt) {
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("merchant", merchantCode);
         s.put("partnerReference", reference);
@@ -434,8 +465,12 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         s.put("currency", "USD");
         s.put("customer", Map.of("phone", phone, "name", "Tawanda Mpofu"));
         s.put("funding", Map.of("method", "CASH"));
-        if (generic != null) {
-            s.put("generic", generic);
+        // Most cases spend part of a voucher; the default is SINGLE.
+        s.put("usage", "MULTIPLE");
+        if (redeemableAt.length == 1) {
+            s.put("redeemableAt", redeemableAt[0]);        // a single string is accepted
+        } else if (redeemableAt.length > 1) {
+            s.put("redeemableAt", List.of(redeemableAt));
         }
         return s;
     }

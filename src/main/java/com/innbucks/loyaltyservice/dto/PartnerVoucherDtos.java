@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
@@ -35,7 +36,7 @@ public final class PartnerVoucherDtos {
                     description = "Your unique id for this sale; the idempotency key. Unique for the merchant, for ever.")
             @NotBlank @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9._:-]+",
                     message = "letters, digits and . _ : - only") String partnerReference,
-            @Schema(example = "POS", allowableValues = {"POS", "ONLINE"}) @NotBlank String channel,
+            @Schema(example = "POS", allowableValues = {"POS", "ONLINE", "APP"}) @NotBlank String channel,
             @Schema(example = "HRE-001") @Size(max = 64) String outlet,
             @Schema(example = "T-88231") @Size(max = 64) String terminalId,
             @Schema(example = "cashier-17") @Size(max = 64) String operatorRef,
@@ -50,16 +51,19 @@ public final class PartnerVoucherDtos {
                     1 to 365 by default. Leave it out for the merchant's standard validity.""")
             Integer validityDays,
             @Schema(example = "SINGLE", allowableValues = {"SINGLE", "MULTIPLE"}, description = """
-                    Optional. MULTIPLE (the default): the voucher can be spent over several redemptions \
-                    until its balance is used up. SINGLE: it must be redeemed for its full value in one \
-                    redemption; a smaller amount is refused with 400 PARTIAL_USE_NOT_ALLOWED.""")
+                    Optional. SINGLE (the default): the voucher must be redeemed for its full value in one \
+                    redemption; a smaller amount is refused with 400 PARTIAL_USE_NOT_ALLOWED. MULTIPLE: it \
+                    can be spent over several redemptions until its balance is used up.""")
             String usage,
-            @Schema(example = "true", description = """
-                    Optional, default false. false: the voucher works only at `merchant`. true: it also works \
-                    at every merchant in the issuer's live partnerships that you serve (and the issuer's own \
-                    sister merchants that you serve). The list is worked out and fixed when the order is made; \
-                    `voucher.redeemableAt` returns it.""")
-            Boolean generic) {
+            @Schema(example = "[\"ANY\"]", description = """
+                    Optional. Where else the voucher can be redeemed. Left out: only at `merchant`. "ANY": \
+                    at every merchant in the issuer's live partnerships that you serve (and the issuer's \
+                    sister merchants that you serve). One or more merchant codes (a single string is \
+                    accepted too): at `merchant` and those, each of which must be such a partner, else \
+                    400 MERCHANT_NOT_A_PARTNER naming the codes. "ANY" cannot be combined with codes. At \
+                    most 20. Worked out and fixed when the order is made; `voucher.redeemableAt` returns it.""")
+            @JsonFormat(with = JsonFormat.Feature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
+            @Size(max = 20) List<String> redeemableAt) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -109,7 +113,7 @@ public final class PartnerVoucherDtos {
             @Schema(example = "MWOS-BET-20261023-77812") @NotBlank @Size(max = 100) String reference,
             @Schema(example = "MWOS-ACC-998877") @NotBlank @Size(max = 100) String endUserRef,
             @Schema(example = "+263771234567") @Size(max = 32) String endUserPhone,
-            @Schema(example = "ONLINE", allowableValues = {"POS", "ONLINE"}) String channel,
+            @Schema(example = "ONLINE", allowableValues = {"POS", "ONLINE", "APP"}) String channel,
             @Size(max = 64) String terminalId) {
     }
 

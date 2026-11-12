@@ -3240,7 +3240,10 @@ without going through the partner flow.
   float is debited into holding) and INNBUCKS_CODE (the customer pays a code:
   `202 AWAITING_PAYMENT`, then the voucher appears). INNBUCKS_ACCOUNT and
   ECOCASH are in the vocabulary but not available yet
-  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on ONLINE.
+  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on ONLINE and
+  APP. **`channel` is POS, ONLINE or APP** (APP = the provider's own app,
+  2026-11-12) on generate and redeem; an APP sale is treated like an ONLINE
+  one (no code in the response, no outlet or terminal).
   `paid_via`: CASH → CASH, CARD_SWIPE → CARD_POS, the rest → GATEWAY with
   `payment_rail` = the method (no new `PaidVia` value, so V54's CHECK holds).
 - **Evidence is used once:** a card approval code per terminal per day, a
@@ -3274,8 +3277,8 @@ without going through the partner flow.
   joins the idempotency fingerprint only when sent, so orders made without it
   keep their stored fingerprint.
 - **A partner voucher may be SINGLE use (V66, owner decision 2026-11-11):**
-  optional `usage` on generate, `MULTIPLE` (default, today's balance
-  voucher) or `SINGLE`. A SINGLE voucher (`vouchers.single_redemption`, copied
+  optional `usage` on generate, `SINGLE` (the default since 2026-11-12, as in
+  the middleware's partner guide) or `MULTIPLE` (a balance voucher). A SINGLE voucher (`vouchers.single_redemption`, copied
   from the order in `issueFromOrder`) must be redeemed for its full value in
   one go: a redemption asking for less than the remaining balance is
   `400 PARTIAL_USE_NOT_ALLOWED` and spends nothing (checked in `doRedeem` right
@@ -3283,7 +3286,8 @@ without going through the partner flow.
   dropping the rest would leave held customer money behind on a dead voucher.
   This is not the retired `MULTI_USE` type (face value per use); don't map
   `usage` onto `voucher_type`. Inquire and generate return `usage`. It joins the
-  fingerprint only when SINGLE.
+  fingerprint only when SINGLE, so an order made before the default changed,
+  without `usage`, now replays as a different request (staging only).
 
 ### Redeem and settlement
 
@@ -3362,17 +3366,15 @@ Pinned by `PartnerRequestVerifierTest`, `VoucherPartnerAuthFilterTest`,
 and `PartnerVoucherFlowIT` (the whole flow through real signed requests and
 Postgres).
 
-## Partner vouchers usable at partner merchants: `generic` (V68)
+## Partner vouchers usable at partner merchants: `redeemableAt` (V68)
 
 **Owner decisions (2026-11-12):** a tenant's voucher can be accepted at another
 tenant's merchants (MWOS vouchers at Bola Bet; later Simbisa vouchers at ZUVA).
 Tenants onboard their own partners: one invites, the other accepts. InnBucks
-(SUPER_ADMIN) oversees and acts for tenants with no login. A partner marks a
-sale `generic: true` to make the voucher work at the issuer's partners too
-(owner, 2026-11-12). A list of merchant codes per sale was built first and
-replaced: MWOS integrates with the middleware, never with us, so it had no way to
-learn the codes, and a till would send the same list on every sale. The
-partnership is where that list lives.
+(SUPER_ADMIN) oversees and acts for tenants with no login. On generate, the
+partner sends `redeemableAt`: left out = the issuer only, `"ANY"` = every partner,
+or merchant codes (owner, 2026-11-12, matching the middleware's partner guide).
+A yes/no `generic` field was tried in between and dropped.
 
 - **Partnerships** (`voucher_partnerships`, `voucher_partnership_merchants`,
   `VoucherPartnershipService`, `/loyalty/partnerships`):
@@ -3393,22 +3395,28 @@ partnership is where that list lives.
     `auto_accepted`. It is ignored (boot ERROR) unless voucher funding is
     SIMULATED, so it can never move real money across a partnership nobody
     agreed to.
-- **`generic` on partner generate** (`PartnerVoucherService.partnerMerchants`):
-  optional, default false (the voucher works at `merchant` only, as before V68).
-  - **true** adds every merchant that is:
-    - an ACTIVE link of the SAME partner;
-    - an active escrow merchant, other than the issuer;
-    - either in the issuer's own tenant (the tenant is the brand) or in an
-      ACTIVE partnership in which both merchants take part.
-  - **Worked out once, for a new order**, in merchant-code order, and fixed on
-    the order and then the voucher (`redeemable_merchant_ids`, TEXT, so there is
-    no length cap). A replay never asks again.
-  - **Never refused.** With no partner, the voucher works at the issuer only.
-  - **Two kinds of merchant are left out:** one another partner serves (a
-    partner voucher is redeemed through the partner that sold it), and one
-    whose partnership is SUSPENDED.
-  - `generic: true` joins the idempotency fingerprint, so true and false under
-    one reference are `422 IDEMPOTENCY_MISMATCH`.
+- **`redeemableAt` on partner generate** (`PartnerVoucherService.redeemable` /
+  `resolveRedeemableAt`): optional; a list, or a single string.
+  - **Left out** (or naming only the issuer): the voucher works at `merchant`
+    only, as before V68.
+  - **`"ANY"`** (any case, alone; with codes it is `400 Validation failed`) adds
+    every merchant that is: an ACTIVE link of the SAME partner; an active escrow
+    merchant, other than the issuer; and in the issuer's own tenant (the tenant
+    is the brand) or in an ACTIVE partnership in which both merchants take part.
+    Never refused: with no partner, the voucher works at the issuer only.
+    `ANY` is reserved: the partner admin refuses it as a merchant code.
+  - **Codes** (trimmed, upper-cased, de-duplicated, the issuer's own dropped, at
+    most 20): each must pass the same test, or the generate is
+    `400 MERCHANT_NOT_A_PARTNER` naming every refused code, before anything is
+    recorded.
+  - **Worked out once, for a new order**, and fixed on the order and then the
+    voucher (`redeemable_merchant_ids`, TEXT). A replay never asks again, so an
+    order made before a partnership ended still replays.
+  - **Left out of every list:** a merchant another partner serves (a partner
+    voucher is redeemed through the partner that sold it), and one whose
+    partnership is SUSPENDED.
+  - It joins the idempotency fingerprint only when it reaches past the issuer
+    (`|redeemableAt=ANY` or the sorted codes).
   - Generate and inquire return `redeemableAt`: every merchant, the issuer
     first, by the partner's codes and names.
 - **Redeem and inquire at a listed merchant** (`VoucherService.usableAt`): a
@@ -3433,15 +3441,14 @@ partnership is where that list lives.
     who-owes-whom statements;
   - the "open to any tenant" setting;
   - a fee-payer option per partnership (the redeemer pays today);
-  - `generic` on till issue and purchase orders;
-  - narrowing a generic voucher to some partners only (nobody needs it yet);
+  - `redeemableAt` on till issue and purchase orders;
   - reports by redeeming merchant;
   - a partner merchant served by a DIFFERENT partner (integrator): a voucher is
     redeemed through the partner that sold it.
 - Pinned by `VoucherPartnershipFlowIT` (real signed requests and Postgres: use at
-  the partner, payment and fees to the redeemer, what `generic` includes and
-  leaves out, suspension, ending, replay, the invitation rules, merchant-admin
-  authority),
+  the partner, payment and fees to the redeemer, what "ANY" and named codes
+  include and refuse, suspension, ending, replay, the invitation rules,
+  merchant-admin authority),
   `VoucherPartnershipServiceTest`, `NotificationGatewayTest` and
   `VoucherUseNoticeTest`.
 

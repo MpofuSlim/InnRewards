@@ -59,3 +59,9 @@ CREATE INDEX idx_voucher_partnership_merchants_merchant ON voucher_partnership_m
 -- shape of every voucher before V68.
 ALTER TABLE vouchers ADD COLUMN redeemable_merchant_ids TEXT;
 ALTER TABLE voucher_purchase_orders ADD COLUMN redeemable_merchant_ids TEXT;
+
+-- A sale or redemption can come from the provider's own app (2026-11-12). The
+-- redemption row's channel has no CHECK; the order's does.
+ALTER TABLE voucher_purchase_orders DROP CONSTRAINT chk_vpo_channel;
+ALTER TABLE voucher_purchase_orders ADD CONSTRAINT chk_vpo_channel
+    CHECK (channel IS NULL OR channel IN ('POS', 'ONLINE', 'APP'));

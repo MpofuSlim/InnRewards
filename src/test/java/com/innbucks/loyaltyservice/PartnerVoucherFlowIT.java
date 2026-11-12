@@ -120,7 +120,7 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(voucherRepository.findById(UUID.fromString(voucherView.path("voucherId").asText()))
                 .orElseThrow().isSingleRedemption()).isTrue();
 
-        // The same reference without the usage is a different request.
+        // The same reference with usage MULTIPLE is a different request.
         assertThat(partner("generate", cashSale(reference, phone, "20.00")).body().path("code").asText())
                 .isEqualTo("IDEMPOTENCY_MISMATCH");
 
@@ -138,6 +138,13 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(whole.status()).isEqualTo(200);
         assertThat(whole.body().path("data").path("status").asText()).isEqualTo("REDEEMED");
         assertThat(whole.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("0");
+
+        // Without a usage the voucher is SINGLE.
+        Map<String, Object> plain = cashSale("MWOS-ONE-" + UUID.randomUUID(), newPhone(), "19.00");
+        plain.remove("usage");
+        Call byDefault = partner("generate", plain);
+        assertThat(byDefault.status()).isEqualTo(201);
+        assertThat(byDefault.body().path("data").path("voucher").path("usage").asText()).isEqualTo("SINGLE");
 
         // A usage that is neither SINGLE nor MULTIPLE is a field error.
         Map<String, Object> bad = cashSale("MWOS-ONE-" + UUID.randomUUID(), newPhone(), "18.00");
@@ -343,6 +350,39 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
+    void theAppChannel_sellsLikeOnline_andRedeems() throws Exception {
+        String phone = newPhone();
+        String reference = "MWOS-APP-" + UUID.randomUUID();
+        Call awaiting = partner("generate", sale(reference, "app", phone, "10.00", Map.of("method", "INNBUCKS_CODE")));
+        assertThat(awaiting.status()).as(awaiting.body().toString()).isEqualTo(202);
+
+        Call paid = partner("inquire", Map.of("merchant", "MWOS", "by", "PARTNER_REFERENCE",
+                "partnerReference", reference));
+        assertThat(paid.body().path("data").path("status").asText()).isEqualTo("ISSUED");
+        assertThat(paid.body().path("data").path("channel").asText()).isEqualTo("APP");
+        assertThat(paid.body().path("data").path("voucher").path("code").isNull()).isTrue();
+        String code = voucherRepository.findById(UUID.fromString(
+                paid.body().path("data").path("voucher").path("voucherId").asText())).orElseThrow().getCode();
+
+        Map<String, Object> use = redeem(code, "4.00", "APP-USE-1", phone);
+        use.put("channel", "APP");
+        Call used = partner("redeem", use);
+        assertThat(used.status()).as(used.body().toString()).isEqualTo(200);
+        assertThat(used.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("6.00");
+
+        Call cashInApp = partner("generate", sale("R-" + UUID.randomUUID(), "APP", newPhone(), "5.00",
+                Map.of("method", "CASH")));
+        assertThat(cashInApp.status()).isEqualTo(400);
+        assertThat(cashInApp.code()).isEqualTo("FUNDING_METHOD_NOT_ALLOWED");
+
+        Map<String, Object> elsewhere = cashSale("R-" + UUID.randomUUID(), newPhone(), "5.00");
+        elsewhere.put("channel", "USSD");
+        Call refused = partner("generate", elsewhere);
+        assertThat(refused.status()).isEqualTo(400);
+        assertThat(refused.body().path("data").path("channel").asText()).isEqualTo("must be POS, ONLINE or APP");
+    }
+
+    @Test
     void refusedSales_recordNothingOrCloseTheAttempt() throws Exception {
         Call declined = partner("generate", cashSale("SIMFAIL-" + UUID.randomUUID(), newPhone(), "20.00"));
         assertThat(declined.status()).isEqualTo(422);
@@ -494,6 +534,8 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         s.put("currency", "USD");
         s.put("customer", Map.of("phone", phone, "name", "Tawanda Mpofu"));
         s.put("funding", funding);
+        // Most cases spend part of a voucher; the default is SINGLE.
+        s.put("usage", "MULTIPLE");
         return s;
     }
 

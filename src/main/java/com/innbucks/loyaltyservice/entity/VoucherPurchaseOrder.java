@@ -205,7 +205,7 @@ public class VoucherPurchaseOrder {
 
     /**
      * Merchants besides its own where this voucher can be used (V68), fixed at
-     * issue for a {@code generic} partner voucher. Null = the issuer only.
+     * issue from the partner's {@code redeemableAt}. Null = the issuer only.
      */
     @Convert(converter = UuidListConverter.class)
     @Column(name = "redeemable_merchant_ids", columnDefinition = "TEXT")

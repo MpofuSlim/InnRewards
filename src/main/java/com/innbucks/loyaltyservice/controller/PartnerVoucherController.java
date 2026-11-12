@@ -67,16 +67,18 @@ public class PartnerVoucherController {
                     swipe and money the merchant collected itself debit the merchant's float into holding; an \
                     InnBucks code waits for the customer to pay (`202 AWAITING_PAYMENT`). We send the code to \
                     the customer by WhatsApp, with SMS as the fallback. A POS sale's response also carries \
-                    it (`voucher.code`) for the till to print on the slip; an ONLINE sale's never does. \
+                    it (`voucher.code`) for the till to print on the slip; an ONLINE or APP sale's never does. \
+                    `channel` is POS, ONLINE or APP; cash and card swipe are POS only. \
                     `partnerReference` is the idempotency key: the same reference with the same content returns \
                     the order as it now stands (`replayed: true`), and with different content is \
                     `422 IDEMPOTENCY_MISMATCH`. `validityDays` (optional, 1 to 365 by default) sets how many \
                     days the voucher stays valid from issue; without it the merchant's standard validity \
-                    applies. `usage` is MULTIPLE (default: spent over several redemptions) or SINGLE (must be \
-                    redeemed for its full value in one go). `generic` (optional, default false): true makes the \
-                    voucher work also at every merchant in the issuer's live partnerships that you serve; false \
-                    keeps it to `merchant` alone. The list is worked out and fixed when the order is made; \
-                    `voucher.redeemableAt` returns every merchant, the issuer first. \
+                    applies. `usage` is SINGLE (the default: must be redeemed for its full value in one go) or \
+                    MULTIPLE (spent over several redemptions). `redeemableAt` (optional): left out, the voucher \
+                    works at `merchant` only; "ANY", also at every merchant in the issuer's live partnerships \
+                    that you serve; merchant codes, also at those, each of which must be such a partner, else \
+                    `400 MERCHANT_NOT_A_PARTNER` naming the codes. The list is worked out and fixed when the \
+                    order is made; `voucher.redeemableAt` returns every merchant, the issuer first. \
                     On staging the funding is simulated (`funding.simulated: true`); \
                     a reference starting with SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- or SIMDOWN- asks for a refusal, a \
                     slow confirmation, a slow refusal, or an unreachable provider.
@@ -100,7 +102,9 @@ public class PartnerVoucherController {
                                     @ExampleObject(name = "Field errors", value = VALIDATION_400),
                                     @ExampleObject(name = "Validity out of range", value = VALIDITY_400),
                                     @ExampleObject(name = "Payment method not available", value = FUNDING_METHOD_400),
-                                    @ExampleObject(name = "Bad phone", value = BAD_PHONE_400)})),
+                                    @ExampleObject(name = "Bad phone", value = BAD_PHONE_400),
+                                    @ExampleObject(name = "redeemableAt names a merchant that is not a partner",
+                                            value = NOT_A_PARTNER_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED: one answer for every authentication failure",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),

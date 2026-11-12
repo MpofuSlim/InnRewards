@@ -6,6 +6,7 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.VoucherPartnership;
 import com.innbucks.loyaltyservice.entity.VoucherPartnershipMerchant;
+import com.innbucks.loyaltyservice.exception.LoyaltyDataException;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
@@ -18,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,8 +43,9 @@ import java.util.stream.Collectors;
  * tenant invites another by its code; the other side accepts or declines;
  * either side can end it; each side puts in its own merchants. A SUPER_ADMIN
  * acts for any tenant (MWOS and Bola Bet have no login), and alone can suspend
- * or reinstate. A {@code generic} partner voucher then also works at the other
- * side's merchants ({@link #refusedTargets} decides which).
+ * or reinstate. A partner voucher sold with {@code redeemableAt} "ANY" or naming
+ * the other side's merchants then also works there ({@link #refusedTargets}
+ * decides which).
  *
  * <p>Ending never strands a voucher already sold: its list was fixed at issue
  * and stays good until it expires. A suspension stops use at once
@@ -406,5 +409,11 @@ public class VoucherPartnershipService {
                                 : null))
                 .toList();
         return new PartnershipDtos.Side(tenantId, t == null ? null : t.getCode(), t == null ? null : t.getName(), ms);
+    }
+
+    /** The refusal for a {@code redeemableAt} that names a merchant this voucher may not name. */
+    public static LoyaltyDataException notAPartner(List<String> codes) {
+        return new LoyaltyDataException(HttpStatus.BAD_REQUEST, "MERCHANT_NOT_A_PARTNER",
+                "Not every merchant in redeemableAt accepts this merchant's vouchers.", Map.of("merchants", codes));
     }
 }

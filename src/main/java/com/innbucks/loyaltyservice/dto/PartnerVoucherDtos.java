@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -52,7 +53,13 @@ public final class PartnerVoucherDtos {
                     Optional. MULTIPLE (the default): the voucher can be spent over several redemptions \
                     until its balance is used up. SINGLE: it must be redeemed for its full value in one \
                     redemption; a smaller amount is refused with 400 PARTIAL_USE_NOT_ALLOWED.""")
-            String usage) {
+            String usage,
+            @Schema(example = "[\"BOLABET\"]", description = """
+                    Optional. Other merchants, by the codes we gave you, where this voucher can also be used. \
+                    Leave it out and the voucher works only at `merchant`, which is always included. Each must \
+                    be in the issuer's own program or a live partner of it, else 400 MERCHANT_NOT_A_PARTNER \
+                    naming the codes. At most 20. Fixed when the voucher is issued.""")
+            @Size(max = 20) List<String> redeemableAt) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -120,6 +127,11 @@ public final class PartnerVoucherDtos {
     public record PaymentView(String type, String paymentCode, String qr, Instant expiresAt) {
     }
 
+    /** A merchant where a voucher can be used: the code we gave the partner, and its name. */
+    public record MerchantRef(@Schema(example = "BOLABET") String merchant,
+                              @Schema(example = "Bola Bet") String name) {
+    }
+
     public record VoucherView(UUID voucherId, String status, BigDecimal value, BigDecimal remainingBalance,
                               String currency, Instant issuedAt, Instant expiresAt, String holderPhone,
                               @Schema(example = "9087876598764566", description = """
@@ -128,13 +140,17 @@ public final class PartnerVoucherDtos {
                                       groups of four (9087-8765-9876-4566). Keep it a string. It spends the \
                                       voucher, so never log it.""")
                               String code,
-                              @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"}) String usage) {
+                              @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"}) String usage,
+                              @Schema(description = "Every merchant where it can be used, the issuer first.")
+                              List<MerchantRef> redeemableAt) {
     }
 
     public record VoucherBalanceView(UUID voucherId, String status, boolean redeemable, BigDecimal value,
                                      BigDecimal remainingBalance, String currency, Instant expiresAt,
                                      @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"})
-                                     String usage) {
+                                     String usage,
+                                     @Schema(description = "Every merchant where it can be used, the issuer first.")
+                                     List<MerchantRef> redeemableAt) {
     }
 
     public record RedeemResult(UUID redemptionId, UUID voucherId, String status, BigDecimal value,

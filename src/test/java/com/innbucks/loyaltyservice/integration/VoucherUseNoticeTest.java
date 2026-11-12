@@ -167,4 +167,41 @@ class VoucherUseNoticeTest {
         verify(whatsApp).sendCustomNotification(eq(PHONE), contains("(USD 12.5 left of USD 50)"));
         verify(sms, never()).sendSms(any(), any(), any());
     }
+
+    // ── a use at a partner merchant (V68) ───────────────────────────────────
+
+    @Test
+    void aUseAtAPartner_saysWhereItWasUsed_andStaysSmsSafe() {
+        UUID bola = UUID.fromString("77777777-8888-9999-aaaa-bbbbbbbbbbbb");
+        Merchant bolaBet = new Merchant();
+        bolaBet.setName("Bola Bet");
+        when(merchants.findById(bola)).thenReturn(Optional.of(bolaBet));
+
+        String partial = sentOverWhatsApp(new NotificationGateway.VoucherUse(VOUCHER, MERCHANT, PHONE,
+                new BigDecimal("5"), new BigDecimal("15"), "USD", EXPIRES, bola));
+
+        assertThat(partial).startsWith("InnBucks voucher used at Bola Bet. USD 5.00 used, USD 15.00 left");
+        assertSafe(partial);
+    }
+
+    @Test
+    void theLastUseAtAPartner_namesTheIssuerAndWhereItWasUsed() {
+        Merchant bolaBet = new Merchant();
+        bolaBet.setName("Bola Bet");
+        String message = NotificationGateway.usedMessage(new NotificationGateway.VoucherUse(VOUCHER, MERCHANT,
+                PHONE, new BigDecimal("5"), BigDecimal.ZERO, "USD", EXPIRES, UUID.randomUUID()),
+                "Pizza Inn", "Bola Bet");
+
+        assertThat(message).isEqualTo("Your InnBucks voucher for Pizza Inn is now fully used at Bola Bet "
+                + "(USD 5.00 this time).");
+        assertSafe(message);
+    }
+
+    @Test
+    void aUseAtTheIssuer_readsExactlyAsBefore() {
+        NotificationGateway.VoucherUse use = use("5", "0");
+        assertThat(use.usedAtMerchantId()).isEqualTo(MERCHANT);
+        assertThat(NotificationGateway.usedMessage(use, "Pizza Inn"))
+                .isEqualTo("Your InnBucks voucher for Pizza Inn is now fully used (USD 5.00 this time).");
+    }
 }

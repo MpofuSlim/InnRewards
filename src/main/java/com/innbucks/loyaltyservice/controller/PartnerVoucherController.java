@@ -73,7 +73,11 @@ public class PartnerVoucherController {
                     `422 IDEMPOTENCY_MISMATCH`. `validityDays` (optional, 1 to 365 by default) sets how many \
                     days the voucher stays valid from issue; without it the merchant's standard validity \
                     applies. `usage` is MULTIPLE (default: spent over several redemptions) or SINGLE (must be \
-                    redeemed for its full value in one go). On staging the funding is simulated (`funding.simulated: true`); \
+                    redeemed for its full value in one go). `redeemableAt` (optional, at most 20) names other \
+                    merchants, by their codes, where the voucher can also be used: each must be in the issuer's \
+                    own program or a live partner of it, else `400 MERCHANT_NOT_A_PARTNER` naming the codes. \
+                    The list is fixed at issue; `voucher.redeemableAt` returns every merchant, the issuer first. \
+                    On staging the funding is simulated (`funding.simulated: true`); \
                     a reference starting with SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- or SIMDOWN- asks for a refusal, a \
                     slow confirmation, a slow refusal, or an unreachable provider.
 
@@ -96,7 +100,9 @@ public class PartnerVoucherController {
                                     @ExampleObject(name = "Field errors", value = VALIDATION_400),
                                     @ExampleObject(name = "Validity out of range", value = VALIDITY_400),
                                     @ExampleObject(name = "Payment method not available", value = FUNDING_METHOD_400),
-                                    @ExampleObject(name = "Bad phone", value = BAD_PHONE_400)})),
+                                    @ExampleObject(name = "Bad phone", value = BAD_PHONE_400),
+                                    @ExampleObject(name = "redeemableAt names a merchant that is not a partner",
+                                            value = NOT_A_PARTNER_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED: one answer for every authentication failure",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),
@@ -190,7 +196,9 @@ public class PartnerVoucherController {
                     balance is refused with `INSUFFICIENT_VOUCHER_BALANCE`: nothing is spent, and the balance \
                     is in `data.remainingBalance` so you can retry for it. A 200 is final: credit the customer then. The amount is then paid to the merchant from \
                     holding; `settlement` says when. `reference` is the idempotency key: a re-send returns the \
-                    original use (`replayed: true`) and never spends twice.
+                    original use (`replayed: true`) and never spends twice. A voucher can be redeemed at any \
+                    merchant in its `redeemableAt`; that merchant is the one paid and billed for the use. While \
+                    InnBucks has suspended the partnership, a use there is `409 PARTNERSHIP_SUSPENDED`.
 
                     """ + REQUEST_DESCRIPTION,
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
@@ -220,9 +228,12 @@ public class PartnerVoucherController {
             @ApiResponse(responseCode = "404", description = "Unknown code, or not this partner's voucher (counted)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = VOUCHER_404))),
-            @ApiResponse(responseCode = "409", description = "Spent, revoked, or the reference used on another voucher",
+            @ApiResponse(responseCode = "409", description = "Spent, revoked, the reference used on another voucher, "
+                    + "or (at a partner merchant) the partnership is suspended by InnBucks",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = ALREADY_REDEEMED_409))),
+                            examples = {
+                                    @ExampleObject(name = "Spent", value = ALREADY_REDEEMED_409),
+                                    @ExampleObject(name = "Partnership suspended", value = PARTNERSHIP_SUSPENDED_409)})),
             @ApiResponse(responseCode = "422", description = "IDEMPOTENCY_MISMATCH: the reference was used for a different redemption",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = REDEEM_MISMATCH_422))),

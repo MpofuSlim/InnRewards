@@ -92,7 +92,11 @@ public class JwtFilter extends OncePerRequestFilter {
             // 401 a call whose credential lives elsewhere — the same reasoning as
             // /loyalty/internal above. Nothing under this prefix reads the
             // caller's identity from the security context.
-            "/loyalty/partner",
+            //
+            // WITH the trailing slash: these are prefix matches, and without it
+            // the skip also swallowed /loyalty/partnerships (V68), whose bearer
+            // then went unread and every call was a 401.
+            "/loyalty/partner/",
             // Session renewal (V43). The credential on these two is the refresh
             // token in the BODY, and the access token they exist to replace is
             // normally expired by the time they are called — so an app whose

@@ -203,6 +203,14 @@ public class VoucherPurchaseOrder {
     @Column(name = "single_redemption", nullable = false)
     private boolean singleRedemption;
 
+    /**
+     * Merchants besides its own where this voucher can be used (V68), fixed at
+     * issue from the partner's {@code redeemableAt}. Null = the issuer only.
+     */
+    @Convert(converter = UuidListConverter.class)
+    @Column(name = "redeemable_merchant_ids", length = 1000)
+    private java.util.List<UUID> redeemableMerchantIds;
+
     /** How the customer paid: CASH, CARD_SWIPE, MERCHANT_COLLECTED, INNBUCKS_CODE, … */
     @Column(name = "funding_method", length = 24)
     private String fundingMethod;

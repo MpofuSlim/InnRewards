@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.scheduler;
 
 import com.innbucks.loyaltyservice.config.VoucherPartnerProperties;
 import com.innbucks.loyaltyservice.repository.VoucherPurchaseOrderRepository;
+import com.innbucks.loyaltyservice.repository.VoucherRedeemPaymentRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.service.partner.PartnerVoucherService;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -18,8 +19,9 @@ import java.util.UUID;
  * Finishes partner voucher money legs nobody is waiting on (V62): a generate
  * whose payment is still open (an InnBucks code the customer pays later, a leg
  * the provider has not answered), a funded order whose voucher could not be
- * issued yet, and a redemption whose amount has not yet been paid to the
- * merchant. Without it, a voucher would appear only when the partner happened
+ * issued yet, a redemption whose amount has not yet been paid to the
+ * merchant, and an agent's payment for a code paid at the redeem (V69) that the
+ * provider has not answered, or that confirmed before its voucher was recorded. Without it, a voucher would appear only when the partner happened
  * to inquire.
  *
  * <p>Each item is resolved by ASKING the provider (a read) or settling once
@@ -39,13 +41,16 @@ public class PartnerVoucherReconciler {
     private final VoucherPartnerProperties props;
     private final VoucherPurchaseOrderRepository orders;
     private final VoucherRedemptionRepository redemptions;
+    private final VoucherRedeemPaymentRepository payments;
     private final PartnerVoucherService service;
 
     public PartnerVoucherReconciler(VoucherPartnerProperties props, VoucherPurchaseOrderRepository orders,
-                                    VoucherRedemptionRepository redemptions, PartnerVoucherService service) {
+                                    VoucherRedemptionRepository redemptions, VoucherRedeemPaymentRepository payments,
+                                    PartnerVoucherService service) {
         this.props = props;
         this.orders = orders;
         this.redemptions = redemptions;
+        this.payments = payments;
         this.service = service;
     }
 
@@ -68,9 +73,17 @@ public class PartnerVoucherReconciler {
         for (UUID id : pending) {
             service.trySettle(id);
         }
-        if (!openOrders.isEmpty() || !pending.isEmpty()) {
-            log.info("Partner voucher reconcile: {} open orders, {} pending settlements", openOrders.size(),
-                    pending.size());
+        List<UUID> openPayments = payments.findOpenIds(PageRequest.of(0, BATCH));
+        for (UUID id : openPayments) {
+            try {
+                service.resolvePayment(id);
+            } catch (RuntimeException e) {
+                log.warn("Payment at redeem reconcile failed paymentId={}", id, e);
+            }
+        }
+        if (!openOrders.isEmpty() || !pending.isEmpty() || !openPayments.isEmpty()) {
+            log.info("Partner voucher reconcile: {} open orders, {} pending settlements, {} open payments at redeem",
+                    openOrders.size(), pending.size(), openPayments.size());
         }
     }
 }

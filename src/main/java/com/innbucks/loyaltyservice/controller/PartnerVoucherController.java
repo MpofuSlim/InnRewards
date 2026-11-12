@@ -79,6 +79,14 @@ public class PartnerVoucherController {
                     that you serve; merchant codes, also at those, each of which must be such a partner, else \
                     `400 MERCHANT_NOT_A_PARTNER` naming the codes. The list is worked out and fixed when the \
                     order is made; `voucher.redeemableAt` returns every merchant, the issuer first. \
+                    `funding` left out: the voucher is PAID AT THE REDEEM (Flow 2). The customer gets the code \
+                    now (always in the response and by message) and pays it in full at one of the issuer's \
+                    agents, whose redeem carries the payment; no money moves until then. Such a voucher is \
+                    SINGLE (`usage: MULTIPLE` is `400 USAGE_NOT_ALLOWED`), works at the issuer only \
+                    (`redeemableAt` is `400 REDEEMABLE_AT_NOT_ALLOWED`), and reads `status: ISSUED` with \
+                    `voucher.payAtRedeem: true` and `funding.status: AT_REDEEM` until it is paid, then \
+                    `voucher.status: REDEEMED` and `funding.status: CONFIRMED`. `channel` may be left out \
+                    (ONLINE). An InnBucks code is ONLINE or APP only. \
                     On staging the funding is simulated (`funding.simulated: true`); \
                     a reference starting with SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- or SIMDOWN- asks for a refusal, a \
                     slow confirmation, a slow refusal, or an unreachable provider.
@@ -90,7 +98,10 @@ public class PartnerVoucherController {
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Voucher issued (a replay of an issued order answers 200)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = GENERATE_201))),
+                            examples = {
+                                    @ExampleObject(name = "Paid at the sale", value = GENERATE_201),
+                                    @ExampleObject(name = "Paid at the redeem (no funding)",
+                                            value = GENERATE_201_PAY_AT_REDEEM)})),
             @ApiResponse(responseCode = "202", description = "Waiting for the customer to pay, or the payment is still being processed. Poll inquire by partnerReference.",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
@@ -104,7 +115,12 @@ public class PartnerVoucherController {
                                     @ExampleObject(name = "Payment method not available", value = FUNDING_METHOD_400),
                                     @ExampleObject(name = "Bad phone", value = BAD_PHONE_400),
                                     @ExampleObject(name = "redeemableAt names a merchant that is not a partner",
-                                            value = NOT_A_PARTNER_400)})),
+                                            value = NOT_A_PARTNER_400),
+                                    @ExampleObject(name = "Merchant-collected without its details",
+                                            value = COLLECTION_DETAILS_400),
+                                    @ExampleObject(name = "Paid at the redeem, but MULTIPLE", value = USAGE_NOT_ALLOWED_400),
+                                    @ExampleObject(name = "Paid at the redeem, but redeemableAt",
+                                            value = REDEEMABLE_AT_NOT_ALLOWED_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED: one answer for every authentication failure",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),
@@ -145,8 +161,10 @@ public class PartnerVoucherController {
     @Operation(summary = "Inquire about an order, a voucher or a redemption",
             description = """
                     Read-only. `by` is PARTNER_REFERENCE (what happened to my sale: the generate result as it \
-                    now stands, with the code for a POS sale so a slip can be printed again), CODE (what is \
-                    this voucher worth: needs endUserRef, and \
+                    now stands, with the code for a POS sale so a slip can be printed again, and always for a \
+                    voucher paid at the redeem), CODE (what is this voucher worth, and `payAtRedeem: true` when \
+                    the agent must take the payment first; at a merchant it can't be used at, \
+                    `403 NOT_REDEEMABLE_HERE`, counted: needs endUserRef, and \
                     endUserPhone when the merchant binds redemption to the holder's phone; unknown codes count \
                     towards the guessing lockout) or REDEMPTION (has the merchant been paid for this use).
 
@@ -160,6 +178,8 @@ public class PartnerVoucherController {
                             examples = {
                                     @ExampleObject(name = "By partnerReference", value = GENERATE_201),
                                     @ExampleObject(name = "By code", value = INQUIRE_CODE_200),
+                                    @ExampleObject(name = "By code, paid at the redeem and not paid yet",
+                                            value = INQUIRE_CODE_UNPAID_200),
                                     @ExampleObject(name = "By redemption", value = INQUIRE_REDEMPTION_200)})),
             @ApiResponse(responseCode = "400", description = "Invalid request, or a mistyped code (not counted)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -169,10 +189,12 @@ public class PartnerVoucherController {
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),
-            @ApiResponse(responseCode = "403", description = "Not a linked merchant, or (by code) not the holder's phone (counted)",
+            @ApiResponse(responseCode = "403", description = "Not a linked merchant, or (by code, counted) not usable "
+                    + "at this merchant or not the holder's phone",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Merchant not permitted", value = MERCHANT_403),
+                                    @ExampleObject(name = "Not usable here", value = NOT_REDEEMABLE_HERE_403),
                                     @ExampleObject(name = "Not the holder", value = NOT_OWNER_403)})),
             @ApiResponse(responseCode = "404", description = "No such order, voucher (counted) or redemption",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -199,8 +221,20 @@ public class PartnerVoucherController {
                     is in `data.remainingBalance` so you can retry for it. A 200 is final: credit the customer then. The amount is then paid to the merchant from \
                     holding; `settlement` says when. `reference` is the idempotency key: a re-send returns the \
                     original use (`replayed: true`) and never spends twice. A voucher can be redeemed at any \
-                    merchant in its `redeemableAt`; that merchant is the one paid and billed for the use. While \
+                    merchant in its `redeemableAt`; that merchant is the one paid and billed for the use. At any \
+                    other merchant it is `403 NOT_REDEEMABLE_HERE` (counted toward the lockout). While \
                     InnBucks has suspended the partnership, a use there is `409 PARTNERSHIP_SUSPENDED`.
+
+                    A voucher PAID AT THE REDEEM (`payAtRedeem: true`) is paid here: send `funding` (CASH, \
+                    CARD_SWIPE or MERCHANT_COLLECTED; cash and card at a POS only; `accountNumber` the agent's \
+                    account) and the full value (or no amount). `merchant` is the issuer, the one paid. The \
+                    payment goes from the agent straight to the issuer; a 200 means it is paid and the voucher \
+                    is REDEEMED, so credit the customer then. `202 PENDING`: the payment is being processed, ask \
+                    with an inquiry by redemption. A refused payment (`422`, `503`) moved nothing; the code can \
+                    be paid again under a new reference. Without `funding` it is `400 PAYMENT_REQUIRED`; \
+                    `funding` on any other voucher is `400 PAYMENT_NOT_NEEDED`, because it was paid for when it \
+                    was sold. On staging the SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- and SIMDOWN- prefixes on \
+                    `reference` drive the payment as they drive a generate.
 
                     """ + REQUEST_DESCRIPTION,
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
@@ -209,23 +243,36 @@ public class PartnerVoucherController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Voucher redeemed (or replayed)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = REDEEM_200))),
+                            examples = {
+                                    @ExampleObject(name = "Redeemed", value = REDEEM_200),
+                                    @ExampleObject(name = "Paid at the redeem and redeemed",
+                                            value = REDEEM_200_PAID_AT_REDEEM)})),
+            @ApiResponse(responseCode = "202", description = "Paid at the redeem: the agent's payment is being processed",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(value = REDEEM_202_PENDING))),
             @ApiResponse(responseCode = "400", description = "Invalid request, mistyped code (not counted), expired, "
-                    + "or less than the full value of a SINGLE-use voucher",
+                    + "less than the full value of a SINGLE-use voucher, or the payment missing or not wanted",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Field errors", value = VALIDATION_400),
                                     @ExampleObject(name = "Mistyped code", value = MISTYPED_400),
                                     @ExampleObject(name = "Expired", value = EXPIRED_400),
                                     @ExampleObject(name = "Part of a single-use voucher", value = PARTIAL_USE_400),
-                                    @ExampleObject(name = "More than the balance", value = INSUFFICIENT_BALANCE_400)})),
+                                    @ExampleObject(name = "More than the balance", value = INSUFFICIENT_BALANCE_400),
+                                    @ExampleObject(name = "Paid at the redeem, no funding", value = PAYMENT_REQUIRED_400),
+                                    @ExampleObject(name = "Funding for a voucher already paid for",
+                                            value = PAYMENT_NOT_NEEDED_400),
+                                    @ExampleObject(name = "Merchant-collected without its details",
+                                            value = COLLECTION_DETAILS_400)})),
             @ApiResponse(responseCode = "401", description = "PARTNER_AUTH_REJECTED",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(value = AUTH_401))),
-            @ApiResponse(responseCode = "403", description = "Not a linked merchant, or not the holder's phone (counted)",
+            @ApiResponse(responseCode = "403", description = "Not a linked merchant, or (counted) not usable at this "
+                    + "merchant or not the holder's phone",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Merchant not permitted", value = MERCHANT_403),
+                                    @ExampleObject(name = "Not usable here", value = NOT_REDEEMABLE_HERE_403),
                                     @ExampleObject(name = "Not the holder", value = NOT_OWNER_403)})),
             @ApiResponse(responseCode = "404", description = "Unknown code, or not this partner's voucher (counted)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
@@ -235,19 +282,31 @@ public class PartnerVoucherController {
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
                             examples = {
                                     @ExampleObject(name = "Spent", value = ALREADY_REDEEMED_409),
-                                    @ExampleObject(name = "Partnership suspended", value = PARTNERSHIP_SUSPENDED_409)})),
-            @ApiResponse(responseCode = "422", description = "IDEMPOTENCY_MISMATCH: the reference was used for a different redemption",
+                                    @ExampleObject(name = "Partnership suspended", value = PARTNERSHIP_SUSPENDED_409),
+                                    @ExampleObject(name = "Payment at the redeem already in progress",
+                                            value = PAYMENT_IN_PROGRESS_409)})),
+            @ApiResponse(responseCode = "422", description = "The reference was used for a different redemption, or "
+                    + "the agent's payment was refused (nothing moved)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = REDEEM_MISMATCH_422))),
+                            examples = {
+                                    @ExampleObject(name = "Reference reused", value = REDEEM_MISMATCH_422),
+                                    @ExampleObject(name = "Agent's float can't cover it", value = REDEEM_FLOAT_422)})),
             @ApiResponse(responseCode = "429", description = "VOUCHER_ATTEMPTS_LOCKED",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(value = LOCKED_429)))
+                            examples = @ExampleObject(value = LOCKED_429))),
+            @ApiResponse(responseCode = "503", description = "Paid at the redeem: the payment provider never received "
+                    + "the payment (nothing moved; use a new reference)",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(value = REDEEM_PROVIDER_503)))
     })
     public ResponseEntity<ApiResult<PartnerVoucherDtos.RedeemResult>> redeem(HttpServletRequest request) {
         PartnerRequest caller = caller(request);
         PartnerVoucherDtos.RedeemRequest body = read(caller, PartnerVoucherDtos.RedeemRequest.class);
-        PartnerVoucherDtos.RedeemResult result = eligibilityDeferral.run(() -> service.redeem(caller, body));
-        return ResponseEntity.ok(ApiResult.ok("Voucher redeemed", result));
+        PartnerVoucherService.Answer<PartnerVoucherDtos.RedeemResult> answer =
+                eligibilityDeferral.run(() -> service.redeem(caller, body));
+        return ResponseEntity.status(answer.status())
+                .body(ApiResult.<PartnerVoucherDtos.RedeemResult>builder()
+                        .code(answer.code()).message(answer.message()).data(answer.data()).build());
     }
 
     // ------------------------------------------------------------------

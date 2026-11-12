@@ -287,6 +287,60 @@ public class VoucherService {
         return finishIssue(v);
     }
 
+    /**
+     * Flow 2 (V69): the agent's payment for a code is CONFIRMED, so the voucher
+     * is created and spent in one go, in the caller's transaction. It takes the
+     * code the customer has held since generate, is worth what was paid, and is
+     * REDEEMED at once with one full use at the issuer. That use is already
+     * settled: the payment went from the agent straight to the merchant, so
+     * nothing is ever paid out of holding for it.
+     *
+     * <p>No message: the order asked for none (channel NONE), and the caller
+     * tells the customer that the payment arrived. The issue and the use are
+     * billed like any other voucher's, in the period the payment confirmed.
+     */
+    public VoucherRedemption issueAndSpendAtRedeem(com.innbucks.loyaltyservice.entity.VoucherPurchaseOrder order,
+                                                   PartnerRedeemScope scope, String reference, String paymentRef) {
+        if (!order.isPayAtRedeem() || order.getReservedCode() == null) {
+            throw new IllegalStateException("not a Flow 2 order: " + order.getId());
+        }
+        Merchant merchant = merchants.requireMerchant(order.getTenantId(), order.getMerchantId());
+        Voucher v = createVoucher(order.getTenantId(), merchant, null,
+                order.getAssignedUserId(), order.getAssigneePhone(), order.getAssigneeName(),
+                null, null, Voucher.DeliveryChannel.NONE, order.getCampaignSource(),
+                order.getAmount(), order.getCurrency(), order.getVoucherType(), order.getUsageLimit());
+        v.setCode(order.getReservedCode());
+        v.setSignature(signer.sign(signPayload(order.getTenantId(), null, order.getReservedCode())));
+        v.setShopId(null);
+        v.setIssuerUserId(order.getIssuerUserId());
+        v.setIssuerPhone(order.getIssuerPhone());
+        v.setIssuerEmail(order.getIssuerEmail());
+        v.setPartnerId(order.getPartnerId());
+        v.setSingleRedemption(true);
+        v.setRedeemableMerchantIds(null);
+        v.setExpiresAt(order.getExpiresAt());
+        Instant now = Instant.now();
+        v.setRemainingBalance(BigDecimal.ZERO.setScale(4));
+        v.setUsesRemaining(0);
+        v.setStatus(Voucher.Status.REDEEMED);
+        v.setRedeemedAt(now);
+        vouchers.saveAndFlush(v);
+        metrics.incVouchersIssued();
+
+        Dtos.RedeemVoucherRequest req = new Dtos.RedeemVoucherRequest(order.getMerchantId(), v.getCode(), null,
+                null, null, null, order.getAmount(), reference);
+        VoucherRedemption r = recordSuccessfulUse(v, order.getMerchantId(), req, reference,
+                order.getAmount().setScale(4, java.math.RoundingMode.HALF_UP), v.getBaseValue(),
+                BigDecimal.ZERO.setScale(4), true, scope);
+        r.setSettlementStatus(VoucherRedemption.SettlementStatus.SETTLED);
+        r.setSettlementRef(paymentRef == null ? null
+                : paymentRef.length() <= 100 ? paymentRef : paymentRef.substring(0, 100));
+        r.setSettledAt(now);
+        redemptions.save(r);
+        metrics.incVouchersRedeemed();
+        return r;
+    }
+
     /** Refusal code for creating or moving a voucher of an escrow merchant off the partner API. */
     public static final String ESCROW_MERCHANT = "ESCROW_MERCHANT";
 
@@ -695,9 +749,44 @@ public class VoucherService {
     private String uniqueCode() {
         for (int i = 0; i < 8; i++) {
             String code = CryptoSigner.randomNumericVoucherCode();
-            if (vouchers.findByCode(code).isEmpty()) return code;
+            if (vouchers.findByCode(code).isEmpty() && !reservedByAnOrder(code)) return code;
         }
         throw new IllegalStateException("Failed to allocate unique voucher code");
+    }
+
+    /**
+     * Flow 2 (V69): an unpaid partner code is held on its order, not as a
+     * voucher, until it is paid; the voucher then takes that code. So a new
+     * voucher's code must not be one an order holds, or the paid code could not
+     * become a voucher after its money had moved.
+     */
+    private boolean reservedByAnOrder(String code) {
+        return purchaseOrders != null && purchaseOrders.existsByReservedCode(code);
+    }
+
+    private com.innbucks.loyaltyservice.repository.VoucherPurchaseOrderRepository purchaseOrders;
+
+    /** Setter-injected so a VoucherService built by hand in a unit test runs without it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPurchaseOrders(com.innbucks.loyaltyservice.repository.VoucherPurchaseOrderRepository orders) {
+        this.purchaseOrders = orders;
+    }
+
+    /** A code for a Flow 2 order (V69): held by no voucher and by no other order. */
+    public String reserveCode() {
+        return uniqueCode();
+    }
+
+    /**
+     * When a partner voucher issued now would expire (V65 / V69): the partner's
+     * own {@code validityDays} when it sent one, else the merchant's configured
+     * validity. Null when it would never expire.
+     */
+    public Instant partnerExpiry(UUID tenantId, Merchant merchant, Integer validityDays) {
+        if (validityDays != null) {
+            return Instant.now().plus(validityDays, ChronoUnit.DAYS);
+        }
+        return resolveExpiry(tenantId, merchant);
     }
 
     /**
@@ -722,6 +811,10 @@ public class VoucherService {
                 // forEach(remove), not removeAll: Set.removeAll(List) can fall back to
                 // List.contains per element, quadratic in the batch size.
                 vouchers.findExistingCodes(chunk).forEach(candidates::remove);
+                if (purchaseOrders != null) {
+                    // Nor a code an unpaid Flow 2 order holds (V69).
+                    purchaseOrders.findExistingReservedCodes(chunk).forEach(candidates::remove);
+                }
             }
             accepted.addAll(candidates);
         }
@@ -938,6 +1031,22 @@ public class VoucherService {
         return v.getRedeemableMerchantIds() != null && v.getRedeemableMerchantIds().contains(merchantId);
     }
 
+    /** Refusal code: a partner's own voucher presented at a merchant it can't be used at. */
+    public static final String NOT_REDEEMABLE_HERE = "NOT_REDEEMABLE_HERE";
+
+    /**
+     * A partner's voucher at a merchant outside its {@code redeemableAt}: the
+     * partner guide's 006 "provider not permitted" (2026-11-12), rather than the
+     * unknown code it used to be, so a customer is told the voucher works
+     * elsewhere instead of that it does not exist. It does tell the caller the
+     * code is real, so it is still a COUNTED guess: the lockout bounds probing
+     * exactly as for an unknown code.
+     */
+    public static VoucherCodeGuessException notRedeemableHere() {
+        return VoucherCodeGuessException.from(LoyaltyException.forbidden(NOT_REDEEMABLE_HERE,
+                "This voucher can't be used at this merchant."));
+    }
+
     /** True when the voucher is used at another program's merchant and InnBucks has suspended that partnership. */
     private boolean suspendedHere(Voucher v, UUID tenantId, UUID merchantId) {
         return partnerships != null && !merchantId.equals(v.getMerchantId())
@@ -1006,8 +1115,11 @@ public class VoucherService {
             throw LoyaltyException.badRequest(MISTYPED_CODE,
                     "That voucher code doesn't look right. Please check it and try again.");
         }
-        if (v == null || !scope.partnerId().equals(v.getPartnerId()) || !usableAt(v, tenantId, merchantId)) {
+        if (v == null || !scope.partnerId().equals(v.getPartnerId())) {
             throw VoucherCodeGuessException.unknownCode();
+        }
+        if (!usableAt(v, tenantId, merchantId)) {
+            throw notRedeemableHere();
         }
         if (scope.bindToHolderPhone() && !samePhone(scope.endUserPhone(), holderPhone(v))) {
             throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
@@ -1057,6 +1169,16 @@ public class VoucherService {
             // like this is still found.
             throw LoyaltyException.badRequest(MISTYPED_CODE,
                     "That voucher code doesn't look right. Please check it and try again.");
+        }
+        // The partner's own voucher at a merchant it can't be used at answers
+        // NOT_REDEEMABLE_HERE (the partner guide's 006 "provider not permitted"),
+        // still counted toward the lockout like an unknown code. Anything that is
+        // not the partner's own stays an unknown code.
+        if (v != null && partner != null && partner.partnerId().equals(v.getPartnerId())
+                && !usableAt(v, tenantId, merchantId)) {
+            recordAttempt(tenantId, req, merchantId, v.getCode(), FraudAttempt.Reason.WRONG_MERCHANT,
+                    "partner voucher not usable at " + merchantId);
+            throw notRedeemableHere();
         }
         if (v == null || !(v.getTenantId().equals(tenantId) || (partner != null && usableAt(v, tenantId, merchantId)))) {
             // A voucher of another tenant is known here only to a partner, and

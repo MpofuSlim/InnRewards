@@ -51,7 +51,8 @@ final class PartnerVoucherSwaggerExamples {
                   "redeemableAt": [
                     { "merchant": "MWOS", "name": "MWOS" },
                     { "merchant": "BOLABET", "name": "Bola Bet" }
-                  ]
+                  ],
+                  "payAtRedeem": false
                 },
                 "replayed": false
               }
@@ -235,7 +236,8 @@ final class PartnerVoucherSwaggerExamples {
                 "redeemableAt": [
                   { "merchant": "MWOS", "name": "MWOS" },
                   { "merchant": "BOLABET", "name": "Bola Bet" }
-                ]
+                ],
+                "payAtRedeem": false
               }
             }""";
 
@@ -268,7 +270,8 @@ final class PartnerVoucherSwaggerExamples {
                 "reference": "MWOS-BET-20261023-77812",
                 "replayed": true,
                 "settlement": { "status": "SETTLED", "transferReference": "SIM-SETTLE-b7e1f3a2-9c4d-4e6f-8a0b-1c2d3e4f5a6b",
-                                "settledAt": "2026-10-23T10:02:11Z" }
+                                "settledAt": "2026-10-23T10:02:11Z" },
+                "funding": null
               }
             }""";
 
@@ -322,7 +325,8 @@ final class PartnerVoucherSwaggerExamples {
                 "reference": "MWOS-BET-20261023-77812",
                 "replayed": false,
                 "settlement": { "status": "SETTLED", "transferReference": "SIM-SETTLE-b7e1f3a2-9c4d-4e6f-8a0b-1c2d3e4f5a6b",
-                                "settledAt": "2026-10-23T10:02:11Z" }
+                                "settledAt": "2026-10-23T10:02:11Z" },
+                "funding": null
               }
             }""";
 
@@ -358,6 +362,186 @@ final class PartnerVoucherSwaggerExamples {
             {
               "code": "IDEMPOTENCY_MISMATCH",
               "message": "This reference was already used for a different redemption.",
+              "data": null
+            }""";
+
+    // ------------------------------------------------ Flow 2: paid at the redeem (V69)
+
+    static final String GENERATE_201_PAY_AT_REDEEM = """
+            {
+              "code": "201 CREATED",
+              "message": "Voucher issued",
+              "data": {
+                "merchant": "MWOS",
+                "partnerReference": "MWOS-APP-20261112-000731",
+                "orderRef": "VCH-4E2B7A9C1D58",
+                "status": "ISSUED",
+                "channel": "ONLINE",
+                "outlet": null,
+                "terminalId": null,
+                "amount": 10.00,
+                "currency": "USD",
+                "funding": { "method": null, "status": "AT_REDEEM", "failureCode": null, "simulated": true },
+                "payment": null,
+                "voucher": {
+                  "voucherId": null,
+                  "status": "ISSUED",
+                  "value": 10.00,
+                  "remainingBalance": 10.00,
+                  "currency": "USD",
+                  "issuedAt": "2026-11-12T13:40:02Z",
+                  "expiresAt": "2026-12-12T13:40:02Z",
+                  "holderPhone": "****4567",
+                  "code": "2784148844684308",
+                  "usage": "SINGLE",
+                  "redeemableAt": [ { "merchant": "MWOS", "name": "MWOS" } ],
+                  "payAtRedeem": true
+                },
+                "replayed": false
+              }
+            }""";
+
+    static final String INQUIRE_CODE_UNPAID_200 = """
+            {
+              "code": "200 OK",
+              "message": "Voucher found",
+              "data": {
+                "voucherId": null,
+                "status": "ISSUED",
+                "redeemable": true,
+                "value": 10.00,
+                "remainingBalance": 10.00,
+                "currency": "USD",
+                "expiresAt": "2026-12-12T13:40:02Z",
+                "usage": "SINGLE",
+                "redeemableAt": [ { "merchant": "MWOS", "name": "MWOS" } ],
+                "payAtRedeem": true
+              }
+            }""";
+
+    static final String REDEEM_200_PAID_AT_REDEEM = """
+            {
+              "code": "200 OK",
+              "message": "Voucher paid and redeemed",
+              "data": {
+                "redemptionId": "c41f9e2a-7b3d-4a8e-9f10-2b3c4d5e6f70",
+                "voucherId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+                "status": "REDEEMED",
+                "value": 10.00,
+                "remainingBalance": 0.00,
+                "currency": "USD",
+                "redeemedAt": "2026-11-12T15:05:44Z",
+                "reference": "MWOS-AGT-20261112-000913",
+                "replayed": false,
+                "settlement": { "status": "SETTLED", "transferReference": "SIM-PAY-0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f",
+                                "settledAt": "2026-11-12T15:05:44Z" },
+                "funding": { "method": "CASH", "status": "CONFIRMED", "failureCode": null, "simulated": true }
+              }
+            }""";
+
+    static final String REDEEM_202_PENDING = """
+            {
+              "code": "202 ACCEPTED",
+              "message": "Payment is being processed",
+              "data": {
+                "redemptionId": null,
+                "voucherId": null,
+                "status": "PENDING",
+                "value": 10.00,
+                "remainingBalance": 10.00,
+                "currency": "USD",
+                "redeemedAt": null,
+                "reference": "SIMSLOW-MWOS-AGT-0004",
+                "replayed": false,
+                "settlement": null,
+                "funding": { "method": "CASH", "status": "PENDING", "failureCode": null, "simulated": true }
+              }
+            }""";
+
+    static final String REDEEM_FLOAT_422 = """
+            {
+              "code": "FLOAT_INSUFFICIENT",
+              "message": "The agent's float can't cover this payment. Nothing was taken.",
+              "data": {
+                "redemptionId": null,
+                "voucherId": null,
+                "status": "FAILED",
+                "value": 10.00,
+                "remainingBalance": 10.00,
+                "currency": "USD",
+                "redeemedAt": null,
+                "reference": "SIMFAIL-MWOS-AGT-0003",
+                "replayed": false,
+                "settlement": null,
+                "funding": { "method": "CASH", "status": "FAILED", "failureCode": "FLOAT_INSUFFICIENT", "simulated": true }
+              }
+            }""";
+
+    static final String REDEEM_PROVIDER_503 = """
+            {
+              "code": "PROVIDER_UNAVAILABLE",
+              "message": "The payment provider could not be reached. Nothing moved; use a new reference to try again.",
+              "data": {
+                "redemptionId": null,
+                "voucherId": null,
+                "status": "FAILED",
+                "value": 10.00,
+                "remainingBalance": 10.00,
+                "currency": "USD",
+                "redeemedAt": null,
+                "reference": "SIMDOWN-MWOS-AGT-0005",
+                "replayed": false,
+                "settlement": null,
+                "funding": { "method": "CASH", "status": "FAILED", "failureCode": "PROVIDER_UNAVAILABLE", "simulated": true }
+              }
+            }""";
+
+    static final String PAYMENT_REQUIRED_400 = """
+            {
+              "code": "PAYMENT_REQUIRED",
+              "message": "This voucher is paid at the redeem: send funding, how the agent took the customer's money.",
+              "data": null
+            }""";
+
+    static final String PAYMENT_NOT_NEEDED_400 = """
+            {
+              "code": "PAYMENT_NOT_NEEDED",
+              "message": "This voucher was paid for when it was sold. Redeem it without funding.",
+              "data": null
+            }""";
+
+    static final String PAYMENT_IN_PROGRESS_409 = """
+            {
+              "code": "PAYMENT_IN_PROGRESS",
+              "message": "A payment for this voucher is already in progress. Check it with an inquiry by redemption, or try again shortly.",
+              "data": null
+            }""";
+
+    static final String NOT_REDEEMABLE_HERE_403 = """
+            {
+              "code": "NOT_REDEEMABLE_HERE",
+              "message": "This voucher can't be used at this merchant.",
+              "data": null
+            }""";
+
+    static final String USAGE_NOT_ALLOWED_400 = """
+            {
+              "code": "USAGE_NOT_ALLOWED",
+              "message": "A voucher paid at the redeem is paid in full in one go: send usage SINGLE or leave it out.",
+              "data": null
+            }""";
+
+    static final String REDEEMABLE_AT_NOT_ALLOWED_400 = """
+            {
+              "code": "REDEEMABLE_AT_NOT_ALLOWED",
+              "message": "A voucher paid at the redeem is paid to its issuer only: leave redeemableAt out.",
+              "data": null
+            }""";
+
+    static final String COLLECTION_DETAILS_400 = """
+            {
+              "code": "COLLECTION_DETAILS_REQUIRED",
+              "message": "Send collectedVia (BANK_TRANSFER, BETTING_WALLET, ECOCASH_MERCHANT, OTHER) and collectionRef for money the merchant collected.",
               "data": null
             }""";
 }

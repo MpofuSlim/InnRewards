@@ -317,6 +317,95 @@ public class NotificationGateway {
         }
     }
 
+    /**
+     * A code paid at the redeem (Flow 2, V69), told to its customer when it is
+     * generated: what to pay, where, with which code, and by when. Snapshotted
+     * by the caller, so nothing here reads an entity.
+     */
+    public record PayAtRedeemCode(java.util.UUID orderId, java.util.UUID merchantId, String phone, String code,
+                                  BigDecimal amount, String currency, java.time.Instant expiresAt) {}
+
+    /**
+     * Sends a Flow 2 code to its customer (V69): WhatsApp first, SMS fallback,
+     * best-effort. The code is what the customer gives the agent, so it is in
+     * the message, as an issued voucher's is; it is worth nothing until paid.
+     * SMS-safe as written (no {@code : / $ ! ?}).
+     */
+    @Async("notificationExecutor")
+    public void notifyPayAtRedeemCode(PayAtRedeemCode c) {
+        if (c == null || c.phone() == null || c.phone().isBlank()) {
+            return;
+        }
+        send(c.phone(), payAtRedeemCodeMessage(c, merchantName(c.orderId(), c.merchantId())),
+                "VOUCHER-PAYCODE-" + c.orderId(), "Pay-at-agent code orderId=" + c.orderId());
+    }
+
+    /** "To pay MWOS USD 10.00, give code 1716-6153-5690-2976 at any MWOS agent before 12 Dec 2026." */
+    static String payAtRedeemCodeMessage(PayAtRedeemCode c, String merchant) {
+        String currency = (c.currency() == null || c.currency().isBlank()) ? "" : c.currency() + " ";
+        StringBuilder sb = new StringBuilder("To pay ");
+        if (merchant != null) {
+            sb.append(merchant).append(" ");
+        }
+        sb.append(currency).append(money(c.amount())).append(", give code ")
+                .append(VoucherCodes.display(c.code())).append(" at any ")
+                .append(merchant == null ? "" : merchant + " ").append("agent");
+        if (c.expiresAt() != null) {
+            sb.append(" before ").append(EXPIRY_FMT.format(c.expiresAt()));
+        }
+        return sb.append(".").toString();
+    }
+
+    /** A Flow 2 code that an agent has just been paid for (V69). */
+    public record PaidAtRedeem(java.util.UUID orderId, java.util.UUID merchantId, String phone, String code,
+                               BigDecimal amount, String currency) {}
+
+    /**
+     * Tells the customer their Flow 2 payment arrived (V69). Names the code by
+     * its last four digits only: it is spent, but it is still a code.
+     */
+    @Async("notificationExecutor")
+    public void notifyPaidAtRedeem(PaidAtRedeem p) {
+        if (p == null || p.phone() == null || p.phone().isBlank()) {
+            return;
+        }
+        send(p.phone(), paidAtRedeemMessage(p, merchantName(p.orderId(), p.merchantId())),
+                "VOUCHER-PAID-" + p.orderId(), "Pay-at-agent receipt orderId=" + p.orderId());
+    }
+
+    /** "We received your payment of USD 10.00 to MWOS for code ending 2976." */
+    static String paidAtRedeemMessage(PaidAtRedeem p, String merchant) {
+        String currency = (p.currency() == null || p.currency().isBlank()) ? "" : p.currency() + " ";
+        String code = p.code() == null ? "" : p.code().replaceAll("[^0-9A-Za-z]", "");
+        StringBuilder sb = new StringBuilder("We received your payment of ").append(currency)
+                .append(money(p.amount()));
+        if (merchant != null) {
+            sb.append(" to ").append(merchant);
+        }
+        if (code.length() >= 4) {
+            sb.append(" for code ending ").append(code.substring(code.length() - 4));
+        }
+        return sb.append(".").toString();
+    }
+
+    /** WhatsApp first, SMS fallback; logs name {@code what} and a masked phone only, never the text. */
+    private void send(String phone, String message, String ref, String what) {
+        try {
+            whatsApp.sendCustomNotification(phone, message);
+            log.info("{} sent via WhatsApp -> {}", what, MsisdnMasking.mask(phone));
+            return;
+        } catch (RuntimeException e) {
+            log.warn("{} WhatsApp failed for {}, falling back to SMS: {}", what, MsisdnMasking.mask(phone),
+                    e.getMessage());
+        }
+        try {
+            sms.sendSms(phone, message, ref);
+            log.info("{} sent via SMS -> {}", what, MsisdnMasking.mask(phone));
+        } catch (RuntimeException e) {
+            log.warn("{} failed on both channels for {}: {}", what, MsisdnMasking.mask(phone), e.getMessage());
+        }
+    }
+
     /** The holder's usage notice — see {@link #notifyVoucherUsed}. Package-visible for its tests. */
     static String usedMessage(VoucherUse use, String merchant) {
         return usedMessage(use, merchant, merchant);

@@ -36,7 +36,10 @@ public final class PartnerVoucherDtos {
                     description = "Your unique id for this sale; the idempotency key. Unique for the merchant, for ever.")
             @NotBlank @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9._:-]+",
                     message = "letters, digits and . _ : - only") String partnerReference,
-            @Schema(example = "POS", allowableValues = {"POS", "ONLINE", "APP"}) @NotBlank String channel,
+            @Schema(example = "POS", allowableValues = {"POS", "ONLINE", "APP"}, description = """
+                    Where the sale happened. Required when `funding` is sent; for a voucher paid at the \
+                    redeem (no `funding`) it may be left out and is then ONLINE.""")
+            String channel,
             @Schema(example = "HRE-001") @Size(max = 64) String outlet,
             @Schema(example = "T-88231") @Size(max = 64) String terminalId,
             @Schema(example = "cashier-17") @Size(max = 64) String operatorRef,
@@ -44,7 +47,11 @@ public final class PartnerVoucherDtos {
             @Schema(example = "20.00") @NotNull @Positive BigDecimal amount,
             @Schema(example = "USD") @NotBlank @Size(max = 8) String currency,
             @NotNull @Valid Customer customer,
-            @NotNull @Valid Funding funding,
+            @Schema(description = """
+                    How the customer paid. Leave it out for a voucher paid at the redeem (Flow 2): the \
+                    customer gets the code now and pays it in full at one of the issuer's agents, whose \
+                    redeem carries the payment. Such a voucher is SINGLE and works at the issuer only.""")
+            @Valid Funding funding,
             Boolean confirmDuplicate,
             @Schema(example = "90", description = """
                     Optional. How many days the voucher stays valid, counted from when it is issued. \
@@ -114,7 +121,13 @@ public final class PartnerVoucherDtos {
             @Schema(example = "MWOS-ACC-998877") @NotBlank @Size(max = 100) String endUserRef,
             @Schema(example = "+263771234567") @Size(max = 32) String endUserPhone,
             @Schema(example = "ONLINE", allowableValues = {"POS", "ONLINE", "APP"}) String channel,
-            @Size(max = 64) String terminalId) {
+            @Size(max = 64) String terminalId,
+            @Schema(description = """
+                    Required for a voucher paid at the redeem (`payAtRedeem: true`): how the agent took the \
+                    customer's money, CASH, CARD_SWIPE or MERCHANT_COLLECTED (cash and card at a POS only), \
+                    with `accountNumber` the agent's account to take it from. Refused on any other voucher, \
+                    which was paid for when it was sold.""")
+            @Valid Funding funding) {
     }
 
     // ------------------------------------------------------------ responses
@@ -146,7 +159,11 @@ public final class PartnerVoucherDtos {
                               String code,
                               @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"}) String usage,
                               @Schema(description = "Every merchant where it can be used, the issuer first.")
-                              List<MerchantRef> redeemableAt) {
+                              List<MerchantRef> redeemableAt,
+                              @Schema(description = """
+                                      True for a voucher paid at the redeem (Flow 2) that is not paid yet: \
+                                      its redeem must carry `funding`. `voucherId` is null until it is paid.""")
+                              boolean payAtRedeem) {
     }
 
     public record VoucherBalanceView(UUID voucherId, String status, boolean redeemable, BigDecimal value,
@@ -154,12 +171,20 @@ public final class PartnerVoucherDtos {
                                      @Schema(example = "MULTIPLE", allowableValues = {"SINGLE", "MULTIPLE"})
                                      String usage,
                                      @Schema(description = "Every merchant where it can be used, the issuer first.")
-                                     List<MerchantRef> redeemableAt) {
+                                     List<MerchantRef> redeemableAt,
+                                     @Schema(description = """
+                                             True for a voucher paid at the redeem (Flow 2) that is not paid \
+                                             yet: the agent takes the money, and its redeem must carry `funding`.""")
+                                     boolean payAtRedeem) {
     }
 
     public record RedeemResult(UUID redemptionId, UUID voucherId, String status, BigDecimal value,
                                BigDecimal remainingBalance, String currency, Instant redeemedAt,
-                               String reference, boolean replayed, SettlementView settlement) {
+                               String reference, boolean replayed, SettlementView settlement,
+                               @Schema(description = """
+                                       A voucher paid at the redeem (Flow 2) only: the agent's payment. Null \
+                                       for every other voucher, which was paid for when it was sold.""")
+                               FundingView funding) {
     }
 
     public record SettlementView(String status, String transferReference, Instant settledAt) {

@@ -50,6 +50,20 @@ public interface VoucherPurchaseOrderRepository extends JpaRepository<VoucherPur
     /** The partner's idempotency key, unique per merchant (uq_vpo_partner_reference). */
     Optional<VoucherPurchaseOrder> findByMerchantIdAndPartnerReference(UUID merchantId, String partnerReference);
 
+    // ---- Flow 2: codes paid at the redeem (V69) ----
+
+    /** A Flow 2 order by the code its customer holds (uq_vpo_reserved_code). */
+    Optional<VoucherPurchaseOrder> findByReservedCode(String reservedCode);
+
+    boolean existsByReservedCode(String reservedCode);
+
+    /** Payment evidence already behind a sale (uq_vpo_funding_evidence), asked by a Flow 2 payment. */
+    boolean existsByMerchantIdAndFundingEvidenceKey(UUID merchantId, String fundingEvidenceKey);
+
+    /** Which of {@code codes} an order has reserved: one query, codes only (VoucherService's allocation). */
+    @Query("select o.reservedCode from VoucherPurchaseOrder o where o.reservedCode in :codes")
+    List<String> findExistingReservedCodes(@Param("codes") Collection<String> codes);
+
     /** Row lock for the funding writers. Only ever called in a transaction that
      *  has not read the order first (see WalletRepository.lockForUpdate for the
      *  trap a locking query falls into otherwise). */

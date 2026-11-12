@@ -61,6 +61,8 @@ class ReadOnlyPlatformAccessTest {
             "ReportingController.vouchersExport",
             "ReportingController.vouchersExportOperator",
             "ExchangeRateController.history",
+            "FeeController.tenant",
+            "FeeController.merchant",
             "RedemptionRateController.history",
             "InvoiceController.listForMerchant",
             "MerchantController.feeAudit",

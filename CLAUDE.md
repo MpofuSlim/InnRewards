@@ -105,6 +105,11 @@ file. Don't re-send a file because one line in it changed; say what changed.
   JSON, error handling split into top-level vs per-row/field, realistic request
   examples, and a gotchas checklist. Anchor every field to the merged code, not
   memory.
+- **Mark every request field Required, Optional or Conditional (owner rule,
+  2026-11-12)**, in every guide, payload or example handed over (chat included),
+  and give a Conditional field its condition ("required when `method` is
+  CARD_SWIPE"). Say a field's default when it has one. The owner should never
+  have to ask which fields are optional.
 - **Name the client app at the top of every guide (owner rule, 2026-10-20).**
   Right under the title, say which frontend it is for:
   - the **Super app**, the InnBucks 2.0 customer app;
@@ -798,7 +803,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V66**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V67**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -1597,7 +1602,71 @@ ledger as breakage. **They no longer expire at all.**
   365 and the voucher expiry sweep/warning still runs. Only *points* stopped
   expiring.
 
+## Voucher fees are InnBucks' to set (V67, owner decision 2026-11-12)
+
+**A fee is what a merchant pays InnBucks for its vouchers, so InnBucks sets it,
+never the merchant.** Before V67 the fee lived on the merchant record and on
+`loyalty_rules`, both of which a merchant admin writes, so a merchant could set
+its own fees to zero.
+
+- **Who:** holders of `loyalty-fees:manage` (PLATFORM scope in user-service's
+  `PermissionCatalog`, NOT wildcard-reserved, so a finance role that is not
+  SUPER_ADMIN can hold it) and SUPER_ADMIN (role accepted too, so either repo
+  deploys first). `FeesPermissions` holds the code, character-identical to the
+  catalog. No built-in role is granted it.
+- **Where:** `fee_schedules` (V67), written only through `/loyalty/fees/**`
+  (`FeeController`, `PlatformFeeSchedules`): `PUT`/`DELETE
+  /tenants/{tenantId}` (the tenant's default, every merchant under it) and
+  `PUT`/`DELETE /merchants/{merchantId}` (that merchant's own). Both sides,
+  issue and redeem, always together. `GET` of either returns the current
+  schedule, where each side comes from (`feeIssuedSource`), and up to 50 rows of
+  history. The merchant GET also admits a MERCHANT_ADMIN / SHOP_ADMIN for a
+  merchant `MerchantAuthz.requireCallerMayReadMerchant` lets it read; they never
+  see `setBy` (which staff member set it). Both GETs admit
+  `loyalty-reports:read`. No `X-Tenant-Id`: platform staff span tenants.
+- **Append-only by shape and by trigger.** `@Immutable` entity, a repository with
+  save and reads only, and `trg_fee_schedules_append_only` refusing UPDATE and
+  DELETE. A change is a new row; `DELETE` appends a tombstone (`cleared`, every
+  fee column NULL, `chk_fee_schedule_shape`) and the scope falls through to the
+  next level. Withdrawing what was never set is `409 NO_FEE_SCHEDULE`. A
+  percentage above 100 is `400 FEE_PERCENT_TOO_HIGH`; the usual `FeeModel` rules
+  apply. Zero is allowed: it is InnBucks choosing no fee.
+- **Precedence (`EffectiveFees.resolve(m, rules, book, now)`):** the merchant's
+  live schedule → the tenant's live default → the legacy levels exactly as
+  before (merchant rule → merchant record if not FIXED 0/0 → global rule →
+  none). A schedule sets BOTH sides, so a merchant cannot keep one side of a fee
+  InnBucks replaced. A database with no `fee_schedules` rows prices every voucher
+  exactly as before V67.
+- **One read per batch.** Every pricing caller (the invoice run, single invoice
+  generate, the dashboard and merchant-360 estimates, the zero-fee audit) loads a
+  `PlatformFeeBook` through `PlatformFeeBookSource.forTenants` (one `DISTINCT ON`
+  query) and resolves in memory, so `ReportingAndInvoicingQueryCountIT` counts
+  stay flat. The source is setter-injected and defaults to `NONE` (the empty
+  book), so a service built by hand in a unit test prices the legacy way.
+  Fees are resolved at invoicing time, as they always were.
+- **Every other fee writer refuses a caller without the authority:**
+  `403 FEES_PLATFORM_ONLY`, checked before the fee is validated.
+  - `POST /loyalty/merchants`: a fee other than FIXED 0/0 on the record,
+    `waiveFees: true`, or any fee type on `loyaltyOverride`. FIXED 0/0 on the
+    record is the onboarding default ("not configured"), so a form that always
+    sends it keeps working.
+  - `POST /loyalty/rules`: any fee type, FIXED 0 included (on a rule it is an
+    explicit zero that beats the standard). Checked after the rule scope
+    (`GLOBAL_RULE_ROLE` / `NOT_MERCHANT_OWNER` first).
+  - The merchant admin keeps the earn rate, the floor and voucher validity.
+- **Existing merchant and rule fees are left alone**: they keep pricing until
+  InnBucks sets a schedule over them. Nothing was migrated.
+- Pinned by `EffectiveFeesTest`, `PlatformFeeBookTest`,
+  `PlatformFeeSchedulesTest`, `FeesPermissionsTest`, the `feeAuthority_*` cases
+  in `MerchantServiceTest` and `FeeSchedulesPostgresIT` (constraints, trigger,
+  the latest-row query, the endpoints through real JWTs, the refusals, and an
+  invoice priced from a schedule).
+
 ## Rules are the tenant STANDARD — earning floor + voucher fees (V29)
+
+> **Fees on rules are InnBucks-only since V67** (section above): what follows
+> about who writes a rule holds for the earn rate, the floor and validity; a fee
+> on a rule needs `loyalty-fees:manage`, and InnBucks' schedules beat it.
 
 `loyalty_rules` carries the commercial config, with the same two-tier
 inheritance the earn rate has always used (global rule = tenant template,
@@ -1630,7 +1699,8 @@ merchant-specific first):
 > writes the brand's standard: the global rule (`merchantId` omitted), its
 > deactivation, and global campaigns. Every merchant under the brand inherits it,
 > and each can still carry its own override. That is
-> `RuleAdminService.TENANT_STANDARD_WRITERS`. A
+> `RuleAdminService.TENANT_STANDARD_WRITERS`. Since V67 that standard is the earn
+> rate, floor and validity only: fees are InnBucks' (`403 FEES_PLATFORM_ONLY`). A
 > SHOP_ADMIN is not the tenant and is refused (`403 GLOBAL_RULE_ROLE`).
 > Merchant-scoped writes are unchanged: confined to merchants the caller
 > administers through `MerchantAuthz`. Which tenant the caller writes is bounded
@@ -1643,7 +1713,7 @@ merchant-specific first):
 > SUPER_ADMIN could set a standard, and merchant admins hit `GLOBAL_RULE_ROLE`
 > on the console's Tenant Standard page. The rule rests on one business per
 > tenant: if a tenant ever holds a second business, its admin could change the
-> shared standard, fees included, for both. Raise that with the owner before it
+> shared standard for both (fees excepted since V67). Raise that with the owner before it
 > happens; don't re-restrict silently.
 
 Every fee call-site goes through `EffectiveFees` (invoicing and both reporting
@@ -1661,12 +1731,14 @@ keeps a back-compat 8-arg constructor for callers built against the old shape.
 **Zero-fee merchants are allowed (2026-10-20; V30's refusal is gone).**
 `POST /loyalty/merchants` no longer refuses a merchant whose effective issue
 fee is zero. `waiveFees: true` + `waiveFeesReason` (`merchants.fee_waived`)
-stays as an optional record that a merchant is free on purpose, and
+stays as an optional record that a merchant is free on purpose (InnBucks only
+since V67), and
 `GET /loyalty/merchants/fee-audit` still lists every merchant issuing for free,
 waived or not, so an accidental zero stays visible.
 
 **Onboarding shortcut:** `POST /loyalty/merchants` takes an optional
-`loyaltyOverride` block (earn rate, floor, both fee schedules) and creates the
+`loyaltyOverride` block (earn rate, floor, validity, and, for InnBucks only,
+both fee schedules) and creates the
 merchant's own rule in the same transaction, so an operator never onboards a
 merchant and then forgets to POST its rule. The override lands in
 `loyalty_rules` — NOT on new merchant columns — so there stays one home for rule

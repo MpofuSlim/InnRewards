@@ -70,6 +70,17 @@ public class InvoicingService {
     public static final String RUN_FAILED_METRIC = "loyalty.invoice.run.failed";
     private final Counter runFailures;
 
+    // V67: InnBucks' own fee schedules, which beat the legacy rule and
+    // merchant-record fees (EffectiveFees). Setter-injected so the unit tests
+    // that build this class by hand need no change: they price with NONE, the
+    // legacy resolution they pin. Spring always injects the real source.
+    private PlatformFeeBookSource feeBooks = PlatformFeeBookSource.NONE;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFeeBooks(PlatformFeeBookSource feeBooks) {
+        this.feeBooks = feeBooks;
+    }
+
     public InvoicingService(InvoiceRepository invoices, MerchantRepository merchants,
                             LoyaltyTransactionRepository transactions,
                             VoucherRepository vouchers,
@@ -138,7 +149,7 @@ public class InvoicingService {
         // the row arithmetic.
         Billing billing = Billing.of(m,
                 rules.findApplicable(m.getTenantId(), m.getId(), TransactionType.PURCHASE),
-                issuedFaceValues, redemptionUses);
+                feeBooks.forTenant(m.getTenantId()), issuedFaceValues, redemptionUses);
 
         // No money owed -> no invoice.
         if (!billing.billable()) {
@@ -160,9 +171,9 @@ public class InvoicingService {
      */
     record Billing(long vouchersIssued, long vouchersRedeemed, BigDecimal total) {
 
-        static Billing of(Merchant m, List<LoyaltyRule> applicableRules,
+        static Billing of(Merchant m, List<LoyaltyRule> applicableRules, PlatformFeeBook feeBook,
                           List<BigDecimal> issuedFaceValues, List<EffectiveFees.RedemptionUse> redemptionUses) {
-            EffectiveFees fees = EffectiveFees.resolve(m, applicableRules, Instant.now());
+            EffectiveFees fees = EffectiveFees.resolve(m, applicableRules, feeBook, Instant.now());
             BigDecimal feeVoucherIssued = issuedFaceValues.stream()
                     .map(fees::feeForIssuedFaceValue)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -392,6 +403,8 @@ public class InvoicingService {
         for (LoyaltyRule r : rules.findByTenantIdIn(tenantIds)) {
             rulesByTenant.computeIfAbsent(r.getTenantId(), k -> new ArrayList<>()).add(r);
         }
+        // InnBucks' fee schedules for every tenant in the run: one query.
+        PlatformFeeBook feeBook = feeBooks.forTenants(tenantIds);
 
         List<PlannedInvoice> billable = new ArrayList<>();
         for (PeriodGroup g : groups.values()) {
@@ -412,6 +425,7 @@ public class InvoicingService {
                     Billing billing = Billing.of(m,
                             EffectiveFees.applicable(rulesByTenant.get(m.getTenantId()), m.getId(),
                                     TransactionType.PURCHASE),
+                            feeBook,
                             issued.getOrDefault(m.getId(), List.of()),
                             redeemed.getOrDefault(m.getId(), List.of()));
                     if (billing.billable()) {

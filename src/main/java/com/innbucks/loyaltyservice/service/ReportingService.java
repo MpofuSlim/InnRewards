@@ -96,6 +96,17 @@ public class ReportingService {
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
+    // V67: InnBucks' own fee schedules, which beat the legacy rule and
+    // merchant-record fees (EffectiveFees). Setter-injected so the unit tests
+    // that build this class by hand need no change: they price with NONE, the
+    // legacy resolution they pin. Spring always injects the real source.
+    private PlatformFeeBookSource feeBooks = PlatformFeeBookSource.NONE;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFeeBooks(PlatformFeeBookSource feeBooks) {
+        this.feeBooks = feeBooks;
+    }
+
     public ReportingService(TenantRepository tenants, MerchantRepository merchants,
                             LoyaltyUserRepository users,
                             LoyaltyTransactionRepository transactions,
@@ -252,14 +263,15 @@ public class ReportingService {
             case WEEKLY -> LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY);
             case MONTHLY -> LocalDate.now().withDayOfMonth(1).plusMonths(1);
         };
-        // Fee schedule resolved the same way the invoice run resolves it (V29:
-        // merchant rule -> merchant record -> global rule), so the estimate and
-        // the eventual bill can't drift apart.
+        // Fee schedule resolved the same way the invoice run resolves it
+        // (InnBucks' schedules first, V67; then the legacy merchant rule ->
+        // merchant record -> global rule), so the estimate and the eventual bill
+        // can't drift apart.
         BigDecimal estimatedInvoice = BigDecimal.ZERO;
         if (m != null) {
             EffectiveFees fees = EffectiveFees.resolve(m,
                     rules.findApplicable(m.getTenantId(), merchantId, TransactionType.PURCHASE),
-                    Instant.now());
+                    feeBooks.forTenant(m.getTenantId()), Instant.now());
             estimatedInvoice = issuedVouchers.stream()
                     .map(fees::feeForIssued)
                     .reduce(BigDecimal.ZERO, BigDecimal::add)
@@ -306,6 +318,7 @@ public class ReportingService {
 
         List<LoyaltyRule> tenantRules = rules.findByTenantId(tenantId);
         List<Campaign> tenantCampaigns = campaigns.findByTenantId(tenantId);
+        PlatformFeeBook feeBook = feeBooks.forTenant(tenantId);
 
         int start = (int) Math.min(pageable.getOffset(), visible.size());
         int end = Math.min(start + pageable.getPageSize(), visible.size());
@@ -317,7 +330,7 @@ public class ReportingService {
         Instant now = Instant.now();
         MerchantPageData data = loadMerchantPage(tenantId, pageMerchants, now);
         List<Dtos.MerchantFullReport> content = pageMerchants.stream()
-                .map(m -> buildMerchantFullReport(m, tenantRules, tenantCampaigns, data, now))
+                .map(m -> buildMerchantFullReport(m, tenantRules, feeBook, tenantCampaigns, data, now))
                 .toList();
         return new PageImpl<>(content, pageable, visible.size());
     }
@@ -477,6 +490,7 @@ public class ReportingService {
 
     private Dtos.MerchantFullReport buildMerchantFullReport(Merchant m,
                                                             List<LoyaltyRule> tenantRules,
+                                                            PlatformFeeBook feeBook,
                                                             List<Campaign> tenantCampaigns,
                                                             MerchantPageData data,
                                                             Instant now) {
@@ -561,7 +575,7 @@ public class ReportingService {
         // previews the next bill.
         Instant periodFrom = currentPeriodFrom(m, today);
         EffectiveFees fees = EffectiveFees.resolve(m,
-                EffectiveFees.applicable(tenantRules, id, TransactionType.PURCHASE), now);
+                EffectiveFees.applicable(tenantRules, id, TransactionType.PURCHASE), feeBook, now);
         BigDecimal estimatedFees = data.periodIssued().getOrDefault(id, List.of()).stream()
                 .filter(f -> within(f.at(), periodFrom, now))
                 .map(f -> fees.feeForIssuedFaceValue(f.faceValue()))

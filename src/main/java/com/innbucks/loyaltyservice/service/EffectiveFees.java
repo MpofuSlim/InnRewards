@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.entity.FeeSchedule;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
@@ -12,8 +13,14 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Resolves the fee schedule that actually applies to a merchant's vouchers,
- * now that fee config exists at TWO levels (V29):
+ * Resolves the fee schedule that actually applies to a merchant's vouchers.
+ *
+ * <p><b>InnBucks' own schedules come first (V67).</b> Fees are what a merchant
+ * pays InnBucks, so InnBucks sets them ({@code /loyalty/fees/**},
+ * {@code loyalty-fees:manage}). When InnBucks has set the merchant's own
+ * schedule it applies; else its tenant's default; both sides come from that one
+ * schedule. Only when InnBucks has set neither do the LEGACY levels below apply,
+ * exactly as before V67 — {@link #resolve(Merchant, List, PlatformFeeBook, Instant)}:
  *
  * <ol>
  *   <li><b>Merchant-specific RULE fees</b> — the merchant's own override,
@@ -64,9 +71,16 @@ public final class EffectiveFees {
         return feeForRedemptionUse(use.amount(), use.firstUse());
     }
 
-    /** One resolved side (issued or redeemed). */
-    record Side(Merchant.FeeType type, BigDecimal fixed, BigDecimal percentage) {
-        static final Side NONE = new Side(Merchant.FeeType.FIXED, BigDecimal.ZERO, BigDecimal.ZERO);
+    /**
+     * Where a side's fee came from. The first two are InnBucks' own schedules
+     * (V67); the next three are the legacy levels a merchant could once write;
+     * {@code NONE} is no fee configured anywhere.
+     */
+    public enum Source { MERCHANT_SCHEDULE, TENANT_SCHEDULE, MERCHANT_RULE, MERCHANT_RECORD, TENANT_RULE, NONE }
+
+    /** One resolved side (issued or redeemed), and where it came from. */
+    public record Side(Merchant.FeeType type, BigDecimal fixed, BigDecimal percentage, Source source) {
+        static final Side NONE = new Side(Merchant.FeeType.FIXED, BigDecimal.ZERO, BigDecimal.ZERO, Source.NONE);
     }
 
     private final Side issued;
@@ -78,10 +92,40 @@ public final class EffectiveFees {
     }
 
     /**
-     * Resolve both sides for {@code merchant} from the applicable rules
-     * (merchant-specific ordered first, as {@code findApplicable} returns).
-     * Rules outside their {@code startsAt}/{@code endsAt} window or inactive
-     * are ignored.
+     * Resolve both sides for {@code merchant}: InnBucks' schedule for the
+     * merchant, else its tenant's default (both sides from that one schedule),
+     * else the legacy levels ({@link #resolve(Merchant, List, Instant)}).
+     *
+     * <p>Every pricing caller goes through here, with the book its own batched
+     * read loaded, so the invoice, the estimates and the audit cannot disagree
+     * about which fee applies.
+     */
+    public static EffectiveFees resolve(Merchant merchant, List<LoyaltyRule> applicableRules,
+                                        PlatformFeeBook book, Instant now) {
+        if (book != null) {
+            java.util.Optional<FeeSchedule> own = book.merchantSchedule(merchant.getId());
+            if (own.isPresent()) {
+                return fromSchedule(own.get(), Source.MERCHANT_SCHEDULE);
+            }
+            java.util.Optional<FeeSchedule> tenantDefault = book.tenantSchedule(merchant.getTenantId());
+            if (tenantDefault.isPresent()) {
+                return fromSchedule(tenantDefault.get(), Source.TENANT_SCHEDULE);
+            }
+        }
+        return resolve(merchant, applicableRules, now);
+    }
+
+    private static EffectiveFees fromSchedule(FeeSchedule s, Source source) {
+        return new EffectiveFees(
+                new Side(s.getFeeIssuedType(), s.getFeeIssuedFixed(), s.getFeeIssuedPercentage(), source),
+                new Side(s.getFeeRedeemedType(), s.getFeeRedeemedFixed(), s.getFeeRedeemedPercentage(), source));
+    }
+
+    /**
+     * The LEGACY resolution, used when InnBucks has set no schedule: both sides
+     * from the applicable rules (merchant-specific ordered first, as
+     * {@code findApplicable} returns) and the merchant record. Rules outside
+     * their {@code startsAt}/{@code endsAt} window or inactive are ignored.
      */
     public static EffectiveFees resolve(Merchant merchant, List<LoyaltyRule> applicableRules, Instant now) {
         List<LoyaltyRule> timeValid = applicableRules == null ? List.of() : applicableRules.stream()
@@ -127,8 +171,10 @@ public final class EffectiveFees {
         // 2. explicit merchant-record config (anything beyond the FIXED-0/0
         //    onboarding default counts as explicit).
         Side record = issuedSide
-                ? new Side(m.getFeeIssuedType(), m.getFeeIssuedFixed(), m.getFeeIssuedPercentage())
-                : new Side(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage());
+                ? new Side(m.getFeeIssuedType(), m.getFeeIssuedFixed(), m.getFeeIssuedPercentage(),
+                        Source.MERCHANT_RECORD)
+                : new Side(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage(),
+                        Source.MERCHANT_RECORD);
         if (isConfigured(record)) {
             return record;
         }
@@ -142,11 +188,13 @@ public final class EffectiveFees {
     }
 
     private static Side firstRuleSide(List<LoyaltyRule> rules, boolean issuedSide, boolean global) {
+        Source source = global ? Source.TENANT_RULE : Source.MERCHANT_RULE;
         return rules.stream()
                 .filter(r -> global == (r.getMerchantId() == null))
                 .map(r -> issuedSide
-                        ? new Side(r.getFeeIssuedType(), r.getFeeIssuedFixed(), r.getFeeIssuedPercentage())
-                        : new Side(r.getFeeRedeemedType(), r.getFeeRedeemedFixed(), r.getFeeRedeemedPercentage()))
+                        ? new Side(r.getFeeIssuedType(), r.getFeeIssuedFixed(), r.getFeeIssuedPercentage(), source)
+                        : new Side(r.getFeeRedeemedType(), r.getFeeRedeemedFixed(), r.getFeeRedeemedPercentage(),
+                                source))
                 .filter(s -> s.type() != null)
                 .findFirst().orElse(null);
     }
@@ -158,6 +206,16 @@ public final class EffectiveFees {
         boolean zeroFixed = s.fixed() == null || s.fixed().signum() == 0;
         boolean zeroPct = s.percentage() == null || s.percentage().signum() == 0;
         return !(s.type() == Merchant.FeeType.FIXED && zeroFixed && zeroPct);
+    }
+
+    /** The issue-side fee that applies, and where it came from. */
+    public Side issued() {
+        return issued;
+    }
+
+    /** The redeem-side fee that applies, and where it came from. */
+    public Side redeemed() {
+        return redeemed;
     }
 
     /**

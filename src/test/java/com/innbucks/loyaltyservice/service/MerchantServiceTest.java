@@ -37,6 +37,10 @@ import static org.mockito.Mockito.*;
  * the only caller shape that may onboard a merchant for itself since ownership
  * moved from an email to the organization. Ownership itself is pinned in
  * {@code MerchantOrganizationOwnershipTest}.
+ *
+ * <p>Fees are InnBucks' to set (V67), so a test about the fee fields first
+ * calls {@link #actAsInnBucks()}: a merchant admin sending them is refused
+ * {@code FEES_PLATFORM_ONLY}, which the {@code feeAuthority_*} cases pin.
  */
 class MerchantServiceTest {
 
@@ -53,6 +57,14 @@ class MerchantServiceTest {
     @AfterEach
     void clearSecurityContext() {
         SecurityContextHolder.clearContext();
+    }
+
+    /** SUPER_ADMIN, the InnBucks caller that onboards a merchant with fees. */
+    private static void actAsInnBucks() {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                "admin@innbucks.co.zw", null, List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        auth.setDetails(new CallerDetails(null, null, null, UUID.randomUUID(), null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
     private static final com.innbucks.loyaltyservice.config.LoyaltyProperties PROPS =
@@ -94,15 +106,13 @@ class MerchantServiceTest {
             new Dtos.FeeModel(Merchant.FeeType.FIXED, new java.math.BigDecimal("0.25"), java.math.BigDecimal.ZERO);
 
     private static Dtos.MerchantRequest req(Dtos.FeeModel issued, Dtos.FeeModel redeemed) {
-        // Default to a priced issue side: creation is refused outright when the
-        // effective issue fee is zero, so a fee-less request is no longer a
-        // neutral fixture.
         return new Dtos.MerchantRequest("Cafe A", "F&B", "USD",
-                Merchant.BillingCycle.MONTHLY, issued == null ? PRICED : issued, redeemed);
+                Merchant.BillingCycle.MONTHLY, issued, redeemed);
     }
 
     @Test
     void create_acceptsFixedPlusPercentage() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
         MerchantService svc = newService(repo);
@@ -138,6 +148,7 @@ class MerchantServiceTest {
 
     @Test
     void create_withOverride_createsTheMerchantsOwnRule() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
         UUID tenantId = UUID.randomUUID();
@@ -184,6 +195,7 @@ class MerchantServiceTest {
 
     @Test
     void create_overrideWithBadFee_rejectsBeforeSavingTheRule() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -218,6 +230,7 @@ class MerchantServiceTest {
 
     @Test
     void create_rejectsFixedWithNonZeroPercentage() {
+        actAsInnBucks();
         MerchantService svc = newService(mock(MerchantRepository.class));
         Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.FIXED,
                 new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5"));
@@ -229,6 +242,7 @@ class MerchantServiceTest {
 
     @Test
     void create_rejectsPercentageWithNonZeroFixed() {
+        actAsInnBucks();
         MerchantService svc = newService(mock(MerchantRepository.class));
         Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE,
                 new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5"));
@@ -240,6 +254,7 @@ class MerchantServiceTest {
 
     @Test
     void create_acceptsAZeroPercentFee_onBothSides() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
         Dtos.FeeModel zeroPct = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE,
@@ -254,6 +269,7 @@ class MerchantServiceTest {
 
     @Test
     void create_rejectsFixedPlusPercentageMissingALeg() {
+        actAsInnBucks();
         MerchantService svc = newService(mock(MerchantRepository.class));
         Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.FIXED_PLUS_PERCENTAGE,
                 new java.math.BigDecimal("0.30"), java.math.BigDecimal.ZERO);
@@ -264,6 +280,7 @@ class MerchantServiceTest {
 
     @Test
     void create_rejectsNegativeValues() {
+        actAsInnBucks();
         MerchantService svc = newService(mock(MerchantRepository.class));
         Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.FIXED,
                 new java.math.BigDecimal("-0.10"), java.math.BigDecimal.ZERO);
@@ -274,12 +291,12 @@ class MerchantServiceTest {
 
     @Test
     void create_nullFeeModels_defaultEntityToFixedZero() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
         MerchantService svc = newService(repo);
 
-        // Waived, because an unpriced merchant is now refused outright — the
-        // entity defaults this pins are unaffected by that guard.
+        // Waived, to show a waiver leaves the fee columns at their defaults.
         Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(),
                 new Dtos.MerchantRequest("Cafe A", "F&B", "USD", Merchant.BillingCycle.MONTHLY,
                         null, null, null, true, "Free by arrangement"));
@@ -302,7 +319,7 @@ class MerchantServiceTest {
         ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
 
         Dtos.MerchantRequest noCurrency = new Dtos.MerchantRequest(
-                "Nairobi Cafe", "F&B", null, Merchant.BillingCycle.MONTHLY, PRICED, null);
+                "Nairobi Cafe", "F&B", null, Merchant.BillingCycle.MONTHLY, null, null);
         Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), noCurrency);
 
         assertThat(resp.currency()).isEqualTo("KES");
@@ -316,7 +333,7 @@ class MerchantServiceTest {
         ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
 
         Dtos.MerchantRequest usd = new Dtos.MerchantRequest(
-                "USD Merchant", "F&B", "USD", Merchant.BillingCycle.MONTHLY, PRICED, null);
+                "USD Merchant", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
         Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), usd);
 
         assertThat(resp.currency()).isEqualTo("USD");
@@ -348,7 +365,7 @@ class MerchantServiceTest {
         MerchantService svc = newService(repo);
 
         Dtos.MerchantRequest sameNameLowerCase = new Dtos.MerchantRequest(
-                "cafe a", "F&B", "USD", Merchant.BillingCycle.MONTHLY, PRICED, null);
+                "cafe a", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
 
         assertThatThrownBy(() -> svc.create(tenantId, sameNameLowerCase))
                 .isInstanceOf(LoyaltyException.class)
@@ -369,7 +386,7 @@ class MerchantServiceTest {
         MerchantService svc = newService(repo);
 
         Dtos.MerchantRequest padded = new Dtos.MerchantRequest(
-                "  Cafe A  ", "F&B", "USD", Merchant.BillingCycle.MONTHLY, PRICED, null);
+                "  Cafe A  ", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
         Dtos.MerchantResponse resp = svc.create(tenantId, padded);
 
         // Existence is checked against the trimmed name, and the trimmed name is persisted.
@@ -407,6 +424,7 @@ class MerchantServiceTest {
 
     @Test
     void create_withZeroRedeemFee_isAllowed() {
+        actAsInnBucks();
         // Billing only the issue side is a normal arrangement — never refused.
         MerchantRepository repo = mock(MerchantRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -446,6 +464,7 @@ class MerchantServiceTest {
 
     @Test
     void create_pricedByTheOverride_isAllowed_evenBeforeTheRuleIsFlushed() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> {
@@ -470,6 +489,7 @@ class MerchantServiceTest {
 
     @Test
     void create_unpricedButWaived_isAllowedAndRecorded() {
+        actAsInnBucks();
         MerchantRepository repo = mock(MerchantRepository.class);
         when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -483,6 +503,7 @@ class MerchantServiceTest {
 
     @Test
     void create_waiverWithoutAReason_isRefused() {
+        actAsInnBucks();
         // A waiver with no reason is indistinguishable from an oversight the
         // moment anyone reads the audit.
         MerchantRepository repo = mock(MerchantRepository.class);
@@ -491,6 +512,120 @@ class MerchantServiceTest {
         assertThatThrownBy(() -> newService(repo).create(UUID.randomUUID(),
                 new Dtos.MerchantRequest("Pilot Partner", null, null, null, null, null, null, true, "   ")))
                 .hasMessageContaining("waiveFeesReason is required");
+    }
+
+    // --- Fees are InnBucks' (V67): a merchant admin may not choose them ---
+
+    @Test
+    void feeAuthority_aMerchantAdminSendingAFee_isRefused_andNothingIsSaved() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+
+        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES)
+                .create(UUID.randomUUID(), req(PRICED, null)))
+                .isInstanceOfSatisfying(LoyaltyException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+                    assertThat(e.getCode()).isEqualTo("FEES_PLATFORM_ONLY");
+                });
+        verify(repo, never()).save(any());
+        verify(rules, never()).save(any());
+    }
+
+    @Test
+    void feeAuthority_isCheckedBeforeTheFeeIsValidated() {
+        // A merchant admin learns only that fees are not theirs to send, never
+        // which shape of fee would have been accepted.
+        Dtos.FeeModel negative = new Dtos.FeeModel(Merchant.FeeType.FIXED,
+                new java.math.BigDecimal("-0.10"), java.math.BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> newService(mock(MerchantRepository.class)).create(UUID.randomUUID(),
+                req(null, negative)))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("FEES_PLATFORM_ONLY"));
+    }
+
+    @Test
+    void feeAuthority_theOnboardingDefault_isNotAChoice_andIsAccepted() {
+        // A console form that always sends FIXED 0 on both sides keeps working:
+        // that is how the record has always read "not configured".
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        Dtos.FeeModel fixedZero = new Dtos.FeeModel(Merchant.FeeType.FIXED, null, null);
+        Dtos.FeeModel typeless = new Dtos.FeeModel(null, null, null);
+
+        Dtos.MerchantResponse resp = newService(repo).create(UUID.randomUUID(), req(fixedZero, typeless));
+
+        assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0");
+        assertThat(resp.organizationId()).isEqualTo(ORG);
+    }
+
+    @Test
+    void feeAuthority_aMerchantAdminWaivingFees_isRefused() {
+        assertThatThrownBy(() -> newService(mock(MerchantRepository.class)).create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Pilot Partner", null, null, null, null, null, null,
+                        true, "We want it free")))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("FEES_PLATFORM_ONLY"));
+    }
+
+    @Test
+    void feeAuthority_anyFeeOnTheOverride_evenFixedZero_isRefused() {
+        // On a rule, FIXED 0 is an explicit zero that beats the tenant standard.
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        Dtos.MerchantRuleOverride zeroOnTheRule = new Dtos.MerchantRuleOverride(
+                null, null, null, null, null, null, null,
+                new Dtos.FeeModel(Merchant.FeeType.FIXED, java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO));
+
+        assertThatThrownBy(() -> new MerchantService(repo, rules, PROPS, CURRENCIES).create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, zeroOnTheRule)))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("FEES_PLATFORM_ONLY"));
+        verify(repo, never()).save(any());
+        verify(rules, never()).save(any());
+    }
+
+    @Test
+    void feeAuthority_anOverrideWithoutFees_isStillTheMerchantAdminsToSet() {
+        // The earn rate, floor and validity stay the merchant admin's.
+        MerchantRepository repo = mock(MerchantRepository.class);
+        LoyaltyRuleRepository rules = mock(LoyaltyRuleRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> {
+            Merchant m = inv.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+        when(rules.save(any(LoyaltyRule.class))).thenAnswer(inv -> inv.getArgument(0));
+        Dtos.MerchantRuleOverride earnOnly = new Dtos.MerchantRuleOverride(
+                null, new java.math.BigDecimal("2"), null, null, "MAIN",
+                new java.math.BigDecimal("5.00"), null, null, 30);
+
+        new MerchantService(repo, rules, PROPS, CURRENCIES).create(UUID.randomUUID(),
+                new Dtos.MerchantRequest("Cafe A", null, null, null, null, null, earnOnly));
+
+        ArgumentCaptor<LoyaltyRule> saved = ArgumentCaptor.forClass(LoyaltyRule.class);
+        verify(rules).save(saved.capture());
+        assertThat(saved.getValue().getPointsPerUnit()).isEqualByComparingTo("2");
+        assertThat(saved.getValue().getVoucherValidityDays()).isEqualTo(30);
+        assertThat(saved.getValue().getFeeIssuedType()).isNull();
+    }
+
+    @Test
+    void feeAuthority_aFinanceRoleHoldingTheCode_maySendFees() {
+        // loyalty-fees:manage is not wildcard-reserved: a finance role that is not
+        // SUPER_ADMIN may hold it. (Shown on the service; the endpoint's role list
+        // still decides who reaches merchant create at all.)
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                "owner@rudo.co.zw", null, List.of(new SimpleGrantedAuthority("ROLE_MERCHANT_ADMIN"),
+                        new SimpleGrantedAuthority("loyalty-fees:manage")));
+        auth.setDetails(new CallerDetails(null, null, null, UUID.randomUUID(), ORG));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Dtos.MerchantResponse resp = newService(repo).create(UUID.randomUUID(), req(PRICED, null));
+
+        assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0.25");
     }
 
     @Test

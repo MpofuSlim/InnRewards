@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -82,12 +83,12 @@ public class Dtos {
                             + "points. Omit to inherit the tenant's global floor.")
             BigDecimal minTransactionAmount,
             @Schema(nullable = true,
-                    description = "Voucher-issue fee for this merchant, overriding the tenant standard. "
-                            + "Omit to inherit the global rule's fee.")
+                    description = "InnBucks only (loyalty-fees:manage or SUPER_ADMIN; anyone else gets 403 "
+                            + "FEES_PLATFORM_ONLY). Leave it out: InnBucks sets fees through /loyalty/fees, and "
+                            + "those beat a fee on the merchant's rule.")
             FeeModel feeIssued,
             @Schema(nullable = true,
-                    description = "Voucher-redeem fee for this merchant, overriding the tenant standard. "
-                            + "Omit to inherit the global rule's fee.")
+                    description = "InnBucks only, as feeIssued.")
             FeeModel feeRedeemed,
             @Schema(example = "30", nullable = true,
                     description = "Days until this merchant's vouchers expire, overriding the tenant "
@@ -116,12 +117,13 @@ public class Dtos {
                     description = "Billing period the merchant is invoiced on. Defaults to MONTHLY when omitted. "
                             + "DAILY bills each completed day, WEEKLY the previous Mon–Sun week, MONTHLY the previous calendar month.")
             Merchant.BillingCycle billingCycle,
-            @Schema(description = "Legacy per-merchant voucher-issue fee written straight onto the merchant record. "
-                    + "Prefer loyaltyOverride.feeIssued, which puts the fee on the merchant's rule alongside the "
-                    + "rest of its terms. Omit both to inherit the tenant standard.", nullable = true)
+            @Schema(description = "Legacy per-merchant voucher-issue fee written onto the merchant record. "
+                    + "InnBucks only (loyalty-fees:manage or SUPER_ADMIN): anyone else sending a fee other than "
+                    + "FIXED 0/0 gets 403 FEES_PLATFORM_ONLY. Leave it out; InnBucks sets fees through "
+                    + "/loyalty/fees.", nullable = true)
             FeeModel feeIssued,
-            @Schema(description = "Legacy per-merchant voucher-redeem fee written straight onto the merchant record. "
-                    + "Prefer loyaltyOverride.feeRedeemed.", nullable = true)
+            @Schema(description = "Legacy per-merchant voucher-redeem fee. InnBucks only, as feeIssued.",
+                    nullable = true)
             FeeModel feeRedeemed,
             @Schema(nullable = true,
                     description = "Override the tenant's standard loyalty terms for this merchant at onboarding. "
@@ -129,10 +131,10 @@ public class Dtos {
                             + "inherits every global rule as-is.")
             MerchantRuleOverride loyaltyOverride,
             @Schema(example = "false", nullable = true,
-                    description = "Record that this merchant is deliberately unbilled, with a reason. Optional: "
-                            + "a 0% / zero issue or redeem fee is accepted without it; a waiver only marks the "
-                            + "merchant as free on purpose in GET /loyalty/merchants/fee-audit. "
-                            + "Requires waiveFeesReason.")
+                    description = "Record that this merchant is deliberately unbilled, with a reason. InnBucks "
+                            + "only (loyalty-fees:manage or SUPER_ADMIN; anyone else sending true gets 403 "
+                            + "FEES_PLATFORM_ONLY). A waiver only marks the merchant as free on purpose in "
+                            + "GET /loyalty/merchants/fee-audit. Requires waiveFeesReason.")
             Boolean waiveFees,
             @Schema(example = "Pilot partner - free for the first quarter, revisit 2026-10", nullable = true,
                     description = "Why billing was waived. Required when waiveFees is true; it is what makes the "
@@ -205,6 +207,75 @@ public class Dtos {
             @Schema(nullable = true, example = "Pilot partner - free for the first quarter") String waivedReason,
             @Schema(example = "true", description = "Whether redemption is also free. Reported, never refused.")
             boolean redeemsForFree) {}
+
+    /**
+     * InnBucks' fee schedule for a tenant's default or one merchant (V67): both
+     * sides, always together. Only holders of {@code loyalty-fees:manage} (or
+     * SUPER_ADMIN) may send it.
+     */
+    public record FeeScheduleRequest(
+            @Schema(description = "Fee charged when a voucher is issued. type is required; a zero fee "
+                    + "(FIXED 0 or PERCENTAGE 0) is allowed.")
+            @NotNull @Valid FeeModel feeIssued,
+            @Schema(description = "Fee charged on each redemption: the fixed part on a voucher's first use, "
+                    + "the percentage on every use's amount. type is required.")
+            @NotNull @Valid FeeModel feeRedeemed,
+            @Schema(example = "Signed rate card, Nov 2026", nullable = true,
+                    description = "Why. Kept in the history.")
+            @Size(max = 500) String note) {}
+
+    /** One fee decision by InnBucks, as the history shows it. */
+    public record FeeScheduleEntry(
+            UUID id,
+            @Schema(example = "MERCHANT", allowableValues = {"TENANT", "MERCHANT"},
+                    description = "TENANT = the tenant's default; MERCHANT = one merchant's own fees.")
+            String scope,
+            UUID tenantId,
+            @Schema(nullable = true) UUID merchantId,
+            @Schema(description = "True when this entry withdrew the schedule: the merchant falls back to its "
+                    + "tenant's default, and a tenant default falls back to the fees set before InnBucks "
+                    + "managed them. Both fee models are null on such an entry.")
+            boolean cleared,
+            @Schema(nullable = true) FeeModel feeIssued,
+            @Schema(nullable = true) FeeModel feeRedeemed,
+            @Schema(nullable = true) String note,
+            @Schema(nullable = true, description = "Who set it. Shown to InnBucks staff only; null for a "
+                    + "merchant reading its own fees.")
+            String setBy,
+            Instant setAt) {}
+
+    /** What a merchant pays InnBucks today, where each fee comes from, and the history of its own fees. */
+    public record MerchantFees(
+            UUID merchantId,
+            UUID tenantId,
+            String merchantName,
+            FeeModel feeIssued,
+            @Schema(example = "TENANT_SCHEDULE", allowableValues = {"MERCHANT_SCHEDULE", "TENANT_SCHEDULE",
+                    "MERCHANT_RULE", "MERCHANT_RECORD", "TENANT_RULE", "NONE"},
+                    description = "Where feeIssued comes from. MERCHANT_SCHEDULE and TENANT_SCHEDULE are set "
+                            + "by InnBucks; MERCHANT_RULE, MERCHANT_RECORD and TENANT_RULE are fees set before "
+                            + "InnBucks managed them, which apply until InnBucks sets a schedule; NONE means "
+                            + "no fee.")
+            String feeIssuedSource,
+            FeeModel feeRedeemed,
+            @Schema(example = "TENANT_SCHEDULE", description = "Where feeRedeemed comes from. Same values.")
+            String feeRedeemedSource,
+            @Schema(nullable = true, description = "This merchant's own schedule from InnBucks, when it has one.")
+            FeeScheduleEntry merchantSchedule,
+            @Schema(nullable = true, description = "The tenant's default from InnBucks, when it has one.")
+            FeeScheduleEntry tenantSchedule,
+            @Schema(description = "Every change to this merchant's own fees, newest first (at most 50).")
+            List<FeeScheduleEntry> history) {}
+
+    /** A tenant's default fees from InnBucks, and their history. */
+    public record TenantFees(
+            UUID tenantId,
+            String tenantName,
+            @Schema(nullable = true, description = "The default in force: null when InnBucks has not set one, "
+                    + "or withdrew it.")
+            FeeScheduleEntry current,
+            @Schema(description = "Every change to the default, newest first (at most 50).")
+            List<FeeScheduleEntry> history) {}
 
     /** The zero-fee audit: every merchant issuing for free, and how many were deliberate. */
     public record ZeroFeeAudit(
@@ -436,12 +507,12 @@ public class Dtos {
                                   "Null on a merchant rule inherits the global rule's floor; null everywhere = no floor.")
             BigDecimal minTransactionAmount,
             @Schema(nullable = true,
-                    description = "Voucher-issue fee schedule at rule level. On a GLOBAL rule this is the tenant " +
-                                  "STANDARD every merchant inherits; on a merchant rule it overrides the standard " +
-                                  "for that merchant. Null = not configured at this level (inherit).")
+                    description = "Voucher-issue fee at rule level. InnBucks only (loyalty-fees:manage or " +
+                                  "SUPER_ADMIN; anyone else gets 403 FEES_PLATFORM_ONLY). A fee schedule InnBucks " +
+                                  "sets through /loyalty/fees beats it. Null = not configured at this level.")
             FeeModel feeIssued,
             @Schema(nullable = true,
-                    description = "Voucher-redeem fee schedule at rule level — same inheritance as feeIssued.")
+                    description = "Voucher-redeem fee at rule level. InnBucks only, as feeIssued.")
             FeeModel feeRedeemed,
             @Schema(example = "30", nullable = true,
                     description = "Days from issue until a voucher expires (V45 — replaces the retired "

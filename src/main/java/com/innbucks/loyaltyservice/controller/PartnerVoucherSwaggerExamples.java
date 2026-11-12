@@ -239,13 +239,6 @@ final class PartnerVoucherSwaggerExamples {
               }
             }""";
 
-    static final String NOT_A_PARTNER_400 = """
-            {
-              "code": "MERCHANT_NOT_A_PARTNER",
-              "message": "Not every merchant in redeemableAt accepts this merchant's vouchers.",
-              "data": { "merchants": [ "ZUVA" ] }
-            }""";
-
     static final String PARTNERSHIP_SUSPENDED_409 = """
             {
               "code": "PARTNERSHIP_SUSPENDED",

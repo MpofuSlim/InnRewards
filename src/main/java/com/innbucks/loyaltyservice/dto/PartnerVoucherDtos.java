@@ -54,12 +54,12 @@ public final class PartnerVoucherDtos {
                     until its balance is used up. SINGLE: it must be redeemed for its full value in one \
                     redemption; a smaller amount is refused with 400 PARTIAL_USE_NOT_ALLOWED.""")
             String usage,
-            @Schema(example = "[\"BOLABET\"]", description = """
-                    Optional. Other merchants, by the codes we gave you, where this voucher can also be used. \
-                    Leave it out and the voucher works only at `merchant`, which is always included. Each must \
-                    be in the issuer's own program or a live partner of it, else 400 MERCHANT_NOT_A_PARTNER \
-                    naming the codes. At most 20. Fixed when the voucher is issued.""")
-            @Size(max = 20) List<String> redeemableAt) {
+            @Schema(example = "true", description = """
+                    Optional, default false. false: the voucher works only at `merchant`. true: it also works \
+                    at every merchant in the issuer's live partnerships that you serve (and the issuer's own \
+                    sister merchants that you serve). The list is worked out and fixed when the order is made; \
+                    `voucher.redeemableAt` returns it.""")
+            Boolean generic) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

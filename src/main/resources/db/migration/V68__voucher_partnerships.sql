@@ -57,5 +57,5 @@ CREATE INDEX idx_voucher_partnership_merchants_merchant ON voucher_partnership_m
 -- Where a voucher can be used besides its own merchant, fixed at issue (comma-
 -- separated merchant ids, the issuer never listed). NULL = the issuer only, the
 -- shape of every voucher before V68.
-ALTER TABLE vouchers ADD COLUMN redeemable_merchant_ids VARCHAR(1000);
-ALTER TABLE voucher_purchase_orders ADD COLUMN redeemable_merchant_ids VARCHAR(1000);
+ALTER TABLE vouchers ADD COLUMN redeemable_merchant_ids TEXT;
+ALTER TABLE voucher_purchase_orders ADD COLUMN redeemable_merchant_ids TEXT;

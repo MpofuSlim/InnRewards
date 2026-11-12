@@ -3362,13 +3362,17 @@ Pinned by `PartnerRequestVerifierTest`, `VoucherPartnerAuthFilterTest`,
 and `PartnerVoucherFlowIT` (the whole flow through real signed requests and
 Postgres).
 
-## Partner vouchers usable at partner merchants: `redeemableAt` (V68)
+## Partner vouchers usable at partner merchants: `generic` (V68)
 
 **Owner decisions (2026-11-12):** a tenant's voucher can be accepted at another
 tenant's merchants (MWOS vouchers at Bola Bet; later Simbisa vouchers at ZUVA).
 Tenants onboard their own partners: one invites, the other accepts. InnBucks
-(SUPER_ADMIN) oversees and acts for tenants with no login. Partners send a flat
-`redeemableAt` list of merchant codes on generate; there is no `type` field.
+(SUPER_ADMIN) oversees and acts for tenants with no login. A partner marks a
+sale `generic: true` to make the voucher work at the issuer's partners too
+(owner, 2026-11-12). A list of merchant codes per sale was built first and
+replaced: MWOS integrates with the middleware, never with us, so it had no way to
+learn the codes, and a till would send the same list on every sale. The
+partnership is where that list lives.
 
 - **Partnerships** (`voucher_partnerships`, `voucher_partnership_merchants`,
   `VoucherPartnershipService`, `/loyalty/partnerships`):
@@ -3389,18 +3393,24 @@ Tenants onboard their own partners: one invites, the other accepts. InnBucks
     `auto_accepted`. It is ignored (boot ERROR) unless voucher funding is
     SIMULATED, so it can never move real money across a partnership nobody
     agreed to.
-- **`redeemableAt` on partner generate** (`PartnerVoucherService`): codes are
-  trimmed, upper-cased, de-duplicated, the issuer's own code dropped (it is
-  always included), at most 20. Each must be an ACTIVE link of the SAME partner,
-  an active escrow merchant, and either in the issuer's own tenant (the tenant is
-  the brand) or in an ACTIVE partnership in which both merchants take part. Any
-  other code is `400 MERCHANT_NOT_A_PARTNER` with `data.merchants`, before
-  anything is recorded. The list joins the idempotency fingerprint only when
-  sent. It is checked for a NEW order only, so a replay of an order made before
-  a partnership ended still replays. It is fixed on the order and then the
-  voucher (`redeemable_merchant_ids`). Generate and inquire return
-  `redeemableAt` (every merchant, the issuer first, by the partner's codes and
-  names).
+- **`generic` on partner generate** (`PartnerVoucherService.partnerMerchants`):
+  optional, default false (the voucher works at `merchant` only, as before V68).
+  - **true** adds every merchant that is:
+    - an ACTIVE link of the SAME partner;
+    - an active escrow merchant, other than the issuer;
+    - either in the issuer's own tenant (the tenant is the brand) or in an
+      ACTIVE partnership in which both merchants take part.
+  - **Worked out once, for a new order**, in merchant-code order, and fixed on
+    the order and then the voucher (`redeemable_merchant_ids`, TEXT, so there is
+    no length cap). A replay never asks again.
+  - **Never refused.** With no partner, the voucher works at the issuer only.
+  - **Two kinds of merchant are left out:** one another partner serves (a
+    partner voucher is redeemed through the partner that sold it), and one
+    whose partnership is SUSPENDED.
+  - `generic: true` joins the idempotency fingerprint, so true and false under
+    one reference are `422 IDEMPOTENCY_MISMATCH`.
+  - Generate and inquire return `redeemableAt`: every merchant, the issuer
+    first, by the partner's codes and names.
 - **Redeem and inquire at a listed merchant** (`VoucherService.usableAt`): a
   partner voucher is known at its own merchant and at the merchants in its list,
   across tenants. Everything else is the counted unknown code, as before.
@@ -3423,14 +3433,15 @@ Tenants onboard their own partners: one invites, the other accepts. InnBucks
     who-owes-whom statements;
   - the "open to any tenant" setting;
   - a fee-payer option per partnership (the redeemer pays today);
-  - `redeemableAt` on till issue and purchase orders;
-  - a capabilities call;
+  - `generic` on till issue and purchase orders;
+  - narrowing a generic voucher to some partners only (nobody needs it yet);
   - reports by redeeming merchant;
   - a partner merchant served by a DIFFERENT partner (integrator): a voucher is
     redeemed through the partner that sold it.
 - Pinned by `VoucherPartnershipFlowIT` (real signed requests and Postgres: use at
-  the partner, payment and fees to the redeemer, refusals, suspension, ending,
-  replay, the invitation rules, merchant-admin authority),
+  the partner, payment and fees to the redeemer, what `generic` includes and
+  leaves out, suspension, ending, replay, the invitation rules, merchant-admin
+  authority),
   `VoucherPartnershipServiceTest`, `NotificationGatewayTest` and
   `VoucherUseNoticeTest`.
 

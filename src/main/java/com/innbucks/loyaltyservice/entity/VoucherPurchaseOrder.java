@@ -205,10 +205,10 @@ public class VoucherPurchaseOrder {
 
     /**
      * Merchants besides its own where this voucher can be used (V68), fixed at
-     * issue from the partner's {@code redeemableAt}. Null = the issuer only.
+     * issue for a {@code generic} partner voucher. Null = the issuer only.
      */
     @Convert(converter = UuidListConverter.class)
-    @Column(name = "redeemable_merchant_ids", length = 1000)
+    @Column(name = "redeemable_merchant_ids", columnDefinition = "TEXT")
     private java.util.List<UUID> redeemableMerchantIds;
 
     /** How the customer paid: CASH, CARD_SWIPE, MERCHANT_COLLECTED, INNBUCKS_CODE, … */

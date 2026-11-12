@@ -30,7 +30,8 @@ import java.util.UUID;
 @Tag(name = "Voucher partnerships",
         description = "Two tenants that accept each other's vouchers (V68). A tenant invites another by its code, "
                 + "the other accepts or declines, either side can end it, and each side chooses which of its "
-                + "merchants take part. A voucher can then name the other side's merchants in redeemableAt. "
+                + "merchants take part. A partner voucher sold with generic=true then also works at the other "
+                + "side's merchants. "
                 + "Tenant calls need X-Tenant-Id; a SUPER_ADMIN acts for any tenant by sending its id.")
 public class VoucherPartnershipController {
 

@@ -229,6 +229,14 @@ public class Voucher {
     @Column(name = "single_redemption", nullable = false)
     private boolean singleRedemption;
 
+    /**
+     * Merchants besides its own where this voucher can be used (V68), fixed at
+     * issue from the partner's {@code redeemableAt}. Null = the issuer only.
+     */
+    @Convert(converter = UuidListConverter.class)
+    @Column(name = "redeemable_merchant_ids", columnDefinition = "TEXT")
+    private java.util.List<UUID> redeemableMerchantIds;
+
     // Single-hop p2p transfer (V34). A voucher may change hands exactly once:
     // issued -> transferred -> redeemed. `transferredAt == null` IS the
     // "may still be transferred" test — see VoucherService.transfer.

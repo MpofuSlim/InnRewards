@@ -47,7 +47,7 @@ public class VoucherPartnerMerchant {
     /** A redeem must carry the verified phone of the customer's account on the
      *  partner's platform, equal to the voucher's holder phone. */
     @Column(name = "bind_redeem_to_holder", nullable = false)
-    private boolean bindRedeemToHolder = true;
+    private boolean bindRedeemToHolder = false;
 
     /** Comma-separated funding methods this merchant accepts; null = every
      *  method the cell supports. */

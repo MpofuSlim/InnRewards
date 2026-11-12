@@ -24,6 +24,7 @@ import com.innbucks.loyaltyservice.security.PartnerRequest;
 import com.innbucks.loyaltyservice.service.ExchangeRateService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherGuessGuard;
+import com.innbucks.loyaltyservice.service.VoucherPartnershipService;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import com.innbucks.loyaltyservice.service.partner.VoucherFundingProvider.FundingLeg;
 import com.innbucks.loyaltyservice.service.partner.VoucherFundingProvider.FundingOutcome;
@@ -47,8 +48,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -91,15 +97,23 @@ public class PartnerVoucherService {
     /** Money the merchant collected itself: its float is debited into holding. */
     static final Set<String> MERCHANT_COLLECTED_METHODS = Set.of("CASH", "CARD_SWIPE", "MERCHANT_COLLECTED");
     static final Set<String> COLLECTED_VIA = Set.of("ECOCASH_MERCHANT", "BANK_TRANSFER", "BETTING_WALLET", "OTHER");
+    /** Where a sale or a redemption happens. APP is the provider's own app (2026-11-12). */
+    static final Set<String> CHANNELS = Set.of("POS", "ONLINE", "APP");
+    /** {@code redeemableAt} value meaning every partner of the issuer. Never a merchant code. */
+    public static final String ANY = "ANY";
+    /** At most this many merchants in a voucher's redeemableAt (V68). */
+    static final int MAX_REDEEMABLE_AT = 20;
 
     private static final Pattern APPROVAL_CODE = Pattern.compile("[A-Z0-9]{4,12}");
     private static final Pattern LAST4 = Pattern.compile("[0-9]{4}");
     private static final Pattern LINK_LIKE = Pattern.compile(
             "(?i)(https?:|www\\.|\\b[a-z0-9-]+\\.(com|net|org|info|biz|io|co|zw|me|ly|link|xyz)\\b)");
     private static final SecureRandom RANDOM = new SecureRandom();
+
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
 
     private final VoucherPartnerMerchantRepository links;
+    private final VoucherPartnershipService partnerships;
     private final MerchantRepository merchants;
     private final VoucherPurchaseOrderRepository orders;
     private final VoucherRepository vouchers;
@@ -123,8 +137,10 @@ public class PartnerVoucherService {
                                  VoucherFundingProvider provider, VoucherPartnerProperties props,
                                  SupportedCurrencies supportedCurrencies, ExchangeRateService fx,
                                  UserService userService, VoucherGuessGuard guard, LoyaltyMetrics metrics,
-                                 PlatformTransactionManager txManager, LoyaltyProperties loyaltyProps) {
+                                 PlatformTransactionManager txManager, LoyaltyProperties loyaltyProps,
+                                 VoucherPartnershipService partnerships) {
         this.links = links;
+        this.partnerships = partnerships;
         this.merchants = merchants;
         this.orders = orders;
         this.vouchers = vouchers;
@@ -173,11 +189,12 @@ public class PartnerVoucherService {
             return replay(existing, sale, linked);
         }
 
+        List<UUID> redeemableAt = resolveRedeemableAt(linked, sale.redeemable());
         requireWithinLimits(linked, sale);
 
         UUID orderId;
         try {
-            orderId = tx.execute(s -> orders.saveAndFlush(newOrder(partner, linked, sale)).getId());
+            orderId = tx.execute(s -> orders.saveAndFlush(newOrder(partner, linked, sale, redeemableAt)).getId());
         } catch (DataIntegrityViolationException clash) {
             String detail = String.valueOf(clash.getMostSpecificCause().getMessage());
             if (detail.contains("uq_vpo_partner_reference")) {
@@ -424,8 +441,8 @@ public class PartnerVoucherService {
         UUID merchantId = linked.merchant().getId();
         String channel = req.channel() == null || req.channel().isBlank()
                 ? "ONLINE" : req.channel().strip().toUpperCase(Locale.ROOT);
-        if (!channel.equals("ONLINE") && !channel.equals("POS")) {
-            throw validation("channel", "must be POS or ONLINE");
+        if (!CHANNELS.contains(channel)) {
+            throw validation("channel", "must be POS, ONLINE or APP");
         }
         String currency = req.currency() == null || req.currency().isBlank()
                 ? null : req.currency().strip().toUpperCase(Locale.ROOT);
@@ -489,12 +506,29 @@ public class PartnerVoucherService {
                 String endUserRef, BigDecimal amount, String currency, String phone, String name, String method,
                 String approvalCode, String last4, String collectedVia, String collectionRef, String payerPhone,
                 String evidenceKey, String fingerprint, boolean confirmDuplicate, Integer validityDays,
-                boolean singleRedemption) {}
+                boolean singleRedemption, Redeemable redeemable) {}
+
+    /**
+     * A generate's {@code redeemableAt}, normalised: {@code any} for "ANY", else the
+     * codes named (trimmed, upper case, each once, in the order sent, the issuer's
+     * own code left out because it is always included). Neither = the issuer only.
+     */
+    record Redeemable(boolean any, List<String> codes) {
+        static final Redeemable ISSUER_ONLY = new Redeemable(false, List.of());
+
+        /** What joins the idempotency fingerprint: nothing for the issuer only. */
+        String fingerprintPart() {
+            if (any) {
+                return "|redeemableAt=ANY";
+            }
+            return codes.isEmpty() ? "" : "|redeemableAt=" + String.join(",", codes.stream().sorted().toList());
+        }
+    }
 
     private Sale validate(Linked linked, PartnerVoucherDtos.GenerateRequest req) {
         String channel = req.channel().strip().toUpperCase(Locale.ROOT);
-        if (!channel.equals("POS") && !channel.equals("ONLINE")) {
-            throw validation("channel", "must be POS or ONLINE");
+        if (!CHANNELS.contains(channel)) {
+            throw validation("channel", "must be POS, ONLINE or APP");
         }
         PartnerVoucherDtos.Funding f = req.funding();
         String method = f.method().strip().toUpperCase(Locale.ROOT);
@@ -502,7 +536,7 @@ public class PartnerVoucherService {
             throw validation("funding.method", "must be one of " + String.join(", ", METHODS.stream().sorted().toList()));
         }
         boolean allowedHere = AVAILABLE_METHODS.contains(method)
-                && !(channel.equals("ONLINE") && (method.equals("CASH") || method.equals("CARD_SWIPE")))
+                && !(!channel.equals("POS") && (method.equals("CASH") || method.equals("CARD_SWIPE")))
                 && !(channel.equals("POS") && method.equals("INNBUCKS_ACCOUNT"))
                 && merchantAccepts(linked.link(), method);
         if (!allowedHere) {
@@ -593,24 +627,30 @@ public class PartnerVoucherService {
                     "must be between " + props.minValidityDays() + " and " + props.maxValidityDays() + " days");
         }
 
+        // SINGLE is the default (owner decision, 2026-11-12), as in the partner guide.
         String usage = req.usage() == null || req.usage().isBlank()
-                ? "MULTIPLE" : req.usage().strip().toUpperCase(Locale.ROOT);
+                ? "SINGLE" : req.usage().strip().toUpperCase(Locale.ROOT);
         if (!usage.equals("SINGLE") && !usage.equals("MULTIPLE")) {
             throw validation("usage", "must be SINGLE or MULTIPLE");
         }
         boolean singleRedemption = usage.equals("SINGLE");
 
+        Redeemable redeemable = redeemable(linked, req.redeemableAt());
+
         String reference = req.partnerReference().strip();
         // The validity joins the fingerprint only when sent, so an order made
-        // before V65 (or without it) keeps the fingerprint it was stored with.
+        // before V65 (or without it) keeps the fingerprint it was stored with;
+        // likewise the merchants it can be used at (V68). The usage (V66) joins
+        // it only when SINGLE, so a MULTIPLE order keeps its stored fingerprint.
         String fingerprint = sha256(String.join("|", channel, nz(outlet), nz(terminalId), amount.toPlainString(),
                 currency, phone, method, nz(approvalCode), nz(collectionRef))
                 + (validityDays != null ? "|validity=" + validityDays : "")
-                + (singleRedemption ? "|usage=SINGLE" : ""));
+                + (singleRedemption ? "|usage=SINGLE" : "")
+                + redeemable.fingerprintPart());
         return new Sale(reference, channel, outlet, terminalId, blankToNull(req.operatorRef()),
                 blankToNull(req.endUserRef()), amount, currency, phone, name, method, approvalCode, last4,
                 collectedVia, collectionRef, blankToNull(f.payerPhone()), evidenceKey, fingerprint,
-                Boolean.TRUE.equals(req.confirmDuplicate()), validityDays, singleRedemption);
+                Boolean.TRUE.equals(req.confirmDuplicate()), validityDays, singleRedemption, redeemable);
     }
 
     private static boolean merchantAccepts(VoucherPartnerMerchant link, String method) {
@@ -658,7 +698,7 @@ public class PartnerVoucherService {
         }
     }
 
-    private VoucherPurchaseOrder newOrder(VoucherPartner partner, Linked linked, Sale sale) {
+    private VoucherPurchaseOrder newOrder(VoucherPartner partner, Linked linked, Sale sale, List<UUID> redeemableAt) {
         Merchant merchant = linked.merchant();
         VoucherPurchaseOrder o = new VoucherPurchaseOrder();
         o.setOrderRef(newOrderRef());
@@ -687,6 +727,7 @@ public class PartnerVoucherService {
         o.setEndUserRef(sale.endUserRef());
         o.setValidityDays(sale.validityDays());
         o.setSingleRedemption(sale.singleRedemption());
+        o.setRedeemableMerchantIds(redeemableAt.isEmpty() ? null : redeemableAt);
         o.setFundingMethod(sale.method());
         o.setFundingStatus(FundingStatus.NOT_STARTED);
         o.setFundingEvidenceKey(sale.evidenceKey());
@@ -727,7 +768,7 @@ public class PartnerVoucherService {
                         new PartnerVoucherDtos.VoucherView(v.getId(), v.getStatus().name(), money2(v.getValue()),
                                 money2(v.getRemainingBalance()), v.getCurrency(), v.getIssuedAt(), v.getExpiresAt(),
                                 MsisdnMasking.mask(v.getAssigneePhone()), printed ? v.getCode() : null,
-                                usageOf(v)))
+                                usageOf(v), redeemableAtView(v)))
                         .orElse(null));
         String fundingStatus = o.getFundingStatus() == null ? null : switch (o.getFundingStatus()) {
             case NOT_STARTED, AWAITING -> "PENDING";
@@ -760,8 +801,158 @@ public class PartnerVoucherService {
         boolean live = Voucher.LIVE_STATUSES.contains(v.getStatus())
                 && (v.getExpiresAt() == null || v.getExpiresAt().isAfter(clock.instant()))
                 && v.getRemainingBalance() != null && v.getRemainingBalance().signum() > 0;
+        List<PartnerVoucherDtos.MerchantRef> redeemableAt = readTx.execute(s -> redeemableAtView(v));
         return new PartnerVoucherDtos.VoucherBalanceView(v.getId(), v.getStatus().name(), live, money2(v.getValue()),
-                money2(v.getRemainingBalance()), v.getCurrency(), v.getExpiresAt(), usageOf(v));
+                money2(v.getRemainingBalance()), v.getCurrency(), v.getExpiresAt(), usageOf(v), redeemableAt);
+    }
+
+    // ============================================================ redeemableAt (V68)
+
+    /**
+     * Parses {@code redeemableAt}: "ANY" alone, or codes. Only the shape is checked
+     * here, so a replay of the same request matches its stored fingerprint even if
+     * a partnership has changed since; which merchants it reaches is
+     * {@link #resolveRedeemableAt}'s question, asked for a new order only.
+     */
+    private static Redeemable redeemable(Linked linked, List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return Redeemable.ISSUER_ONLY;
+        }
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (String code : raw) {
+            if (code == null || code.isBlank()) {
+                throw validation("redeemableAt", "must not contain a blank code");
+            }
+            codes.add(code.strip().toUpperCase(Locale.ROOT));
+        }
+        if (codes.contains(ANY)) {
+            if (codes.size() > 1) {
+                throw validation("redeemableAt", "ANY cannot be combined with merchant codes");
+            }
+            return new Redeemable(true, List.of());
+        }
+        codes.remove(linked.link().getMerchantCode().toUpperCase(Locale.ROOT));
+        if (codes.size() > MAX_REDEEMABLE_AT) {
+            throw validation("redeemableAt", "can name at most " + MAX_REDEEMABLE_AT + " merchants");
+        }
+        return new Redeemable(false, List.copyOf(codes));
+    }
+
+    /**
+     * The merchants a new voucher may also be used at: every partner for "ANY"
+     * ({@link #partnerMerchants}), else the codes named, or a 400
+     * {@code MERCHANT_NOT_A_PARTNER} naming every code that is not one: a code
+     * this partner was not given, a merchant not live for it, or one that is
+     * neither in the issuer's own program nor in a live partnership with it (both
+     * merchants taking part). The redeeming merchant must be this partner's, as
+     * every partner voucher is redeemed through the partner that sold it.
+     */
+    private List<UUID> resolveRedeemableAt(Linked linked, Redeemable redeemable) {
+        if (redeemable.any()) {
+            return partnerMerchants(linked);
+        }
+        List<String> codes = redeemable.codes();
+        if (codes.isEmpty()) {
+            return List.of();
+        }
+        return readTx.execute(s -> {
+            Map<String, VoucherPartnerMerchant> byCode = new HashMap<>();
+            for (VoucherPartnerMerchant l : links.findByPartnerIdOrderByMerchantCodeAsc(linked.link().getPartnerId())) {
+                byCode.put(l.getMerchantCode().toUpperCase(Locale.ROOT), l);
+            }
+            List<String> refused = new ArrayList<>();
+            Map<UUID, String> codeOf = new LinkedHashMap<>();
+            for (String code : codes) {
+                VoucherPartnerMerchant l = byCode.get(code);
+                if (l == null || l.getStatus() != VoucherPartner.Status.ACTIVE) {
+                    refused.add(code);
+                } else {
+                    codeOf.put(l.getMerchantId(), code);
+                }
+            }
+            List<Merchant> targets = new ArrayList<>();
+            for (Merchant m : merchants.findAllById(codeOf.keySet())) {
+                if (m.getStatus() != Merchant.Status.ACTIVE || !m.isEscrowMode()) {
+                    refused.add(codeOf.get(m.getId()));
+                } else {
+                    targets.add(m);
+                }
+            }
+            for (Merchant m : partnerships.refusedTargets(linked.merchant(), targets)) {
+                refused.add(codeOf.get(m.getId()));
+            }
+            if (!refused.isEmpty()) {
+                List<String> inOrder = codes.stream().filter(refused::contains).toList();
+                throw VoucherPartnershipService.notAPartner(inOrder);
+            }
+            // In the order sent.
+            return codes.stream().map(c -> byCode.get(c).getMerchantId()).toList();
+        });
+    }
+
+    /**
+     * Where an "ANY" voucher can also be used, worked out once, for a new order:
+     * every merchant this partner serves (an ACTIVE link) that is live, in escrow,
+     * not the issuer, and either in the issuer's own program or in a live
+     * partnership with both merchants taking part. In merchant-code order. A
+     * merchant another partner serves is left out, because a partner voucher is
+     * redeemed through the partner that sold it. Empty when there is none: the
+     * voucher then works at the issuer only. A replay never asks again, so a
+     * partnership that changed since keeps the stored list.
+     */
+    private List<UUID> partnerMerchants(Linked linked) {
+        UUID issuerId = linked.merchant().getId();
+        return readTx.execute(s -> {
+            List<UUID> candidates = new ArrayList<>();
+            for (VoucherPartnerMerchant l : links.findByPartnerIdOrderByMerchantCodeAsc(linked.link().getPartnerId())) {
+                if (l.getStatus() == VoucherPartner.Status.ACTIVE && !l.getMerchantId().equals(issuerId)) {
+                    candidates.add(l.getMerchantId());
+                }
+            }
+            if (candidates.isEmpty()) {
+                return List.<UUID>of();
+            }
+            List<Merchant> live = new ArrayList<>();
+            for (Merchant m : merchants.findAllById(candidates)) {
+                if (m.getStatus() == Merchant.Status.ACTIVE && m.isEscrowMode()) {
+                    live.add(m);
+                }
+            }
+            Set<UUID> refused = new HashSet<>();
+            for (Merchant m : partnerships.refusedTargets(linked.merchant(), live)) {
+                refused.add(m.getId());
+            }
+            Set<UUID> accepted = new HashSet<>();
+            for (Merchant m : live) {
+                if (!refused.contains(m.getId())) {
+                    accepted.add(m.getId());
+                }
+            }
+            return candidates.stream().filter(accepted::contains).toList();
+        });
+    }
+
+    /**
+     * Every merchant a voucher can be used at, the issuer first, by the codes its
+     * partner was given and their names. Call inside a read transaction.
+     */
+    private List<PartnerVoucherDtos.MerchantRef> redeemableAtView(Voucher v) {
+        List<UUID> ids = new ArrayList<>();
+        ids.add(v.getMerchantId());
+        if (v.getRedeemableMerchantIds() != null) {
+            v.getRedeemableMerchantIds().stream().filter(id -> !ids.contains(id)).forEach(ids::add);
+        }
+        Map<UUID, String> codeOf = new HashMap<>();
+        if (v.getPartnerId() != null) {
+            for (VoucherPartnerMerchant l : links.findByPartnerIdOrderByMerchantCodeAsc(v.getPartnerId())) {
+                codeOf.put(l.getMerchantId(), l.getMerchantCode());
+            }
+        }
+        Map<UUID, String> nameOf = new HashMap<>();
+        for (Merchant m : merchants.findAllById(ids)) {
+            nameOf.put(m.getId(), m.getName());
+        }
+        return ids.stream().map(id -> new PartnerVoucherDtos.MerchantRef(codeOf.get(id), nameOf.get(id))).toList();
     }
 
     private static String usageOf(Voucher v) {

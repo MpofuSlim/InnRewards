@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -211,6 +212,37 @@ class NotificationGatewayTest {
         verify(whatsApp).sendCustomNotification(eq(PHONE),
                 contains("your InnBucks voucher for Pizza Inn (USD 5 off) expires on 2027-09-29. "
                         + "Redeem it at any Pizza Inn before then"));
+    }
+
+    @Test
+    void aVoucherUsableAtPartners_namesEveryMerchant_inTheMessageAndTheExpiryWarning() {
+        Voucher v = pizzaInnVoucher();
+        com.innbucks.loyaltyservice.entity.Merchant bola = new com.innbucks.loyaltyservice.entity.Merchant();
+        bola.setId(java.util.UUID.randomUUID());
+        bola.setName("Bola Bet");
+        com.innbucks.loyaltyservice.entity.Merchant zuva = new com.innbucks.loyaltyservice.entity.Merchant();
+        zuva.setId(java.util.UUID.randomUUID());
+        zuva.setName("Zuva");
+        v.setRedeemableMerchantIds(java.util.List.of(bola.getId(), zuva.getId()));
+        org.mockito.Mockito.when(merchants.findAllById(v.getRedeemableMerchantIds()))
+                .thenReturn(java.util.List.of(zuva, bola));
+
+        gateway.deliver(v, PHONE);
+        gateway.warnExpiring(v, PHONE, java.time.LocalDate.of(2027, 9, 29));
+
+        // In the order fixed at issue, whatever order the lookup returns them in.
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("Show this code at any Pizza Inn, Bola Bet or Zuva checkout to redeem."));
+        verify(whatsApp).sendCustomNotification(eq(PHONE),
+                contains("Redeem it at any Pizza Inn, Bola Bet or Zuva before then"));
+    }
+
+    @Test
+    void joinOr_readsLikeAList() {
+        assertThat(NotificationGateway.joinOr(java.util.List.of())).isEmpty();
+        assertThat(NotificationGateway.joinOr(java.util.List.of("MWOS"))).isEqualTo("MWOS");
+        assertThat(NotificationGateway.joinOr(java.util.List.of("MWOS", "Bola Bet"))).isEqualTo("MWOS or Bola Bet");
+        assertThat(NotificationGateway.joinOr(java.util.List.of("A", "B", "C"))).isEqualTo("A, B or C");
     }
 
     @Test

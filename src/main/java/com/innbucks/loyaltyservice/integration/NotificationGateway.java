@@ -56,6 +56,48 @@ public class NotificationGateway {
         return merchantName(voucher.getId(), voucher.getMerchantId());
     }
 
+    /**
+     * The other merchants a voucher can be used at (V68), by name, in the order
+     * fixed at issue. Best-effort like the issuer's name: a failed lookup drops
+     * the names, never the message.
+     */
+    private java.util.List<String> otherMerchantNames(Voucher voucher) {
+        java.util.List<java.util.UUID> ids = voucher.getRedeemableMerchantIds();
+        if (ids == null || ids.isEmpty() || merchants == null) {
+            return java.util.List.of();
+        }
+        try {
+            java.util.Map<java.util.UUID, String> byId = new java.util.HashMap<>();
+            for (Merchant m : merchants.findAllById(ids)) {
+                if (m.getName() != null && !m.getName().isBlank()) {
+                    byId.put(m.getId(), m.getName().trim());
+                }
+            }
+            return ids.stream().filter(id -> !id.equals(voucher.getMerchantId()))
+                    .map(byId::get).filter(java.util.Objects::nonNull).distinct().toList();
+        } catch (RuntimeException e) {
+            log.warn("Voucher id={} partner merchant names lookup failed; message sent without them: {}",
+                    voucher.getId(), e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /** The issuer's name, then any partner merchant's (V68): "Pizza Inn", or "MWOS or Bola Bet". */
+    private String everyMerchant(Voucher voucher, String issuerName) {
+        java.util.List<String> all = new java.util.ArrayList<>();
+        all.add(issuerName);
+        otherMerchantNames(voucher).stream().filter(n -> !n.equals(issuerName)).forEach(all::add);
+        return joinOr(all);
+    }
+
+    /** "A", "A or B", "A, B or C": read out the way a person lists places. */
+    static String joinOr(java.util.List<String> names) {
+        if (names.size() <= 1) {
+            return names.isEmpty() ? "" : names.get(0);
+        }
+        return String.join(", ", names.subList(0, names.size() - 1)) + " or " + names.get(names.size() - 1);
+    }
+
     private String merchantName(java.util.UUID voucherId, java.util.UUID merchantId) {
         if (merchantId == null || merchants == null) {
             return null;
@@ -144,7 +186,7 @@ public class NotificationGateway {
                 + (merchant == null ? "" : " for " + merchant)
                 + (worth == null ? "" : " (" + worth + ")")
                 + " expires on " + expiresOn
-                + ". Redeem it" + (merchant == null ? "" : " at any " + merchant)
+                + ". Redeem it" + (merchant == null ? "" : " at any " + everyMerchant(voucher, merchant))
                 + " before then so it does not go to waste.";
         String ref = "VOUCHER-EXPIRY-" + voucher.getId();
         try {
@@ -216,7 +258,13 @@ public class NotificationGateway {
      */
     public record VoucherUse(java.util.UUID voucherId, java.util.UUID merchantId, String holderPhone,
                              BigDecimal used, BigDecimal remaining, String currency,
-                             java.time.Instant expiresAt) {
+                             java.time.Instant expiresAt, java.util.UUID usedAtMerchantId) {
+
+        /** A use at the voucher's own merchant (every use before V68). */
+        public VoucherUse(java.util.UUID voucherId, java.util.UUID merchantId, String holderPhone,
+                          BigDecimal used, BigDecimal remaining, String currency, java.time.Instant expiresAt) {
+            this(voucherId, merchantId, holderPhone, used, remaining, currency, expiresAt, merchantId);
+        }
     }
 
     /**
@@ -245,7 +293,10 @@ public class NotificationGateway {
         if (use == null || use.holderPhone() == null || use.holderPhone().isBlank()) {
             return;
         }
-        String message = usedMessage(use, merchantName(use.voucherId(), use.merchantId()));
+        String issuer = merchantName(use.voucherId(), use.merchantId());
+        String usedAt = use.usedAtMerchantId() == null || use.usedAtMerchantId().equals(use.merchantId())
+                ? issuer : merchantName(use.voucherId(), use.usedAtMerchantId());
+        String message = usedMessage(use, issuer, usedAt);
         String ref = "VOUCHER-USE-" + use.voucherId();
         try {
             whatsApp.sendCustomNotification(use.holderPhone(), message);
@@ -268,19 +319,31 @@ public class NotificationGateway {
 
     /** The holder's usage notice — see {@link #notifyVoucherUsed}. Package-visible for its tests. */
     static String usedMessage(VoucherUse use, String merchant) {
+        return usedMessage(use, merchant, merchant);
+    }
+
+    /**
+     * As {@link #usedMessage(VoucherUse, String)}, for a voucher that may be used
+     * at a partner (V68): the partial notice says where it was used; the final
+     * one names the issuer and, when it differs, where it was used.
+     */
+    static String usedMessage(VoucherUse use, String merchant, String usedAt) {
         String currency = (use.currency() == null || use.currency().isBlank()) ? "" : use.currency() + " ";
         BigDecimal left = use.remaining();
         if (left == null || left.signum() <= 0) {
             StringBuilder sb = new StringBuilder("Your InnBucks voucher")
                     .append(merchant == null ? "" : " for " + merchant)
                     .append(" is now fully used");
+            if (usedAt != null && !usedAt.equals(merchant)) {
+                sb.append(" at ").append(usedAt);
+            }
             if (use.used() != null) {
                 sb.append(" (").append(currency).append(money(use.used())).append(" this time)");
             }
             return sb.append(".").toString();
         }
         StringBuilder sb = new StringBuilder("InnBucks voucher used")
-                .append(merchant == null ? "" : " at " + merchant)
+                .append(usedAt == null ? "" : " at " + usedAt)
                 .append(". ");
         if (use.used() != null) {
             sb.append(currency).append(money(use.used())).append(" used, ");
@@ -342,7 +405,7 @@ public class NotificationGateway {
         }
         sb.append(merchant == null
                 ? " Show this code at checkout to redeem."
-                : " Show this code at any " + merchant + " checkout to redeem.");
+                : " Show this code at any " + everyMerchant(voucher, merchant) + " checkout to redeem.");
         return sb.toString();
     }
 

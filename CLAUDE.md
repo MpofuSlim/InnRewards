@@ -803,7 +803,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V67**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V68**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -3240,7 +3240,10 @@ without going through the partner flow.
   float is debited into holding) and INNBUCKS_CODE (the customer pays a code:
   `202 AWAITING_PAYMENT`, then the voucher appears). INNBUCKS_ACCOUNT and
   ECOCASH are in the vocabulary but not available yet
-  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on ONLINE.
+  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on ONLINE and
+  APP. **`channel` is POS, ONLINE or APP** (APP = the provider's own app,
+  2026-11-12) on generate and redeem; an APP sale is treated like an ONLINE
+  one (no code in the response, no outlet or terminal).
   `paid_via`: CASH → CASH, CARD_SWIPE → CARD_POS, the rest → GATEWAY with
   `payment_rail` = the method (no new `PaidVia` value, so V54's CHECK holds).
 - **Evidence is used once:** a card approval code per terminal per day, a
@@ -3257,9 +3260,9 @@ without going through the partner flow.
   path. `toResult` sets `voucher.code` only for an order whose channel is POS,
   on generate, its replay and inquire by `PARTNER_REFERENCE`, so a slip that
   failed to print can be printed again. The code is raw, like every machine
-  surface; the POS prints it hyphen-grouped. A slip cannot spend the voucher on
-  another MWOS account while the link binds redemption to the holder's phone.
-  Never log a generate or inquire result.
+  surface; the POS prints it hyphen-grouped. By default the code works like
+  cash (next section): whoever holds the slip can spend it. Never log a generate
+  or inquire result.
 - A merchant whose vouchers would never expire is `503 MERCHANT_NOT_READY`:
   held money must have an end. A generate that sends `validityDays` is exempt,
   because it sets the end itself.
@@ -3274,8 +3277,8 @@ without going through the partner flow.
   joins the idempotency fingerprint only when sent, so orders made without it
   keep their stored fingerprint.
 - **A partner voucher may be SINGLE use (V66, owner decision 2026-11-11):**
-  optional `usage` on generate, `MULTIPLE` (default, today's balance
-  voucher) or `SINGLE`. A SINGLE voucher (`vouchers.single_redemption`, copied
+  optional `usage` on generate, `SINGLE` (the default since 2026-11-12, as in
+  the middleware's partner guide) or `MULTIPLE` (a balance voucher). A SINGLE voucher (`vouchers.single_redemption`, copied
   from the order in `issueFromOrder`) must be redeemed for its full value in
   one go: a redemption asking for less than the remaining balance is
   `400 PARTIAL_USE_NOT_ALLOWED` and spends nothing (checked in `doRedeem` right
@@ -3283,14 +3286,19 @@ without going through the partner flow.
   dropping the rest would leave held customer money behind on a dead voucher.
   This is not the retired `MULTI_USE` type (face value per use); don't map
   `usage` onto `voucher_type`. Inquire and generate return `usage`. It joins the
-  fingerprint only when SINGLE.
+  fingerprint only when SINGLE, so an order made before the default changed,
+  without `usage`, now replays as a different request (staging only).
 
 ### Redeem and settlement
 
 - **`VoucherService.redeemForPartnerIdempotent`** with a `PartnerRedeemScope`:
   only that partner's vouchers (anything else is the counted 404, before the
-  signature check); the holder's phone must match `endUserPhone` when the link
-  binds redemption to the holder (`403 NOT_VOUCHER_OWNER`, counted); the
+  signature check); the holder's phone must match `endUserPhone` only when the
+  link binds redemption to the holder (`403 NOT_VOUCHER_OWNER`, counted). **The
+  default is not to (owner decision, 2026-11-12; V68 switched every existing
+  link off): a partner voucher code works like cash**, as the partner guide
+  says ("possession of the code is sufficient"). A SUPER_ADMIN can still turn
+  `bindRedeemToHolder` on for one merchant. The
   currency must match; a replayed `reference` with a different amount or end
   user is `422 IDEMPOTENCY_MISMATCH`. Partial uses, the balance and the per-use
   rules are V61's.
@@ -3361,6 +3369,92 @@ Pinned by `PartnerRequestVerifierTest`, `VoucherPartnerAuthFilterTest`,
 `IpLiteralsTest`, `PartnerSigningKeysTest`, `SimulatedVoucherFundingProviderTest`
 and `PartnerVoucherFlowIT` (the whole flow through real signed requests and
 Postgres).
+
+## Partner vouchers usable at partner merchants: `redeemableAt` (V68)
+
+**Owner decisions (2026-11-12):** a tenant's voucher can be accepted at another
+tenant's merchants (MWOS vouchers at Bola Bet; later Simbisa vouchers at ZUVA).
+Tenants onboard their own partners: one invites, the other accepts. InnBucks
+(SUPER_ADMIN) oversees and acts for tenants with no login. On generate, the
+partner sends `redeemableAt`: left out = the issuer only, `"ANY"` = every partner,
+or merchant codes (owner, 2026-11-12, matching the middleware's partner guide).
+A yes/no `generic` field was tried in between and dropped.
+
+- **Partnerships** (`voucher_partnerships`, `voucher_partnership_merchants`,
+  `VoucherPartnershipService`, `/loyalty/partnerships`):
+  - A tenant invites another by its tenant code, naming its own merchants. The
+    invited tenant accepts with its own merchants, or declines. Either side can
+    change its own merchants or end it. Statuses: INVITED, ACTIVE, SUSPENDED,
+    DECLINED, ENDED. One live partnership per pair of tenants
+    (`uq_voucher_partnership_live_pair`, whichever side invited).
+  - Writers: MERCHANT_ADMIN / TENANT_ADMIN / PLATFORM_ADMIN / SUPER_ADMIN with
+    `X-Tenant-Id`. A merchant admin puts in only merchants it administers
+    (`MerchantAuthz`). A SUPER_ADMIN acts for any tenant by sending its id, and
+    the row records `*_on_behalf`.
+  - SUPER_ADMIN only: `GET /loyalty/admin/partnerships`,
+    `POST /loyalty/admin/partnerships/{id}/suspend` (reason required) and
+    `/reinstate`. Who invited, answered or ended is shown to InnBucks only.
+  - **The staging switch `LOYALTY_PARTNERSHIP_AUTO_ACCEPT`** makes an invitation
+    ACTIVE at once with every active merchant of the invited tenant, marked
+    `auto_accepted`. It is ignored (boot ERROR) unless voucher funding is
+    SIMULATED, so it can never move real money across a partnership nobody
+    agreed to.
+- **`redeemableAt` on partner generate** (`PartnerVoucherService.redeemable` /
+  `resolveRedeemableAt`): optional; a list, or a single string.
+  - **Left out** (or naming only the issuer): the voucher works at `merchant`
+    only, as before V68.
+  - **`"ANY"`** (any case, alone; with codes it is `400 Validation failed`) adds
+    every merchant that is: an ACTIVE link of the SAME partner; an active escrow
+    merchant, other than the issuer; and in the issuer's own tenant (the tenant
+    is the brand) or in an ACTIVE partnership in which both merchants take part.
+    Never refused: with no partner, the voucher works at the issuer only.
+    `ANY` is reserved: the partner admin refuses it as a merchant code.
+  - **Codes** (trimmed, upper-cased, de-duplicated, the issuer's own dropped, at
+    most 20): each must pass the same test, or the generate is
+    `400 MERCHANT_NOT_A_PARTNER` naming every refused code, before anything is
+    recorded.
+  - **Worked out once, for a new order**, and fixed on the order and then the
+    voucher (`redeemable_merchant_ids`, TEXT). A replay never asks again, so an
+    order made before a partnership ended still replays.
+  - **Left out of every list:** a merchant another partner serves (a partner
+    voucher is redeemed through the partner that sold it), and one whose
+    partnership is SUSPENDED.
+  - It joins the idempotency fingerprint only when it reaches past the issuer
+    (`|redeemableAt=ANY` or the sorted codes).
+  - Generate and inquire return `redeemableAt`: every merchant, the issuer
+    first, by the partner's codes and names.
+- **Redeem and inquire at a listed merchant** (`VoucherService.usableAt`): a
+  partner voucher is known at its own merchant and at the merchants in its list,
+  across tenants. Everything else is the counted unknown code, as before.
+  - The signature is checked with the voucher's OWN tenant
+    (`signPayload(v.getTenantId(), …)`).
+  - A suspended partnership refuses use at the other side's merchants:
+    `409 PARTNERSHIP_SUSPENDED`. An ENDED one does not: vouchers already sold
+    stay usable until they expire (owner default).
+  - **The redemption row keeps the voucher's tenant and records the REDEEMING
+    merchant**, so settlement pays that merchant and it is billed the redemption
+    fee (`usesBetween` keys on `merchant_id`). The issuer pays the issue fee.
+- **Messages:** the issue message and the expiry warning name every merchant
+  ("Show this code at any MWOS or Bola Bet checkout"). The use notice says where
+  it was used (`VoucherUse.usedAtMerchantId`).
+- **`JwtFilter` skips `/loyalty/partner/` WITH the slash.** Without it the prefix
+  skip swallowed `/loyalty/partnerships` and every call was a 401. The test that
+  found it is `VoucherPartnershipFlowIT`.
+- **Not built yet:**
+  - vouchers accepted on credit (a till's or a promo's, not held in escrow) and
+    who-owes-whom statements;
+  - the "open to any tenant" setting;
+  - a fee-payer option per partnership (the redeemer pays today);
+  - `redeemableAt` on till issue and purchase orders;
+  - reports by redeeming merchant;
+  - a partner merchant served by a DIFFERENT partner (integrator): a voucher is
+    redeemed through the partner that sold it.
+- Pinned by `VoucherPartnershipFlowIT` (real signed requests and Postgres: use at
+  the partner, payment and fees to the redeemer, what "ANY" and named codes
+  include and refuse, suspension, ending, replay, the invitation rules,
+  merchant-admin authority),
+  `VoucherPartnershipServiceTest`, `NotificationGatewayTest` and
+  `VoucherUseNoticeTest`.
 
 ## Customer support (`/loyalty/support/**`, V55)
 

@@ -282,6 +282,8 @@ public class VoucherService {
         }
         // ... and whether it is spent in one go (V66).
         v.setSingleRedemption(order.isSingleRedemption());
+        // ... and where else it can be used (V68), before the message names them.
+        v.setRedeemableMerchantIds(order.getRedeemableMerchantIds());
         return finishIssue(v);
     }
 
@@ -920,6 +922,40 @@ public class VoucherService {
      *        voucher's holder phone, so a leaked code is useless to anyone else
      * @param currency          when not null, must be the voucher's currency
      */
+    /**
+     * Whether {@code v} can be used at this merchant (V68): its own merchant, in
+     * its own program, or a merchant fixed in its {@code redeemableAt} at issue.
+     * Only partner vouchers carry such a list, and they are redeemed through
+     * their partner only, so a till never meets one.
+     */
+    static boolean usableAt(Voucher v, UUID tenantId, UUID merchantId) {
+        if (merchantId == null) {
+            return false;
+        }
+        if (merchantId.equals(v.getMerchantId())) {
+            return v.getTenantId().equals(tenantId);
+        }
+        return v.getRedeemableMerchantIds() != null && v.getRedeemableMerchantIds().contains(merchantId);
+    }
+
+    /** True when the voucher is used at another program's merchant and InnBucks has suspended that partnership. */
+    private boolean suspendedHere(Voucher v, UUID tenantId, UUID merchantId) {
+        return partnerships != null && !merchantId.equals(v.getMerchantId())
+                && partnerships.suspendedBetween(v.getTenantId(), tenantId);
+    }
+
+    private static LoyaltyException partnershipSuspended() {
+        return LoyaltyException.conflict("PARTNERSHIP_SUSPENDED", "This voucher can't be used here right now.");
+    }
+
+    private VoucherPartnershipService partnerships;
+
+    /** Setter-injected so a VoucherService built by hand in a unit test runs without partnerships. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPartnerships(VoucherPartnershipService partnerships) {
+        this.partnerships = partnerships;
+    }
+
     public record PartnerRedeemScope(UUID partnerId, String endUserRef, String endUserPhone,
                                      String channel, String terminalId, boolean bindToHolderPhone,
                                      String currency) {}
@@ -970,13 +1006,15 @@ public class VoucherService {
             throw LoyaltyException.badRequest(MISTYPED_CODE,
                     "That voucher code doesn't look right. Please check it and try again.");
         }
-        if (v == null || !v.getTenantId().equals(tenantId) || !merchantId.equals(v.getMerchantId())
-                || !scope.partnerId().equals(v.getPartnerId())) {
+        if (v == null || !scope.partnerId().equals(v.getPartnerId()) || !usableAt(v, tenantId, merchantId)) {
             throw VoucherCodeGuessException.unknownCode();
         }
         if (scope.bindToHolderPhone() && !samePhone(scope.endUserPhone(), holderPhone(v))) {
             throw VoucherCodeGuessException.from(LoyaltyException.forbidden("NOT_VOUCHER_OWNER",
                     "This voucher isn't assigned to you."));
+        }
+        if (suspendedHere(v, tenantId, merchantId)) {
+            throw partnershipSuspended();
         }
         return v;
     }
@@ -1020,7 +1058,9 @@ public class VoucherService {
             throw LoyaltyException.badRequest(MISTYPED_CODE,
                     "That voucher code doesn't look right. Please check it and try again.");
         }
-        if (v == null || !v.getTenantId().equals(tenantId)) {
+        if (v == null || !(v.getTenantId().equals(tenantId) || (partner != null && usableAt(v, tenantId, merchantId)))) {
+            // A voucher of another tenant is known here only to a partner, and
+            // only where that voucher can be used (V68 redeemableAt).
             // The CANONICAL spelling, so one guessed code is one fraud_attempts
             // value however it was typed. Never longer than the input (see
             // VoucherCodes.normalize), so the request's @Size keeps it inside
@@ -1038,14 +1078,17 @@ public class VoucherService {
         // the till, the app and the public surface learn nothing about a partner
         // voucher, and a partner learns nothing about anyone else's.
         if (partner == null ? v.getPartnerId() != null
-                : !partner.partnerId().equals(v.getPartnerId()) || !merchantId.equals(v.getMerchantId())) {
+                : !partner.partnerId().equals(v.getPartnerId()) || !usableAt(v, tenantId, merchantId)) {
             recordAttempt(tenantId, req, merchantId, v.getCode(),
                     FraudAttempt.Reason.INVALID_CODE, partner == null
                             ? "partner voucher presented off the partner API" : "not this partner's voucher");
             throw VoucherCodeGuessException.unknownCode();
         }
 
-        String expectedSig = signer.sign(signPayload(tenantId, v.getTemplateId(), v.getCode()));
+        // Signed with the voucher's OWN tenant: a partner merchant of another
+        // program redeems it too (V68). The same value as before for every
+        // voucher used in its own program.
+        String expectedSig = signer.sign(signPayload(v.getTenantId(), v.getTemplateId(), v.getCode()));
         if (!expectedSig.equals(v.getSignature())) {
             recordAttempt(tenantId, req, merchantId, v.getCode(),
                     FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature");
@@ -1107,6 +1150,10 @@ public class VoucherService {
         if (partner != null && partner.currency() != null && !partner.currency().equalsIgnoreCase(v.getCurrency())) {
             throw LoyaltyException.badRequest("CURRENCY_MISMATCH",
                     "This voucher is in " + v.getCurrency() + ", not " + partner.currency() + ".");
+        }
+        if (partner != null && suspendedHere(v, tenantId, merchantId)) {
+            rejectRedemption(v, merchantId, req, "partnership suspended");
+            throw partnershipSuspended();
         }
 
         // Idempotent retry (V61). Placed HERE, after the signature and the
@@ -1174,7 +1221,7 @@ public class VoucherService {
             throw LoyaltyException.conflict("ALREADY_REDEEMED", "This voucher has already been fully redeemed.");
         }
 
-        if (v.getMerchantId() != null && !v.getMerchantId().equals(merchantId)) {
+        if (v.getMerchantId() != null && !usableAt(v, tenantId, merchantId)) {
             recordAttempt(tenantId, req, merchantId, v.getCode(),
                     FraudAttempt.Reason.WRONG_MERCHANT,
                     "expected " + v.getMerchantId() + " got " + merchantId);
@@ -1358,7 +1405,7 @@ public class VoucherService {
                 && holderNumber != null && !holderNumber.isBlank()) {
             NotificationGateway.VoucherUse use = new NotificationGateway.VoucherUse(
                     v.getId(), v.getMerchantId(), holderNumber, applied, balanceAfter, v.getCurrency(),
-                    v.getExpiresAt());
+                    v.getExpiresAt(), merchantId);
             AfterCommit.run(() -> notifications.notifyVoucherUsed(use));
         }
 

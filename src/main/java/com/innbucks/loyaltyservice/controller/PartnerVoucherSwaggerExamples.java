@@ -47,7 +47,11 @@ final class PartnerVoucherSwaggerExamples {
                   "expiresAt": "2027-10-23T09:14:05Z",
                   "holderPhone": "****4567",
                   "code": "9087876598764566",
-                  "usage": "MULTIPLE"
+                  "usage": "MULTIPLE",
+                  "redeemableAt": [
+                    { "merchant": "MWOS", "name": "MWOS" },
+                    { "merchant": "BOLABET", "name": "Bola Bet" }
+                  ]
                 },
                 "replayed": false
               }
@@ -227,8 +231,26 @@ final class PartnerVoucherSwaggerExamples {
                 "remainingBalance": 15.00,
                 "currency": "USD",
                 "expiresAt": "2027-10-23T09:14:05Z",
-                "usage": "MULTIPLE"
+                "usage": "MULTIPLE",
+                "redeemableAt": [
+                  { "merchant": "MWOS", "name": "MWOS" },
+                  { "merchant": "BOLABET", "name": "Bola Bet" }
+                ]
               }
+            }""";
+
+    static final String NOT_A_PARTNER_400 = """
+            {
+              "code": "MERCHANT_NOT_A_PARTNER",
+              "message": "Not every merchant in redeemableAt accepts this merchant's vouchers.",
+              "data": { "merchants": [ "ZUVA" ] }
+            }""";
+
+    static final String PARTNERSHIP_SUSPENDED_409 = """
+            {
+              "code": "PARTNERSHIP_SUSPENDED",
+              "message": "This voucher can't be used here right now.",
+              "data": null
             }""";
 
     static final String INQUIRE_REDEMPTION_200 = """

@@ -440,6 +440,13 @@ loyalty:
   # voucher's value reaches holding: NONE refuses every generate; SIMULATED
   # confirms every leg with NO money moved and is for STAGING ONLY — set it in
   # the staging host's gitignored local env file, never in a shared cell file.
+  # Tenant-to-tenant voucher partnerships (V68). auto-accept is a STAGING switch:
+  # every invitation is active at once, with the invited tenant's merchants,
+  # without that tenant accepting. Ignored (boot ERROR) unless voucher funding
+  # is SIMULATED, so it can never take real money across a partnership nobody
+  # agreed to.
+  partnership:
+    auto-accept: ${LOYALTY_PARTNERSHIP_AUTO_ACCEPT:false}
   voucher-partner:
     enabled: ${LOYALTY_VOUCHER_PARTNER_ENABLED:false}
     audience: ${LOYALTY_VOUCHER_PARTNER_AUDIENCE:}

@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 /**
  * The partner voucher API (V62) end to end, the way the InnBucks middleware will
@@ -100,7 +101,8 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
                 "kid", kid, "alg", "ES256", "publicKeyPem", PartnerJws.pem(keys.getPublic())), 200);
         JsonNode linked = admin(post("/loyalty/admin/voucher-partners/" + partnerId + "/merchants"), Map.of(
                 "merchantId", merchantId.toString(), "merchantCode", "MWOS"), 200);
-        assertThat(linked.path("data").path("merchants").get(0).path("bindRedeemToHolder").asBoolean()).isTrue();
+        // By default the code works like cash: no phone has to match (owner decision, 2026-11-12).
+        assertThat(linked.path("data").path("merchants").get(0).path("bindRedeemToHolder").asBoolean()).isFalse();
     }
 
     // ------------------------------------------------------------------ flows
@@ -120,7 +122,7 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(voucherRepository.findById(UUID.fromString(voucherView.path("voucherId").asText()))
                 .orElseThrow().isSingleRedemption()).isTrue();
 
-        // The same reference without the usage is a different request.
+        // The same reference with usage MULTIPLE is a different request.
         assertThat(partner("generate", cashSale(reference, phone, "20.00")).body().path("code").asText())
                 .isEqualTo("IDEMPOTENCY_MISMATCH");
 
@@ -138,6 +140,13 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(whole.status()).isEqualTo(200);
         assertThat(whole.body().path("data").path("status").asText()).isEqualTo("REDEEMED");
         assertThat(whole.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("0");
+
+        // Without a usage the voucher is SINGLE.
+        Map<String, Object> plain = cashSale("MWOS-ONE-" + UUID.randomUUID(), newPhone(), "19.00");
+        plain.remove("usage");
+        Call byDefault = partner("generate", plain);
+        assertThat(byDefault.status()).isEqualTo(201);
+        assertThat(byDefault.body().path("data").path("voucher").path("usage").asText()).isEqualTo("SINGLE");
 
         // A usage that is neither SINGLE nor MULTIPLE is a field error.
         Map<String, Object> bad = cashSale("MWOS-ONE-" + UUID.randomUUID(), newPhone(), "18.00");
@@ -267,10 +276,26 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         assertThat(byCode.body().path("data").path("redeemable").asBoolean()).isTrue();
         assertThat(byCode.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("20.00");
 
+        // The code works like cash: another phone, or none, reads it too.
+        Call anotherPhone = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-2", "endUserPhone", newPhone()));
+        assertThat(anotherPhone.status()).isEqualTo(200);
+        Call noPhone = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-2"));
+        assertThat(noPhone.status()).isEqualTo(200);
+
+        // A merchant that ties redemption to the holder refuses any other phone, and a missing one.
+        admin(put("/loyalty/admin/voucher-partners/" + partnerId + "/merchants/MWOS"),
+                Map.of("bindRedeemToHolder", true), 200);
         Call notTheHolder = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
                 "endUserRef", "MWOS-ACC-2", "endUserPhone", newPhone()));
         assertThat(notTheHolder.status()).isEqualTo(403);
         assertThat(notTheHolder.code()).isEqualTo("NOT_VOUCHER_OWNER");
+        Call phoneMissing = partner("inquire", Map.of("merchant", "MWOS", "by", "CODE", "code", code,
+                "endUserRef", "MWOS-ACC-2"));
+        assertThat(phoneMissing.status()).isEqualTo(400);
+        admin(put("/loyalty/admin/voucher-partners/" + partnerId + "/merchants/MWOS"),
+                Map.of("bindRedeemToHolder", false), 200);
 
         Call first = partner("redeem", redeem(code, "5.00", "BET-1", phone));
         assertThat(first.status()).isEqualTo(200);
@@ -340,6 +365,39 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
                 .isEqualByComparingTo("10.00");
         assertThat(paid.body().path("data").path("voucher").path("voucherId").asText()).isNotBlank();
         assertThat(paid.body().path("data").path("voucher").path("code").isNull()).isTrue();
+    }
+
+    @Test
+    void theAppChannel_sellsLikeOnline_andRedeems() throws Exception {
+        String phone = newPhone();
+        String reference = "MWOS-APP-" + UUID.randomUUID();
+        Call awaiting = partner("generate", sale(reference, "app", phone, "10.00", Map.of("method", "INNBUCKS_CODE")));
+        assertThat(awaiting.status()).as(awaiting.body().toString()).isEqualTo(202);
+
+        Call paid = partner("inquire", Map.of("merchant", "MWOS", "by", "PARTNER_REFERENCE",
+                "partnerReference", reference));
+        assertThat(paid.body().path("data").path("status").asText()).isEqualTo("ISSUED");
+        assertThat(paid.body().path("data").path("channel").asText()).isEqualTo("APP");
+        assertThat(paid.body().path("data").path("voucher").path("code").isNull()).isTrue();
+        String code = voucherRepository.findById(UUID.fromString(
+                paid.body().path("data").path("voucher").path("voucherId").asText())).orElseThrow().getCode();
+
+        Map<String, Object> use = redeem(code, "4.00", "APP-USE-1", phone);
+        use.put("channel", "APP");
+        Call used = partner("redeem", use);
+        assertThat(used.status()).as(used.body().toString()).isEqualTo(200);
+        assertThat(used.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("6.00");
+
+        Call cashInApp = partner("generate", sale("R-" + UUID.randomUUID(), "APP", newPhone(), "5.00",
+                Map.of("method", "CASH")));
+        assertThat(cashInApp.status()).isEqualTo(400);
+        assertThat(cashInApp.code()).isEqualTo("FUNDING_METHOD_NOT_ALLOWED");
+
+        Map<String, Object> elsewhere = cashSale("R-" + UUID.randomUUID(), newPhone(), "5.00");
+        elsewhere.put("channel", "USSD");
+        Call refused = partner("generate", elsewhere);
+        assertThat(refused.status()).isEqualTo(400);
+        assertThat(refused.body().path("data").path("channel").asText()).isEqualTo("must be POS, ONLINE or APP");
     }
 
     @Test
@@ -494,6 +552,8 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         s.put("currency", "USD");
         s.put("customer", Map.of("phone", phone, "name", "Tawanda Mpofu"));
         s.put("funding", funding);
+        // Most cases spend part of a voucher; the default is SINGLE.
+        s.put("usage", "MULTIPLE");
         return s;
     }
 

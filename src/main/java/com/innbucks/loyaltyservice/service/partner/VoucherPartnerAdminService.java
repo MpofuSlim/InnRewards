@@ -134,6 +134,10 @@ public class VoucherPartnerAdminService {
             throw LoyaltyException.badRequest("BAD_MERCHANT_CODE",
                     "A merchant code is 2 to 32 letters, digits, dashes or underscores.");
         }
+        if (code.equals(PartnerVoucherService.ANY)) {
+            // redeemableAt "ANY" means every partner; a merchant called ANY would be unreachable by name.
+            throw LoyaltyException.badRequest("BAD_MERCHANT_CODE", "ANY is reserved and cannot be a merchant code.");
+        }
         Merchant merchant = merchants.findById(req.merchantId())
                 .orElseThrow(() -> LoyaltyException.notFound("merchant"));
         if (links.findByPartnerIdAndMerchantCode(p.getId(), code).isPresent()

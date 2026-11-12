@@ -7,7 +7,8 @@ import java.util.UUID;
 /**
  * Moves a partner voucher's money (V62): its value INTO the holding account
  * before the voucher exists, and each redemption's amount OUT of holding to the
- * merchant. One port, so the provider behind it (simulated on staging, BR or
+ * merchant. A code paid at the redeem (V69) is one leg from the agent straight
+ * to the issuing merchant ({@link Destination#MERCHANT}), with nothing held. One port, so the provider behind it (simulated on staging, BR or
  * Veengu through payment-service later) changes nothing above it.
  *
  * <p>The rules every implementation keeps, from the fleet's payment rails:
@@ -37,10 +38,32 @@ public interface VoucherFundingProvider {
     /** Pay one redemption's amount from holding to the merchant. Idempotent by the redemption id. */
     SettlementOutcome settle(SettlementLeg leg);
 
-    /** One funding leg, keyed by our order id. */
+    /**
+     * One funding leg, keyed by {@code orderId}: our order id for a sale paid at
+     * generate (into holding), or, for a code paid at the redeem (V69), the
+     * payment attempt's id (straight to the issuing merchant). That id is the
+     * provider-side idempotency key either way.
+     */
     record FundingLeg(UUID orderId, String partnerReference, UUID merchantId, String method,
                       BigDecimal amount, String currency, String customerPhone, String accountNumber,
-                      Instant startedAt) {}
+                      Instant startedAt, Destination destination) {
+
+        /** A leg into holding (every leg before V69). */
+        public FundingLeg(UUID orderId, String partnerReference, UUID merchantId, String method,
+                          BigDecimal amount, String currency, String customerPhone, String accountNumber,
+                          Instant startedAt) {
+            this(orderId, partnerReference, merchantId, method, amount, currency, customerPhone, accountNumber,
+                    startedAt, Destination.HOLDING);
+        }
+    }
+
+    /** Where a funding leg pays to. */
+    enum Destination {
+        /** Flow 1: the value is held until the voucher is used. */
+        HOLDING,
+        /** Flow 2 (V69): the agent's payment goes straight to the issuing merchant. */
+        MERCHANT
+    }
 
     record FundingOutcome(Kind kind, String providerRef, String failureCode, String paymentCode,
                           Instant paymentExpiresAt) {

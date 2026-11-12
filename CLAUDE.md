@@ -803,7 +803,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V68**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V69**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -3425,7 +3425,10 @@ A yes/no `generic` field was tried in between and dropped.
     first, by the partner's codes and names.
 - **Redeem and inquire at a listed merchant** (`VoucherService.usableAt`): a
   partner voucher is known at its own merchant and at the merchants in its list,
-  across tenants. Everything else is the counted unknown code, as before.
+  across tenants. The partner's own voucher at any other merchant is
+  `403 NOT_REDEEMABLE_HERE` (the partner guide's 006 "provider not permitted",
+  2026-11-12), still a COUNTED guess; anything that is not the partner's own is
+  the counted unknown code, as before.
   - The signature is checked with the voucher's OWN tenant
     (`signPayload(v.getTenantId(), …)`).
   - A suspended partnership refuses use at the other side's merchants:
@@ -3455,6 +3458,92 @@ A yes/no `generic` field was tried in between and dropped.
   merchant-admin authority),
   `VoucherPartnershipServiceTest`, `NotificationGatewayTest` and
   `VoucherUseNoticeTest`.
+
+## Partner vouchers paid at the redeem: Flow 2 (V69, owner's go 2026-11-12)
+
+**A partner generate with no `funding` gives the customer a code and moves no
+money. The customer pays it in full at one of the issuer's agents, whose redeem
+carries the payment, from the agent's account straight to the issuer.** The
+partner guide (v1.0.0-4) calls it "provider-funded". Nothing is held for it, so
+**there is no voucher until it is paid**.
+
+- **The code waits on its order.** `voucher_purchase_orders.pay_at_redeem` and
+  `reserved_code` (unique, `uq_vpo_reserved_code`). `VoucherService` keeps voucher
+  codes and reserved codes apart: `uniqueCode` / `allocateUniqueCodes` check both
+  (setter-injected `purchaseOrders`). The order lives as long as the code
+  (`partnerExpiry`: `validityDays`, else the merchant's validity) and has delivery
+  channel NONE.
+- **So an unpaid code is in no voucher total, wallet, expiry warning, fee or the
+  holding account.** That is the reason for the shape; don't create the voucher at
+  generate.
+- **Generate rules:**
+  - `channel` may be left out (ONLINE);
+  - SINGLE only (`400 USAGE_NOT_ALLOWED` for MULTIPLE);
+  - the issuer only (`400 REDEEMABLE_AT_NOT_ALLOWED`);
+  - the code is always in the response (it is worth nothing until paid);
+  - the customer gets "To pay MWOS USD 10.00, give code … at any MWOS agent
+    before 12 Dec 2026." (`notifyPayAtRedeemCode`, sent after the order commits).
+- **Status words are the partner guide's:** an unpaid code reads ISSUED, with
+  `voucher.payAtRedeem: true`, `voucherId: null` and `funding.status: AT_REDEEM`.
+  While a payment is in flight it reads PENDING. Once paid, the voucher's own
+  REDEEMED, with `funding.status: CONFIRMED`. Inquire by code carries
+  `payAtRedeem` too, which is how a POS knows to take the money first.
+- **The payment is a `voucher_redeem_payments` attempt, shaped like a funding
+  leg:**
+  - claimed under the guessing lockout and the order's row lock;
+  - PENDING before the call, which is made with no transaction open and is
+    never sent twice;
+  - resolved by `provider.status` (inquiries and the reconciler's third pass);
+  - CONFIRMED or FAILED.
+  - The leg is `FundingLeg(... Destination.MERCHANT)`, keyed by the attempt id.
+  - At most one PENDING or CONFIRMED attempt per code (`uq_vrp_live_per_order`):
+    a second agent gets `409 PAYMENT_IN_PROGRESS`.
+  - A FAILED attempt moved nothing; the code can be paid again under a new
+    reference.
+  - The redeem's reference is unique per merchant (`uq_vrp_reference`): the same
+    request replays, other content is `422 IDEMPOTENCY_MISMATCH`, another code is
+    `409 DUPLICATE_REFERENCE`.
+  - Evidence (card approval code, collection reference) pays one sale or one
+    payment, across both tables.
+- **The payment rules:**
+  - `funding` is required (`400 PAYMENT_REQUIRED`);
+  - CASH, CARD_SWIPE or MERCHANT_COLLECTED (cash and card at a POS only);
+  - the full value or no amount (`PARTIAL_USE_NOT_ALLOWED` /
+    `INSUFFICIENT_VOUCHER_BALANCE`);
+  - `merchant` is the issuer, the one paid (a code at another merchant is
+    `NOT_REDEEMABLE_HERE`, counted);
+  - `CURRENCY_MISMATCH` and `EXPIRED` as for any voucher.
+  - `funding` on any OTHER voucher is `400 PAYMENT_NOT_NEEDED`
+    (`ALREADY_REDEEMED` once spent): it was paid for when it was sold, so a
+    second payment is never taken.
+- **CONFIRMED becomes the voucher in one transaction**
+  (`completePayment` -> `VoucherService.issueAndSpendAtRedeem`):
+  - the voucher takes the reserved code, is REDEEMED at once with one full first
+    use at the issuer, and that use is already SETTLED (the money went straight
+    to the merchant, so `trySettle` never pays it out of holding);
+  - the order is PAID (`paid_via` from the method);
+  - the customer gets "We received your payment of USD 10.00 to MWOS for code
+    ending 4308." after commit.
+  - A failure leaves the attempt CONFIRMED with no voucher, and the reconciler
+    retries. The money has moved, so it must finish; the unique index keeps the
+    code from being paid twice meanwhile.
+- **Fees and reports:** the voucher is issued and used in the period the payment
+  confirmed, so the issuer is billed both the issue and the redemption fee then,
+  like a Flow 1 voucher sold and spent there. An unpaid code is billed nothing.
+- **Two guide rules this change also brought into line:**
+  - an InnBucks code is ONLINE or APP only (`fitsChannel`);
+  - a MERCHANT_COLLECTED sale without `collectedVia` and `collectionRef` is
+    `400 COLLECTION_DETAILS_REQUIRED` (was the generic "Validation failed").
+- **Staging:** the SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- and SIMDOWN- prefixes on the
+  redeem's `reference` drive the payment. The real provider (InnBucks
+  `/bank/api/payment` + `/bank/api/deposit`) is not built.
+- **Rollback is clean:** the previous image ignores the columns and the table. An
+  unpaid code then reads as an unknown code; a paid one is an ordinary used
+  voucher.
+- Pinned by `PayAtRedeemFlowIT` (real signed requests and Postgres: no voucher
+  before payment, paid and spent at once, refused payments, a slow payment and a
+  second agent, six agents racing for one code, the rules, replay, expiry) and
+  `PayAtRedeemMessagesTest`.
 
 ## Customer support (`/loyalty/support/**`, V55)
 

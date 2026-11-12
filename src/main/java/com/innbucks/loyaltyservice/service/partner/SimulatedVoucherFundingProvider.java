@@ -24,7 +24,8 @@ import java.util.Locale;
  *   <li>{@code SIMDOWN-}: the provider never received it (503
  *       PROVIDER_UNAVAILABLE).</li>
  * </ul>
- * Redemptions always settle at once.
+ * The same prefixes on a redeem's {@code reference} drive the payment of a code
+ * paid at the redeem (V69). Redemptions always settle at once.
  */
 public class SimulatedVoucherFundingProvider implements VoucherFundingProvider {
 
@@ -99,7 +100,7 @@ public class SimulatedVoucherFundingProvider implements VoucherFundingProvider {
     }
 
     private static String simRef(FundingLeg leg) {
-        return "SIM-FUND-" + leg.orderId();
+        return (leg.destination() == Destination.MERCHANT ? "SIM-PAY-" : "SIM-FUND-") + leg.orderId();
     }
 
     private static String upper(String s) {

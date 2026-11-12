@@ -176,7 +176,7 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
     }
 
     @Test
-    void withoutRedeemableAt_aVoucherIsUnknownAtAnyOtherMerchant() throws Exception {
+    void withoutRedeemableAt_aVoucherIsNotRedeemableAtAnyOtherMerchant() throws Exception {
         partners();
         String phone = newPhone();
         Call sold = partner("generate", sale(mwosCode, "MWOS-" + UUID.randomUUID(), phone, "20.00"));
@@ -185,11 +185,15 @@ class VoucherPartnershipFlowIT extends ControllerSecurityTestBase {
         assertThat(view.path("redeemableAt")).hasSize(1);
         String code = view.path("code").asText();
 
+        // The partner guide's 006 "provider not permitted": the partner's own
+        // voucher, but not usable here. Counted toward the lockout like an unknown code.
         Call atBola = partner("redeem", redeem(bolaCode, code, "5.00", "BOLA-USE-2", phone));
-        assertThat(atBola.status()).isEqualTo(404);
+        assertThat(atBola.status()).isEqualTo(403);
+        assertThat(atBola.body().path("code").asText()).isEqualTo("NOT_REDEEMABLE_HERE");
         Call seen = partner("inquire", Map.of("merchant", bolaCode, "by", "CODE", "code", code,
                 "endUserRef", "BOLA-ACC-1", "endUserPhone", phone));
-        assertThat(seen.status()).isEqualTo(404);
+        assertThat(seen.status()).isEqualTo(403);
+        assertThat(seen.body().path("code").asText()).isEqualTo("NOT_REDEEMABLE_HERE");
         // Naming only the issuer is the same as leaving it out.
         Map<String, Object> explicit = sale(mwosCode, "MWOS-" + UUID.randomUUID(), newPhone(), "20.00", mwosCode);
         assertThat(partner("generate", explicit).body().path("data").path("voucher").path("redeemableAt"))

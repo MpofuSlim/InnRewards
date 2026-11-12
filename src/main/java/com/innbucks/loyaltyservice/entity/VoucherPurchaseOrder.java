@@ -241,6 +241,17 @@ public class VoucherPurchaseOrder {
     @Column(name = "funding_started_at")
     private Instant fundingStartedAt;
 
+    /**
+     * Flow 2 (V69): generated with no payment; the customer pays at the issuer's
+     * agent, whose redeem carries the payment. There is no voucher until then.
+     */
+    @Column(name = "pay_at_redeem", nullable = false)
+    private boolean payAtRedeem;
+
+    /** Flow 2 (V69): the code the customer holds until it is paid; the voucher takes it then. */
+    @Column(name = "reserved_code", length = 64)
+    private String reservedCode;
+
     @Version
     private long version;
 

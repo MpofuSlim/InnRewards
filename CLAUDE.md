@@ -3344,12 +3344,71 @@ without going through the partner flow.
   resolves open legs, issues funded orders that have no voucher yet, and
   settles PENDING uses. Each write is row-locked and compares its state first.
 
+### Expired partner vouchers: the money goes back where it came from (D1, owner decision 2026-11-13)
+
+**30 days after a partner voucher expires with value left, its remaining
+balance is paid back to the account that paid it into holding. InnBucks keeps
+none of it.** Not built yet; it ships with the real provider, because it uses
+the same bank calls.
+
+- **Where the money goes, by how the voucher was paid** (the order records it):
+  - `CASH`, `CARD_SWIPE`, `MERCHANT_COLLECTED`: the issuer's account, whose float
+    paid holding at the sale;
+  - `INNBUCKS_CODE`: the customer's InnBucks wallet that paid the code;
+  - Flow 2 (paid at the redeem): nothing. No money is held for an unpaid code,
+    and a paid one is spent at once.
+- **Why not the other two options.**
+  - InnBucks keeping it: InnBucks only holds this money for others. Keeping it
+    looks bad, likely needs compliance sign-off, and gives InnBucks a reason to
+    want vouchers to expire.
+  - Always refunding the customer: a customer who paid cash at an agent may have
+    no InnBucks wallet, so the money would be stuck again. It would also go
+    around the issuer, which owns the customer relationship.
+- **The issuer answers its own customers' claims** under its own terms. The
+  agreement with each issuer must say that unspent value comes back to it at
+  expiry, and its customer terms should state the expiry. **Still open:**
+  compliance must confirm that no rule on unclaimed balances in trust overrides
+  this.
+- **The 30-day grace.** The voucher stops working at `expiresAt`, as today. The
+  money stays in holding until `expiresAt + 30 days`, which gives a customer who
+  just missed the date time to reach the issuer. No endpoint extends an expired
+  voucher. If one is ever added, it may only work inside the grace, before the
+  release.
+- **The shape to build:**
+  - a nightly release job (ShedLock) that finds partner vouchers past
+    `expiresAt + grace` with a balance left (a part-used voucher releases only
+    what is left);
+  - the same once-only leg pattern as funding and settlement: PENDING before the
+    call, no transaction open, never sent twice, resolved by asking the
+    provider;
+  - a release record of its own, not a redemption: no redemption fee is billed
+    on it (the issue fee stands), and the reconciliation reads holding = paid in
+    − redeemed − released;
+  - a message to the customer after the release commits: for an issuer refund,
+    "Your MWOS voucher ending 4308 expired with USD 5.00 unused. The amount has
+    been returned to MWOS; contact MWOS about it."; for an InnBucks-code sale,
+    that it is back in their wallet;
+  - the grace as config (`LOYALTY_VOUCHER_PARTNER_EXPIRY_RELEASE_GRACE`, default
+    `P30D`).
+- Customers are already warned before expiry: the 08:00 voucher expiry warning
+  (`LOYALTY_EXPIRY_WARNING_DAYS`, 7) covers partner vouchers. The longest
+  validity a partner may set stays 365 days.
+
 ### Not built yet — before any production use
 
-- **The real provider** (BR or Veengu transfers).
-- **A refund on expiry (D1).** An expired partner voucher keeps its unspent
-  value in holding. Who gets it back for cash and card sales is an open owner
-  question.
+- **The real provider:** InnBucks' `/bank/api/payment` and `/bank/api/deposit`,
+  on the fleet `BANK_API_*` login. It is waiting on the platform team's answers:
+  - which call and `type` serve each step;
+  - cents or dollars;
+  - what a repeated `participantReference` does, and whether there is a status
+    call by reference (without one, an unknown outcome cannot be resolved
+    safely);
+  - sample responses;
+  - the account numbers, and whose account each call debits.
+- **The expiry release (D1)**, as decided above.
+- **A daily reconciliation** of the holding account against the bank statement.
+- **Alerts** on a leg stuck PENDING, a settlement that does not go through, and
+  a confirmed Flow 2 payment with no voucher.
 - **Revoke and transfer** of a partner voucher (both refused today).
 - **Whether the middleware sends outlet and terminal (D26).** They are optional
   unless the link sets `require_terminal`.

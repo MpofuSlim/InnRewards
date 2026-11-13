@@ -803,7 +803,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V69**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V70**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -3544,6 +3544,96 @@ partner guide (v1.0.0-4) calls it "provider-funded". Nothing is held for it, so
   before payment, paid and spent at once, refused payments, a slow payment and a
   second agent, six agents racing for one code, the rules, replay, expiry) and
   `PayAtRedeemMessagesTest`.
+
+## Partner voucher money: statements and the holding reconciliation (V70)
+
+**Owner's go (2026-11-13): who is owed what for partner vouchers, and a daily
+check that the holding account adds up.** Everything is computed from the rows
+the partner flow already keeps (orders, vouchers, redemptions, Flow 2 payments).
+Nothing keeps a running total of its own, so a figure cannot drift from its rows.
+
+- **`PartnerLedger` holds every query.** Its shared fragments (`HELD_VOUCHER`,
+  `PAID_IN_ORDER`, `NOT_SETTLED`, `STUCK_*`) are bracketed and spliced in by
+  `sql()`. Change a fragment once, and every figure moves with it.
+- **Holding only sees Flow 1.** A "held" voucher is a partner voucher that no
+  pay-at-redeem order issued. A Flow 2 code's order, voucher and use are left out
+  of every holding figure, because the agent pays the issuer directly.
+  `PartnerMoneyIT` fails if that exclusion is dropped (checked).
+- **The reconciliation, per currency:**
+  - expected in holding = paid in (Flow 1 sales with funding CONFIRMED) minus
+    settled out (uses SETTLED from holding);
+  - accounted for = unspent balance of held vouchers (expired ones included,
+    until D1 releases them) + uses not SETTLED (PENDING or ATTENTION, owed to
+    the redeeming merchant) + funded sales whose voucher is not issued yet;
+  - `ledger_difference` = expected minus accounted, and must be 0. Anything else
+    is `LEDGER_MISMATCH`: our own records disagree, which no outside event
+    explains. It is a bug, and it pages.
+- **The bank comparison waits for the real provider.** It uses
+  `VoucherFundingProvider.holdingBalance(currency)`, which defaults to empty:
+  - `bank_difference` = the provider's balance minus expected; non-zero is
+    `BANK_MISMATCH`;
+  - until a provider reports a balance, both bank columns stay NULL. A provider
+    that fails to answer leaves them NULL for that run; it is not a difference;
+  - `funding_in_flight` (legs sent, outcome unknown) is stored beside it, because
+    a leg the bank has booked and we have not can explain a bank difference;
+  - **the real provider's change must decide how in-flight legs and unrecorded
+    settlements are allowed for before `BANK_MISMATCH` pages.**
+- **One snapshot.** All figures are read in ONE read-only, REPEATABLE READ
+  transaction, so a sale committing mid-run cannot make a false difference. The
+  provider is asked after that transaction closes; the run is written in its own
+  transaction.
+- **`partner_reconciliation_runs` (V70)** holds one row per currency per run.
+  It is append-only, enforced by a trigger. `trigger` is SCHEDULED or MANUAL,
+  with `triggered_by`. The CHECKs keep the two bank columns NULL together.
+- **Stuck items are warnings, never figures.** They are counted on the row and
+  listed live (oldest first, at most 50) on the admin view:
+  - funding PENDING since before `stuck-after`, or an InnBucks code AWAITING past
+    its expiry;
+  - a use not settled since before it;
+  - a Flow 2 payment PENDING, or CONFIRMED with no voucher recorded;
+  - a funded sale with no voucher.
+- **Daily job:** `PartnerHoldingReconciliationJob` runs at 04:17 UTC
+  (`LOYALTY_VOUCHER_PARTNER_RECONCILIATION_CRON`) under ShedLock
+  `partnerHoldingReconciliation`. It runs only where the partner API is enabled;
+  the off switch is `LOYALTY_VOUCHER_PARTNER_RECONCILIATION_ENABLED=false`. The
+  stuck threshold is `LOYALTY_VOUCHER_PARTNER_RECONCILIATION_STUCK_AFTER` (PT1H).
+- **Metrics:**
+  - `loyalty.partner.reconciliation.runs{outcome=balanced|ledger_mismatch|bank_mismatch|failed}`
+    is registered at 0;
+  - gauges `loyalty.partner.holding.ledger_difference{currency}`, `.expected`,
+    `.bank_difference` (only once a bank figure exists),
+    `.stuck{currency,kind}` and `loyalty.partner.reconciliation.last_run_seconds`;
+  - the gauges register at the first run, so a cell with the partner API off
+    shows no "balanced" zero and no stale-run alert.
+- **Endpoints** (`PartnerVoucherMoneyController`, `/loyalty/partner-vouchers`,
+  no `X-Tenant-Id`, `no-store`):
+  - `GET /merchants/{merchantId}/statement?from=&to=`, a merchant's statement.
+    Open to SUPER_ADMIN, the merchant's own MERCHANT_ADMIN (through
+    `requireCallerMayReadMerchant`) and `loyalty-reports:read`. **Not to
+    SHOP_ADMIN, deliberately**: it is the business's money, not a branch's. It
+    shows, for the period: uses at the merchant by issuer (both flows), settled
+    to it, Flow 2 payments to it, its sales into holding by method, and where its
+    vouchers were used. As they stand now: owed to it (with each use, at most
+    200, `owedUsesTruncated`), and its vouchers' unspent and expired value.
+  - `GET /statement?from=&to=`, every partner merchant (InnBucks).
+  - `GET /reconciliation?limit=`, the recent runs plus `stuckNow`.
+  - `POST /reconciliation/run`, SUPER_ADMIN only.
+- **Periods** are UTC days, `from`/`to` inclusive. The default is the month of
+  `to` up to `to` (today). An inverted range is `400 RANGE_INVERTED`. Statement
+  amounts are at 2 decimals; reconciliation amounts at 4, as stored.
+- **No gateway change**: `/loyalty/partner-vouchers/**` rides
+  `loyalty-service-route`. It does not start with `/loyalty/partner/`, so
+  `JwtFilter` and the partner auth filter treat it like any staff path.
+- **Rollback is clean**: the previous image ignores the table. The runs stay as
+  history.
+- Pinned by `PartnerMoneyIT` and `PartnerHoldingReconciliationTest`.
+  - `PartnerMoneyIT` uses real signed partner requests and Postgres, and checks
+    by how much each figure MOVED, because other ITs share the database. It
+    covers: two merchants and a partnership, every figure, an owed use listed as
+    stuck, a dollar removed from a voucher becoming `LEDGER_MISMATCH` with its
+    metric, the append-only trigger, both statements, and the authorization.
+  - `PartnerHoldingReconciliationTest` covers the arithmetic, the bank path and
+    the job's switches.
 
 ## Customer support (`/loyalty/support/**`, V55)
 

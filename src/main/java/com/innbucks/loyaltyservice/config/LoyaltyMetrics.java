@@ -1,12 +1,16 @@
 package com.innbucks.loyaltyservice.config;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Business-level metrics for the loyalty domain. Spring Boot Actuator already
@@ -104,6 +108,9 @@ public class LoyaltyMetrics {
         }
         for (String outcome : List.of(POS_REVERSAL_ALLOWED, POS_REVERSAL_NOT_OWN, POS_REVERSAL_TOO_OLD)) {
             posKeyReversal(outcome);
+        }
+        for (String outcome : PARTNER_RECONCILIATION_OUTCOMES) {
+            partnerReconciliation(outcome);
         }
     }
 
@@ -481,5 +488,51 @@ public class LoyaltyMetrics {
                 .tag("outcome", outcome)
                 .register(registry)
                 .increment();
+    }
+
+    // ------------------------------------------------- partner holding reconciliation
+
+    /** {@code outcome} tag values of {@code loyalty.partner.reconciliation.runs}. */
+    public static final List<String> PARTNER_RECONCILIATION_OUTCOMES =
+            List.of("balanced", "ledger_mismatch", "bank_mismatch", "failed");
+
+    /** Strong references to the gauges' values, so a registered gauge is never collected. */
+    private final Map<String, AtomicReference<Double>> partnerHoldingGauges = new ConcurrentHashMap<>();
+
+    private Counter partnerReconciliation(String outcome) {
+        return Counter.builder("loyalty.partner.reconciliation.runs")
+                .description("Partner holding reconciliation runs, by their worst outcome across currencies")
+                .tag("outcome", outcome)
+                .register(registry);
+    }
+
+    /**
+     * One partner holding reconciliation finished. Registered at 0 for every
+     * outcome, so {@code increase()} sees the first mismatch; alert on any
+     * {@code ledger_mismatch} or {@code failed}.
+     */
+    public void incPartnerReconciliation(String outcome) {
+        partnerReconciliation(outcome).increment();
+    }
+
+    /**
+     * Sets a partner holding gauge ({@code loyalty.partner.holding.*} and
+     * {@code loyalty.partner.reconciliation.*}), registering it the first time a
+     * run reports it. Registered lazily on purpose: a cell with the partner API
+     * off never runs the reconciliation, and a gauge sitting at 0 there would
+     * read as "balanced" or, for the last-run time, set off a staleness alert.
+     *
+     * @param tags alternating tag names and values, e.g. {@code "currency", "USD"}
+     */
+    public void setPartnerHoldingGauge(String name, String description, double value, String... tags) {
+        String key = name + "|" + String.join("|", tags);
+        partnerHoldingGauges.computeIfAbsent(key, k -> {
+            AtomicReference<Double> holder = new AtomicReference<>(value);
+            Gauge.builder(name, holder, AtomicReference::get)
+                    .description(description)
+                    .tags(tags)
+                    .register(registry);
+            return holder;
+        }).set(value);
     }
 }

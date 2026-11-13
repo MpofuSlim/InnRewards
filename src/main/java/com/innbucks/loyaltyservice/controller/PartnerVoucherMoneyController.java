@@ -176,7 +176,7 @@ public class PartnerVoucherMoneyController {
     static final String NOT_OWNER_403 = """
             { "code": "NOT_MERCHANT_OWNER", "message": "You can only act on merchants you administer.", "data": null }""";
     static final String FORBIDDEN_403 = """
-            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role or not the tenant owner", "data": null }""";
+            { "code": "403 FORBIDDEN", "message": "You don't have permission to do that.", "data": null }""";
     static final String MERCHANT_404 = """
             { "code": "404 NOT_FOUND", "message": "merchant not found", "data": null }""";
 

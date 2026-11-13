@@ -463,6 +463,14 @@ loyalty:
     simulated-delay: ${LOYALTY_VOUCHER_PARTNER_SIMULATED_DELAY:PT20S}
     min-validity-days: ${LOYALTY_VOUCHER_PARTNER_MIN_VALIDITY_DAYS:1}
     max-validity-days: ${LOYALTY_VOUCHER_PARTNER_MAX_VALIDITY_DAYS:365}
+    # Daily partner holding reconciliation (V70, PartnerHoldingReconciliationJob):
+    # paid in - settled out must equal unspent + owed + paid-not-issued. Runs
+    # only where the partner API is enabled. An item older than stuck-after
+    # (a payment with no answer, a use not settled) is counted as stuck.
+    reconciliation:
+      enabled: ${LOYALTY_VOUCHER_PARTNER_RECONCILIATION_ENABLED:true}
+      cron: ${LOYALTY_VOUCHER_PARTNER_RECONCILIATION_CRON:0 17 4 * * *}
+      stuck-after: ${LOYALTY_VOUCHER_PARTNER_RECONCILIATION_STUCK_AFTER:PT1H}
   qr:
     secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
     ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}

@@ -39,6 +39,16 @@ public interface VoucherFundingProvider {
     SettlementOutcome settle(SettlementLeg leg);
 
     /**
+     * The holding account's balance in {@code currency}, as the provider holds it,
+     * for the daily reconciliation. Empty when the provider cannot say (no
+     * provider, the simulator): the reconciliation then checks our own records
+     * only and stores no bank figure. A read; safe to repeat.
+     */
+    default java.util.Optional<BigDecimal> holdingBalance(String currency) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * One funding leg, keyed by {@code orderId}: our order id for a sale paid at
      * generate (into holding), or, for a code paid at the redeem (V69), the
      * payment attempt's id (straight to the issuing merchant). That id is the

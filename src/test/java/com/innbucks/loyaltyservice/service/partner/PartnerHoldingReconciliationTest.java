@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,7 +37,7 @@ class PartnerHoldingReconciliationTest {
 
     @Test
     void recordsThatAddUp_areBalanced_andNothingFromTheBankIsInvented() {
-        Line l = PartnerHoldingReconciliation.line("USD", balanced(), Optional.empty());
+        Line l = PartnerHoldingReconciliation.line("USD", balanced(), null);
 
         assertThat(l.expectedHolding()).isEqualByComparingTo("70");
         assertThat(l.ledgerDifference()).isEqualByComparingTo("0");
@@ -58,7 +57,7 @@ class PartnerHoldingReconciliationTest {
         Snapshot lostOne = new Snapshot(s.paidIn(), s.settledOut(), s.owed(),
                 Map.of("USD", new Balances(money("39"), money("5"))), s.paidNotIssued(), s.inFlight(), s.stuck());
 
-        Line l = PartnerHoldingReconciliation.line("USD", lostOne, Optional.of(new BigDecimal("70")));
+        Line l = PartnerHoldingReconciliation.line("USD", lostOne, new BigDecimal("70"));
 
         assertThat(l.ledgerDifference()).isEqualByComparingTo("1");
         assertThat(l.bankDifference()).isEqualByComparingTo("0");
@@ -67,17 +66,17 @@ class PartnerHoldingReconciliationTest {
 
     @Test
     void theBankHoldingOtherThanExpected_isABankMismatch() {
-        Line l = PartnerHoldingReconciliation.line("USD", balanced(), Optional.of(new BigDecimal("69.50")));
+        Line l = PartnerHoldingReconciliation.line("USD", balanced(), new BigDecimal("69.50"));
 
         assertThat(l.bankDifference()).isEqualByComparingTo("-0.50");
         assertThat(l.status()).isEqualTo(Status.BANK_MISMATCH);
-        assertThat(PartnerHoldingReconciliation.line("USD", balanced(), Optional.of(new BigDecimal("70.0000")))
+        assertThat(PartnerHoldingReconciliation.line("USD", balanced(), new BigDecimal("70.0000"))
                 .status()).isEqualTo(Status.BALANCED);
     }
 
     @Test
     void aCurrencyWithNoRecords_isAllZeroAndBalanced() {
-        Line l = PartnerHoldingReconciliation.line("ZWG", balanced(), Optional.empty());
+        Line l = PartnerHoldingReconciliation.line("ZWG", balanced(), null);
 
         assertThat(l.paidIn()).isEqualByComparingTo("0");
         assertThat(l.expectedHolding()).isEqualByComparingTo("0");
@@ -87,11 +86,11 @@ class PartnerHoldingReconciliationTest {
 
     @Test
     void theRunIsAsBadAsItsWorstCurrency() {
-        Line ok = PartnerHoldingReconciliation.line("USD", balanced(), Optional.empty());
-        Line bank = PartnerHoldingReconciliation.line("USD", balanced(), Optional.of(BigDecimal.ONE));
+        Line ok = PartnerHoldingReconciliation.line("USD", balanced(), null);
+        Line bank = PartnerHoldingReconciliation.line("USD", balanced(), BigDecimal.ONE);
         Snapshot s = balanced();
         Line ledger = PartnerHoldingReconciliation.line("USD", new Snapshot(s.paidIn(), Map.of(), s.owed(),
-                s.balances(), s.paidNotIssued(), s.inFlight(), s.stuck()), Optional.empty());
+                s.balances(), s.paidNotIssued(), s.inFlight(), s.stuck()), null);
 
         assertThat(PartnerHoldingReconciliation.worst(List.of())).isEqualTo(Status.BALANCED);
         assertThat(PartnerHoldingReconciliation.worst(List.of(ok, bank))).isEqualTo(Status.BANK_MISMATCH);

@@ -30,7 +30,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -222,18 +221,20 @@ public class PartnerHoldingReconciliation {
         return out;
     }
 
-    private Optional<BigDecimal> bankBalance(String currency) {
+    /** The provider's holding balance, or {@code null} when it reports none or cannot answer. */
+    private BigDecimal bankBalance(String currency) {
         try {
-            return provider.holdingBalance(currency).map(PartnerHoldingReconciliation::scaled);
+            return provider.holdingBalance(currency).map(PartnerHoldingReconciliation::scaled).orElse(null);
         } catch (RuntimeException e) {
             // The provider not answering is not a difference: the run still checks
             // our own records, and the bank columns stay empty for this run.
             log.warn("Partner holding balance unavailable currency={}", currency, e);
-            return Optional.empty();
+            return null;
         }
     }
 
-    static Line line(String currency, Snapshot s, Optional<BigDecimal> bank) {
+    /** One currency's line; {@code bankBalance} is null when there is no bank figure. */
+    static Line line(String currency, Snapshot s, BigDecimal bankBalance) {
         BigDecimal paidIn = amount(s.paidIn(), currency);
         BigDecimal settledOut = amount(s.settledOut(), currency);
         Balances b = s.balances().getOrDefault(currency, Balances.ZERO);
@@ -244,7 +245,6 @@ public class PartnerHoldingReconciliation {
         BigDecimal expected = paidIn.subtract(settledOut);
         BigDecimal accounted = outstanding.add(expired).add(owed).add(paidNotIssued);
         BigDecimal ledgerDifference = expected.subtract(accounted);
-        BigDecimal bankBalance = bank.orElse(null);
         BigDecimal bankDifference = bankBalance == null ? null : bankBalance.subtract(expected);
         Stuck st = s.stuck().getOrDefault(currency, Stuck.NONE);
         Status status = ledgerDifference.signum() != 0 ? Status.LEDGER_MISMATCH

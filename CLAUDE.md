@@ -3406,9 +3406,11 @@ the same bank calls.
   - sample responses;
   - the account numbers, and whose account each call debits.
 - **The expiry release (D1)**, as decided above.
-- **A daily reconciliation** of the holding account against the bank statement.
-- **Alerts** on a leg stuck PENDING, a settlement that does not go through, and
-  a confirmed Flow 2 payment with no voucher.
+- **The bank side of the holding reconciliation.** The daily reconciliation of
+  our own records and its alerts are built (V70, below). Comparing against the
+  bank waits for the real provider to report a balance (`holdingBalance`). That
+  change must decide how legs in flight and settlements not yet recorded are
+  allowed for before `BANK_MISMATCH` pages.
 - **Revoke and transfer** of a partner voucher (both refused today).
 - **Whether the middleware sends outlet and terminal (D26).** They are optional
   unless the link sets `require_terminal`.
@@ -3627,6 +3629,10 @@ Nothing keeps a running total of its own, so a figure cannot drift from its rows
   - `ledger_difference` = expected minus accounted, and must be 0. Anything else
     is `LEDGER_MISMATCH`: our own records disagree, which no outside event
     explains. It is a bug, and it pages.
+  - **When the D1 release is built**, a release leaves both sides in the same
+    change: expected becomes paid in − settled out − released, and a released
+    voucher's balance must leave the expired figure. Change one without the other and
+    every release is a `LEDGER_MISMATCH`.
 - **The bank comparison waits for the real provider.** It uses
   `VoucherFundingProvider.holdingBalance(currency)`, which defaults to empty:
   - `bank_difference` = the provider's balance minus expected; non-zero is

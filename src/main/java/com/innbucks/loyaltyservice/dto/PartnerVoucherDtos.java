@@ -36,9 +36,11 @@ public final class PartnerVoucherDtos {
                     description = "Your unique id for this sale; the idempotency key. Unique for the merchant, for ever.")
             @NotBlank @Size(max = 64) @Pattern(regexp = "[A-Za-z0-9._:-]+",
                     message = "letters, digits and . _ : - only") String partnerReference,
-            @Schema(example = "POS", allowableValues = {"POS", "ONLINE", "APP"}, description = """
+            @Schema(example = "POS", allowableValues = {"POS", "ONLINE", "APP", "API"}, description = """
                     Where the sale happened. Required when `funding` is sent; for a voucher paid at the \
-                    redeem (no `funding`) it may be left out and is then ONLINE.""")
+                    redeem (no `funding`) it may be left out and is then ONLINE. API (a third-party \
+                    integrator) follows the ONLINE rules: no cash or card, no outlet or terminal, and the \
+                    code is never in the response. Cash and card need POS.""")
             String channel,
             @Schema(example = "HRE-001") @Size(max = 64) String outlet,
             @Schema(example = "T-88231") @Size(max = 64) String terminalId,
@@ -120,7 +122,9 @@ public final class PartnerVoucherDtos {
             @Schema(example = "MWOS-BET-20261023-77812") @NotBlank @Size(max = 100) String reference,
             @Schema(example = "MWOS-ACC-998877") @NotBlank @Size(max = 100) String endUserRef,
             @Schema(example = "+263771234567") @Size(max = 32) String endUserPhone,
-            @Schema(example = "ONLINE", allowableValues = {"POS", "ONLINE", "APP"}) String channel,
+            @Schema(example = "ONLINE", allowableValues = {"POS", "ONLINE", "APP", "API"}, description = """
+                    Where the redemption happens; left out, ONLINE. API follows the ONLINE rules.""")
+            String channel,
             @Size(max = 64) String terminalId,
             @Schema(description = """
                     Required for a voucher paid at the redeem (`payAtRedeem: true`): how the agent took the \

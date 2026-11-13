@@ -397,7 +397,47 @@ class PartnerVoucherFlowIT extends ControllerSecurityTestBase {
         elsewhere.put("channel", "USSD");
         Call refused = partner("generate", elsewhere);
         assertThat(refused.status()).isEqualTo(400);
-        assertThat(refused.body().path("data").path("channel").asText()).isEqualTo("must be POS, ONLINE or APP");
+        assertThat(refused.body().path("data").path("channel").asText()).isEqualTo("must be POS, ONLINE, APP or API");
+    }
+
+    /** API is what the middleware sends for a third-party integrator with no channel: the ONLINE rules. */
+    @Test
+    void theApiChannel_followsTheOnlineRules() throws Exception {
+        String phone = newPhone();
+        Map<String, Object> collected = sale("MWOS-API-" + UUID.randomUUID(), "api", phone, "10.00",
+                Map.of("method", "MERCHANT_COLLECTED", "collectedVia", "BETTING_WALLET",
+                        "collectionRef", "BW-" + UUID.randomUUID()));
+        collected.put("outlet", "HRE-001");
+        collected.put("terminalId", "T-88231");
+        Call sold = partner("generate", collected);
+        assertThat(sold.status()).as(sold.body().toString()).isEqualTo(201);
+        JsonNode data = sold.body().path("data");
+        assertThat(data.path("status").asText()).isEqualTo("ISSUED");
+        assertThat(data.path("channel").asText()).isEqualTo("API");
+        // Not a till: no outlet or terminal is kept, and the code goes only to the customer's phone.
+        assertThat(data.path("outlet").asText(null)).isNull();
+        assertThat(data.path("terminalId").asText(null)).isNull();
+        assertThat(data.path("voucher").path("code").asText(null)).isNull();
+        UUID voucherId = UUID.fromString(data.path("voucher").path("voucherId").asText());
+        String code = voucherRepository.findById(voucherId).orElseThrow().getCode();
+
+        Map<String, Object> use = redeem(code, "4.00", "API-USE-" + UUID.randomUUID(), phone);
+        use.put("channel", "API");
+        Call used = partner("redeem", use);
+        assertThat(used.status()).as(used.body().toString()).isEqualTo(200);
+        assertThat(used.body().path("data").path("remainingBalance").decimalValue()).isEqualByComparingTo("6.00");
+        assertThat(redemptionRepository.findByVoucherIdOrderByRedeemedAtDesc(voucherId).getFirst().getChannel())
+                .isEqualTo("API");
+
+        // An InnBucks code fits; cash and card need POS.
+        Call awaiting = partner("generate", sale("R-" + UUID.randomUUID(), "API", newPhone(), "5.00",
+                Map.of("method", "INNBUCKS_CODE")));
+        assertThat(awaiting.status()).as(awaiting.body().toString()).isEqualTo(202);
+        assertThat(partner("generate", sale("R-" + UUID.randomUUID(), "API", newPhone(), "5.00",
+                Map.of("method", "CASH"))).code()).isEqualTo("FUNDING_METHOD_NOT_ALLOWED");
+        assertThat(partner("generate", sale("R-" + UUID.randomUUID(), "API", newPhone(), "5.00",
+                Map.of("method", "CARD_SWIPE", "approvalCode", "A1B2C3"))).code())
+                .isEqualTo("FUNDING_METHOD_NOT_ALLOWED");
     }
 
     @Test

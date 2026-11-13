@@ -346,6 +346,25 @@ class PayAtRedeemFlowIT extends ControllerSecurityTestBase {
         assertThat(expired.code()).isEqualTo("EXPIRED");
     }
 
+    /** An integrator on channel API pays a code like an ONLINE agent: collected money, never cash or card. */
+    @Test
+    void anApiIntegrator_paysACodeWithCollectedMoney_neverCashOrCard() throws Exception {
+        String code = issue(newPhone(), "8.00");
+        assertThat(partner("redeem", redeem(code, null, "AGT-" + UUID.randomUUID(), cash(), "API")).code())
+                .isEqualTo("FUNDING_METHOD_NOT_ALLOWED");
+
+        String payRef = "AGT-" + UUID.randomUUID();
+        Map<String, Object> collected = Map.of("method", "MERCHANT_COLLECTED", "accountNumber", "1001234567890",
+                "collectedVia", "BETTING_WALLET", "collectionRef", "BW-" + UUID.randomUUID());
+        Call paid = partner("redeem", redeem(code, null, payRef, collected, "API"));
+        assertThat(paid.status()).as(paid.body().toString()).isEqualTo(200);
+        assertThat(paid.body().path("data").path("status").asText()).isEqualTo("REDEEMED");
+        assertThat(paid.body().path("data").path("funding").path("method").asText()).isEqualTo("MERCHANT_COLLECTED");
+        UUID merchantId = orderRepository.findByReservedCode(code).orElseThrow().getMerchantId();
+        assertThat(paymentRepository.findByMerchantIdAndReference(merchantId, payRef).orElseThrow().getChannel())
+                .isEqualTo("API");
+    }
+
     // --------------------------------------------------------------- helpers
 
     private record Call(int status, JsonNode body) {

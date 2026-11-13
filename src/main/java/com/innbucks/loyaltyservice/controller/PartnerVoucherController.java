@@ -67,8 +67,9 @@ public class PartnerVoucherController {
                     swipe and money the merchant collected itself debit the merchant's float into holding; an \
                     InnBucks code waits for the customer to pay (`202 AWAITING_PAYMENT`). We send the code to \
                     the customer by WhatsApp, with SMS as the fallback. A POS sale's response also carries \
-                    it (`voucher.code`) for the till to print on the slip; an ONLINE or APP sale's never does. \
-                    `channel` is POS, ONLINE or APP; cash and card swipe are POS only. \
+                    it (`voucher.code`) for the till to print on the slip; an ONLINE, APP or API sale's never \
+                    does. `channel` is POS, ONLINE, APP or API (a third-party integrator, which follows the \
+                    ONLINE rules); cash and card swipe are POS only. \
                     `partnerReference` is the idempotency key: the same reference with the same content returns \
                     the order as it now stands (`replayed: true`), and with different content is \
                     `422 IDEMPOTENCY_MISMATCH`. `validityDays` (optional, 1 to 365 by default) sets how many \
@@ -86,7 +87,7 @@ public class PartnerVoucherController {
                     (`redeemableAt` is `400 REDEEMABLE_AT_NOT_ALLOWED`), and reads `status: ISSUED` with \
                     `voucher.payAtRedeem: true` and `funding.status: AT_REDEEM` until it is paid, then \
                     `voucher.status: REDEEMED` and `funding.status: CONFIRMED`. `channel` may be left out \
-                    (ONLINE). An InnBucks code is ONLINE or APP only. \
+                    (ONLINE). An InnBucks code is ONLINE, APP or API only. \
                     On staging the funding is simulated (`funding.simulated: true`); \
                     a reference starting with SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- or SIMDOWN- asks for a refusal, a \
                     slow confirmation, a slow refusal, or an unreachable provider.

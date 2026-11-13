@@ -803,7 +803,7 @@ Loyalty maps timestamps as `Instant`, which is always UTC. Containers also pass
 ## Schema changes (Flyway)
 
 New schema goes in `src/main/resources/db/migration/V<N>__*.sql` (PostgreSQL +
-Flyway, `ddl-auto: validate`). Current head is **V70**; never edit an applied
+Flyway, `ddl-auto: validate`). Current head is **V71**; never edit an applied
 migration — add the next version.
 
 > [!IMPORTANT]
@@ -3240,10 +3240,19 @@ without going through the partner flow.
   float is debited into holding) and INNBUCKS_CODE (the customer pays a code:
   `202 AWAITING_PAYMENT`, then the voucher appears). INNBUCKS_ACCOUNT and
   ECOCASH are in the vocabulary but not available yet
-  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on ONLINE and
-  APP. **`channel` is POS, ONLINE or APP** (APP = the provider's own app,
-  2026-11-12) on generate and redeem; an APP sale is treated like an ONLINE
-  one (no code in the response, no outlet or terminal).
+  (`400 FUNDING_METHOD_NOT_ALLOWED`); so are CASH and CARD_SWIPE on every
+  channel but POS. **`channel` is POS, ONLINE, APP or API** on generate and
+  redeem. APP is the provider's own app (2026-11-12). API is what the middleware
+  sends for a third-party integrator that names no channel (V71, owner's go
+  2026-11-13). Both are treated like ONLINE: no code in the response, no outlet
+  or terminal, no cash or card. **Never give the code back to a caller because of
+  the channel it chose**: a default must stay the cautious one. If an integrator
+  ever needs the code, that is a per-link setting InnBucks controls.
+  `PartnerVoucherService.CHANNELS` and the two channel CHECKs (`chk_vpo_channel`,
+  `chk_vrp_channel`) must list the same values: a channel the service accepts
+  and a CHECK refuses fails the INSERT after every rule has passed.
+  `PartnerChannelCheckConstraintTest` fails the build when they differ, so a new
+  channel needs a migration in the same change.
   `paid_via`: CASH → CASH, CARD_SWIPE → CARD_POS, the rest → GATEWAY with
   `payment_rail` = the method (no new `PaidVia` value, so V54's CHECK holds).
 - **Evidence is used once:** a card approval code per terminal per day, a
@@ -3592,7 +3601,7 @@ partner guide (v1.0.0-4) calls it "provider-funded". Nothing is held for it, so
   confirmed, so the issuer is billed both the issue and the redemption fee then,
   like a Flow 1 voucher sold and spent there. An unpaid code is billed nothing.
 - **Two guide rules this change also brought into line:**
-  - an InnBucks code is ONLINE or APP only (`fitsChannel`);
+  - an InnBucks code is ONLINE, APP or API only (`fitsChannel`);
   - a MERCHANT_COLLECTED sale without `collectedVia` and `collectionRef` is
     `400 COLLECTION_DETAILS_REQUIRED` (was the generic "Validation failed").
 - **Staging:** the SIMFAIL-, SIMSLOW-, SIMSLOWFAIL- and SIMDOWN- prefixes on the

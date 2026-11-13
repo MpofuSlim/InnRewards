@@ -115,8 +115,15 @@ public class PartnerVoucherService {
     /** Money the merchant collected itself: its float is debited into holding. */
     static final Set<String> MERCHANT_COLLECTED_METHODS = Set.of("CASH", "CARD_SWIPE", "MERCHANT_COLLECTED");
     static final Set<String> COLLECTED_VIA = Set.of("ECOCASH_MERCHANT", "BANK_TRANSFER", "BETTING_WALLET", "OTHER");
-    /** Where a sale or a redemption happens. APP is the provider's own app (2026-11-12). */
-    static final Set<String> CHANNELS = Set.of("POS", "ONLINE", "APP");
+    /**
+     * Where a sale or a redemption happens. APP is the provider's own app (2026-11-12). API is
+     * what the middleware sends for a third-party integrator that names no channel (2026-11-13):
+     * it follows the ONLINE rules, because only POS takes cash or card, keeps a terminal or gets
+     * the code back. Must name exactly the values of the channel CHECKs
+     * ({@code PartnerChannelCheckConstraintTest}).
+     */
+    static final Set<String> CHANNELS = Set.of("POS", "ONLINE", "APP", "API");
+    static final String CHANNELS_MESSAGE = "must be POS, ONLINE, APP or API";
     /** The funding view's status for a code that is paid at the redeem and not paid yet (V69). */
     static final String AT_REDEEM = "AT_REDEEM";
     /** Refusal codes of a code paid at the redeem (V69). */
@@ -531,7 +538,7 @@ public class PartnerVoucherService {
         String channel = req.channel() == null || req.channel().isBlank()
                 ? "ONLINE" : req.channel().strip().toUpperCase(Locale.ROOT);
         if (!CHANNELS.contains(channel)) {
-            throw validation("channel", "must be POS, ONLINE or APP");
+            throw validation("channel", CHANNELS_MESSAGE);
         }
         String currency = req.currency() == null || req.currency().isBlank()
                 ? null : req.currency().strip().toUpperCase(Locale.ROOT);
@@ -1006,7 +1013,7 @@ public class PartnerVoucherService {
             throw validation("channel", "is required");
         }
         if (!CHANNELS.contains(channel)) {
-            throw validation("channel", "must be POS, ONLINE or APP");
+            throw validation("channel", CHANNELS_MESSAGE);
         }
         String method = null;
         if (!payAtRedeem) {
@@ -1115,7 +1122,7 @@ public class PartnerVoucherService {
     /**
      * Whether a payment method fits where the sale happens (partner guide §12):
      * cash and a card swipe are taken at a POS; an InnBucks code is approved in
-     * the customer's app, so it is ONLINE or APP; an account debit is never a POS's.
+     * the customer's app, so it is ONLINE, APP or API; an account debit is never a POS's.
      */
     private static boolean fitsChannel(String method, String channel) {
         boolean pos = channel.equals("POS");

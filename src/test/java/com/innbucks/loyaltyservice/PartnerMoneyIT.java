@@ -296,7 +296,11 @@ class PartnerMoneyIT extends ControllerSecurityTestBase {
         Call other = call(get("/loyalty/partner-vouchers/merchants/" + bola + "/statement"), own);
         assertThat(other.status()).isEqualTo(403);
         assertThat(other.code()).isEqualTo("NOT_MERCHANT_OWNER");
-        assertThat(call(get("/loyalty/partner-vouchers/statement"), own).status()).isEqualTo(403);
+        Call notStaff = call(get("/loyalty/partner-vouchers/statement"), own);
+        assertThat(notStaff.status()).isEqualTo(403);
+        // The body the Swagger example (FORBIDDEN_403) shows.
+        assertThat(notStaff.code()).isEqualTo("403 FORBIDDEN");
+        assertThat(notStaff.body().path("message").asText()).isEqualTo("You don't have permission to do that.");
         assertThat(call(get("/loyalty/partner-vouchers/reconciliation"), own).status()).isEqualTo(403);
         assertThat(call(post("/loyalty/partner-vouchers/reconciliation/run"), own).status()).isEqualTo(403);
 

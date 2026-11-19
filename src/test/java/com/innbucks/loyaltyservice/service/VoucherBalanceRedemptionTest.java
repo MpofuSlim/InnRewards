@@ -443,6 +443,97 @@ class VoucherBalanceRedemptionTest {
         verify(notifications, never()).notifyVoucherUsed(any());
     }
 
+    // ------------------------------------------------------------------
+    // the bill's currency (optional; refused when it is not the voucher's)
+    // ------------------------------------------------------------------
+
+    private Dtos.RedemptionResponse useIn(Voucher v, String amount, String reference, String currency) {
+        return service.redeem(TENANT, MERCHANT, new Dtos.RedeemVoucherRequest(MERCHANT, v.getCode(), null,
+                "TILL-3", "device-1", "10.0.0.1", amount == null ? null : new BigDecimal(amount), reference,
+                currency));
+    }
+
+    @Test
+    void aBillInAnotherCurrency_isRefused_andNothingIsSpent() {
+        Voucher v = balanceVoucher("50.00", "2.0000");
+        v.setCurrency("ZWG");
+
+        assertThatThrownBy(() -> useIn(v, "20.00", "RCPT-FX", "USD"))
+                .isNotInstanceOf(VoucherCodeGuessException.class)
+                .isInstanceOfSatisfying(com.innbucks.loyaltyservice.exception.LoyaltyDataException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getCode()).isEqualTo("CURRENCY_MISMATCH");
+                    assertThat(e.getMessage()).isEqualTo("This voucher is in ZWG, not USD.");
+                    assertThat(e.getData()).isEqualTo(java.util.Map.of("currency", "ZWG"));
+                });
+
+        assertThat(written).isEmpty();
+        assertThat(v.getRemainingBalance()).isEqualByComparingTo("50");
+        assertThat(v.getStatus()).isEqualTo(Voucher.Status.ISSUED);
+        verify(notifications, never()).notifyVoucherUsed(any());
+    }
+
+    @Test
+    void theBillsCurrency_inAnyLetterCase_withSpaces_isAccepted() {
+        Voucher v = balanceVoucher("50.00", "50.0000");
+
+        Dtos.RedemptionResponse r = useIn(v, "20.00", null, " usd ");
+
+        assertThat(r.value()).isEqualByComparingTo("20");
+        assertThat(r.currency()).isEqualTo("USD");
+        assertThat(written).hasSize(1);
+    }
+
+    @Test
+    void noCurrency_orABlankOne_isNotChecked_asBefore() {
+        Voucher v = balanceVoucher("50.00", "2.0000");
+        v.setCurrency("ZWG");
+
+        assertThat(useIn(v, "10.00", null, null).value()).isEqualByComparingTo("10");
+        assertThat(useIn(v, "10.00", null, "  ").value()).isEqualByComparingTo("10");
+        assertThat(v.getRemainingBalance()).isEqualByComparingTo("30");
+    }
+
+    @Test
+    void aReplay_isNotCheckedAgainstTheCurrency_soAUseThatHappenedIsNeverReportedAsRefused() {
+        Voucher v = balanceVoucher("50.00", "2.0000");
+        v.setCurrency("ZWG");
+        Dtos.RedemptionResponse first = useIn(v, "20.00", "RCPT-OLD", null);   // a till build before the field
+
+        Dtos.RedemptionResponse again = useIn(v, "20.00", "RCPT-OLD", "USD");
+
+        assertThat(again.replayed()).isTrue();
+        assertThat(again.redemptionId()).isEqualTo(first.redemptionId());
+        assertThat(again.currency()).isEqualTo("ZWG");
+        assertThat(written).hasSize(1);
+    }
+
+    @Test
+    void aStaffCallerNotEntitledHere_learnsNothingAboutTheCurrency() {
+        Voucher v = balanceVoucher("50.00", "2.0000");
+        v.setCurrency("ZWG");
+        when(merchantAuthz.requireCallerAdministersMerchant(TENANT, MERCHANT))
+                .thenThrow(LoyaltyException.forbidden("NOT_MERCHANT_OWNER",
+                        "You can only act on merchants you administer."));
+
+        assertThatThrownBy(() -> useIn(v, "20.00", null, "USD"))
+                .isInstanceOfSatisfying(LoyaltyException.class,
+                        e -> assertThat(e.getCode()).isEqualTo("NOT_MERCHANT_OWNER"));
+        assertThat(written).isEmpty();
+    }
+
+    @Test
+    void aLegacyVoucherWithNoCurrency_isNotChecked() {
+        Voucher v = balanceVoucher("10.00", null);
+        v.setCurrency(null);
+        v.setRemainingBalance(null);   // a pre-V45 PERCENT row
+
+        Dtos.RedemptionResponse r = useIn(v, null, null, "USD");
+
+        assertThat(r.status()).isEqualTo("REDEEMED");
+        assertThat(written).hasSize(1);
+    }
+
     @Test
     void aLegacyVoucherWithNoMoneyBalance_isSpentWholeAsBefore_andIgnoresTheAmount() {
         Voucher v = balanceVoucher("10.00", null);

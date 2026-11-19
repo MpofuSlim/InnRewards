@@ -344,8 +344,11 @@ public class VoucherController {
                           "(a voucher spent in one go behaves exactly as it always did). An `amount` bigger than " +
                           "the balance is never refused: what is left is applied, the voucher becomes `REDEEMED`, " +
                           "and `value` says how much was actually taken off the bill — read it, never assume the " +
-                          "amount you sent. After every successful use the holder gets a WhatsApp (SMS fallback) " +
-                          "saying what was used and what is left; it never contains the code.\n\n" +
+                          "amount you sent. `amount` is in the VOUCHER's currency (`currency` in the response): " +
+                          "send the bill's `currency` with it and a voucher in another currency is refused " +
+                          "(400 `CURRENCY_MISMATCH`) instead of spent. After every successful use the holder " +
+                          "gets a WhatsApp (SMS fallback) saying what was used and what is left; it never " +
+                          "contains the code.\n\n" +
                           "**Retries:** send a `reference` (e.g. the receipt number, unique per merchant). The " +
                           "same reference for the same voucher returns the ORIGINAL result with `replayed: " +
                           "true` and spends nothing — even after that use emptied the voucher. The same " +
@@ -440,7 +443,9 @@ public class VoucherController {
                             + "(worked out from the code alone, so it says nothing about which vouchers exist, "
                             + "and it never counts toward the lockout: ask the customer to read it again; "
                             + "a legacy 12-character code has no check digit, so its typos come back as a "
-                            + "counted 404); AMOUNT_PRECISION — an `amount` with fractions of a cent; or "
+                            + "counted 404); AMOUNT_PRECISION — an `amount` with fractions of a cent; "
+                            + "CURRENCY_MISMATCH — the `currency` sent is not the voucher's (`data.currency` "
+                            + "names the voucher's; nothing was spent); or "
                             + "EXPIRED — past the voucher's expiresAt (whatever balance it had expires with it). Bean "
                             + "validation always answers `Validation failed` with the offending fields "
                             + "in `data`; the field name is never in `message`. On EXPIRED the voucher "
@@ -466,6 +471,13 @@ public class VoucherController {
                                               "code": "AMOUNT_PRECISION",
                                               "message": "A redemption amount cannot carry fractions of a cent.",
                                               "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Bill in another currency", value = """
+                                            {
+                                              "code": "CURRENCY_MISMATCH",
+                                              "message": "This voucher is in ZWG, not USD.",
+                                              "data": { "currency": "ZWG" }
                                             }
                                             """),
                                     @ExampleObject(name = "Mistyped code", value = """

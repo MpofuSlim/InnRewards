@@ -228,6 +228,60 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
+    void a_till_sends_the_bills_currency_and_a_mismatch_comes_back_as_CURRENCY_MISMATCH() throws Exception {
+        // The bill's currency reaches the service as sent, and the service's
+        // refusal reaches the till with the voucher's currency in data.
+        org.mockito.ArgumentCaptor<com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest> sent =
+                org.mockito.ArgumentCaptor.forClass(com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest.class);
+        org.mockito.Mockito.when(voucherService.redeemIdempotent(
+                        org.mockito.ArgumentMatchers.any(UUID.class),
+                        org.mockito.ArgumentMatchers.any(UUID.class), sent.capture()))
+                .thenThrow(new com.innbucks.loyaltyservice.exception.LoyaltyDataException(
+                        org.springframework.http.HttpStatus.BAD_REQUEST, "CURRENCY_MISMATCH",
+                        "This voucher is in ZWG, not USD.", java.util.Map.of("currency", "ZWG")));
+
+        UUID tenant = newTenant("vch-till-currency");
+        joinTenant(tenant, "till-fx@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-fx@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/redeem")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"4829137605128368","amount":20.00,"currency":"USD"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CURRENCY_MISMATCH"))
+                .andExpect(jsonPath("$.message").value("This voucher is in ZWG, not USD."))
+                .andExpect(jsonPath("$.data.currency").value("ZWG"));
+
+        org.assertj.core.api.Assertions.assertThat(sent.getValue().currency()).isEqualTo("USD");
+    }
+
+    @Test
+    void a_currency_that_is_not_three_letters_is_a_validation_error_before_the_service() throws Exception {
+        UUID tenant = newTenant("vch-till-currency-bad");
+        joinTenant(tenant, "till-fx2@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-fx2@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/redeem")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"4829137605128368","currency":"US$"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.data.currency").value("must be a 3-letter currency code, e.g. USD"));
+
+        org.mockito.Mockito.verify(voucherService, org.mockito.Mockito.never()).redeemIdempotent(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void shop_user_lists_a_customers_active_vouchers_WITHOUT_their_codes() throws Exception {
         // A cashier sees that the customer holds a voucher and what it is worth,
         // never the code that spends it: redeem accepts a code from any till of

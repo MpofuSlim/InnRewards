@@ -3040,6 +3040,19 @@ voucher: a $50 voucher can be spent $20 now and $30 later.
 - **The amount is validated before the code lookup**: `@Positive` at the edge,
   and in the service `400 INVALID_AMOUNT` / `400 AMOUNT_PRECISION` ("A
   redemption amount cannot carry fractions of a cent.").
+- **`amount` is in the VOUCHER's currency, so a till may send the bill's
+  `currency` (2026-11-19, asked for by GAAP).** Optional; a 3-letter code in
+  any case (else `400 Validation failed` on `data.currency`); blank = not sent.
+  When it is not the voucher's: `400 CURRENCY_MISMATCH` "This voucher is in
+  ZWG, not USD.", `data.currency` = the voucher's, nothing spent, not a counted
+  guess (`VoucherService.requireBillCurrency`). It is checked after
+  `requireMayRedeemAt`, so only a caller entitled to redeem there learns the
+  currency, and NOT on a replayed `reference`: refusing a replay would tell a
+  till nothing was deducted when it was. A legacy voucher with no currency is
+  not checked. The partner redeem keeps its own currency check. Never stored:
+  the use is recorded in the voucher's currency. Pinned by the currency cases
+  in `VoucherBalanceRedemptionTest`, `RedeemVoucherRequestCurrencyTest` and
+  `VoucherControllerSecurityTest`.
 - `applied = min(amount, balance)`; `balanceAfter = balance − applied` (scale
   4). `uses_remaining` becomes a 1/0 "anything left" flag. The exhausted guard
   reads the balance too (`remainingBalanceOf`), with the same

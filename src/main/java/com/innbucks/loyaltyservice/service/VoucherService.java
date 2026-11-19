@@ -1385,6 +1385,18 @@ public class VoucherService {
         // a caller entitled to redeem here.
         requireMayRedeemAt(tenantId, merchantId, staffCaller);
 
+        // The bill's currency, when the caller sends it (till redeem). `amount`
+        // is read in the VOUCHER's currency, so a till that assumes its own
+        // currency would otherwise take ZWG 20 off a bill as USD 20. Refused
+        // before anything is spent. Placed after requireMayRedeemAt, so only a
+        // caller entitled to redeem here learns the voucher's currency. Not on
+        // the replay above: a replay reports a use that already happened, and
+        // refusing it would tell a till that nothing was deducted when it was.
+        // A partner's currency is checked above, with the partner's rules.
+        if (partner == null) {
+            requireBillCurrency(v, req.currency());
+        }
+
         // A SINGLE-use voucher (V66) is spent in full in one redemption. Asking
         // for less is refused, never applied, so its remaining value is never
         // forfeited (owner decision, 2026-11-11). No amount, or one at or above
@@ -1538,6 +1550,30 @@ public class VoucherService {
 
     /** Redeem refusal: the reference already names a successful use of ANOTHER voucher. */
     public static final String DUPLICATE_REFERENCE = "DUPLICATE_REFERENCE";
+
+    /** Redeem refusal: the bill's currency is not the voucher's. */
+    public static final String CURRENCY_MISMATCH = "CURRENCY_MISMATCH";
+
+    /**
+     * Refuses a redemption whose bill is in another currency than the voucher.
+     * Blank means not sent, so a till that does not send it is unaffected. A
+     * legacy voucher with no currency (a pre-V45 percentage or free item) has
+     * nothing to compare and is spent whole as before. {@code data.currency}
+     * names the voucher's currency, so the till can convert or ask for another
+     * tender.
+     */
+    static void requireBillCurrency(Voucher v, String billCurrency) {
+        if (billCurrency == null || billCurrency.isBlank() || v.getCurrency() == null) {
+            return;
+        }
+        String bill = billCurrency.strip().toUpperCase(java.util.Locale.ROOT);
+        if (!bill.equalsIgnoreCase(v.getCurrency())) {
+            throw new com.innbucks.loyaltyservice.exception.LoyaltyDataException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, CURRENCY_MISMATCH,
+                    "This voucher is in " + v.getCurrency() + ", not " + bill + ".",
+                    java.util.Map.of("currency", v.getCurrency()));
+        }
+    }
 
     /** Refusal code for spending part of a SINGLE-use voucher (V66). */
     public static final String PARTIAL_USE_NOT_ALLOWED = "PARTIAL_USE_NOT_ALLOWED";

@@ -11,6 +11,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -1195,7 +1196,8 @@ public class Dtos {
                             + "most two decimal places. Omit it to spend the whole remaining balance (a voucher "
                             + "spent in one go behaves exactly as before). More than the voucher has left is "
                             + "never refused: what is left is applied, and the response says how much "
-                            + "(`value`) and that nothing remains.")
+                            + "(`value`) and that nothing remains. Send `currency` too, so an amount in the "
+                            + "wrong currency is refused instead of spent.")
             @Positive(message = "amount must be greater than zero")
             BigDecimal amount,
             // Bounded by voucher_redemptions.reference VARCHAR(100); keep in lock-step.
@@ -1206,13 +1208,31 @@ public class Dtos {
                             + "voucher is fully used; the same reference on a different voucher is 409 "
                             + "DUPLICATE_REFERENCE. Without one, every call is a new use.")
             @Size(max = 100, message = "reference must be at most 100 characters")
-            String reference
+            String reference,
+            // Checked against the voucher, never stored: the use is recorded in
+            // the voucher's own currency, which is the only one it can be in.
+            @Schema(example = "USD", nullable = true, pattern = "^[A-Za-z]{3}$",
+                    description = "Optional. The currency of the bill, as a 3-letter code (any letter case). "
+                            + "When it differs from the voucher's currency the redemption is refused with "
+                            + "400 CURRENCY_MISMATCH (`data.currency` is the voucher's) and nothing is spent. "
+                            + "Omitted or blank: not checked, as before. Not checked on a replayed "
+                            + "`reference` either: a replay only reports a use that already happened.")
+            @Pattern(regexp = "^\\s*$|^\\s*[A-Za-z]{3}\\s*$",
+                    message = "must be a 3-letter currency code, e.g. USD")
+            String currency
     ) {
 
         /** The pre-V61 shape: no amount (spend the whole balance), no reference. */
         public RedeemVoucherRequest(UUID merchantId, String code, UUID userId, String outletCode,
                                     String deviceFingerprint, String ipAddress) {
             this(merchantId, code, userId, outletCode, deviceFingerprint, ipAddress, null, null);
+        }
+
+        /** The V61 shape, before the bill's currency could be sent: nothing is checked. */
+        public RedeemVoucherRequest(UUID merchantId, String code, UUID userId, String outletCode,
+                                    String deviceFingerprint, String ipAddress, BigDecimal amount,
+                                    String reference) {
+            this(merchantId, code, userId, outletCode, deviceFingerprint, ipAddress, amount, reference, null);
         }
     }
 

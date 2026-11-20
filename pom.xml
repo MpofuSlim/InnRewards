@@ -60,8 +60,8 @@
         <spring-kafka.version>4.1.2</spring-kafka.version>
         <!-- CVE-2026-68497 and CVE-2026-89407/89425/91776/91777 — see the
              Jackson BOM imports below. -->
-        <jackson-bom.version>3.2.4</jackson-bom.version>
-        <jackson-2-bom.version>2.22.4</jackson-2-bom.version>
+        <jackson-bom.version>3.3.0</jackson-bom.version>
+        <jackson-2-bom.version>2.23.0</jackson-2-bom.version>
         <spring.cloud.version>2025.1.4</spring.cloud.version>
         <springdoc.version>3.2.0</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
